@@ -1,4 +1,6 @@
-# PortForge 0.29 / Engine 1.12
+# PortForge 0.30 / Engine 1.13
+
+The Controllers window includes automatic detection, controller family selection, live buttons/triggers/sticks on a fixed picture, and a saved layout for converted games. It shows a Switch-to-controller button chart; game artwork and embedded button prompts are unchanged.
 
 **Pixel smoothing** (per game, off by default) now really antialiases. Engine 1.12 replaces the weak neighbour blend of 1.11 with FXAA-style edge antialiasing on the game's own image before FSR, and FSR sharpens less while it is on, so staircase edges turn into smooth lines. In a GPU test the largest step of a jagged edge fell from a whole pixel to 0.44 (alone) and from 0.66 to 0.25 (with FSR, as smooth as that slope can be). In Mario, edge harshness on the tower and roller coaster fell by 22 to 25 percent with the sky unchanged. It cannot add detail the game did not render, and text softens a little.
 

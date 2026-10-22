@@ -19,6 +19,7 @@ internal static class OptimizationTests
         try
         {
             string root = Path.Combine(Path.GetDirectoryName(args[0]), "optimization-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            ControllerSettings.PathOverride = Path.Combine(root, "controller-settings.txt");
             string exe = Path.Combine(root, "Tuning game.exe"), config = Path.ChangeExtension(exe, ".ini");
             File.Copy(args[0], exe); File.Copy(args[0], Path.Combine(root, "Tuning game_code.dll"));
             var cap = RuntimeCapabilities.Read(exe, CancellationToken.None);
@@ -177,6 +178,61 @@ internal static class OptimizationTests
             var tiedHandheld = new BenchmarkSample {Success=true,Frames=1200,Fps=60,Profile=new GraphicsProfile{Docked=false}};
             var tiedTv = new BenchmarkSample {Success=true,Frames=1200,Fps=60,Profile=new GraphicsProfile{Docked=true}};
             Check(GameOptimization.SelectSmooth(new[]{tiedHandheld,tiedTv},60,1)==tiedTv, "TV image quality wins when handheld brings no measured smoothness benefit");
+            // Controllers: the engine monitor's lines, the families, the game-button chart, the keys every game gets.
+            var monitor = new ControllerMonitor();
+            monitor.Parse("monitor ready");
+            monitor.Parse("pad 0 connect ps5 DualSense Edge Wireless Controller");
+            monitor.Parse("state 0 801 -32768 32767 100 -100 32767 0 1 0.4 9.6 -2.2 0.01 0.02 0.03 0 0 0 0 0 0 0 0 0 0 0 0 0 0");
+            var pad = monitor.Snapshot().Single();
+            Check(monitor.Ready && pad.Name == "DualSense Edge Wireless Controller" && pad.Type == "ps5" && pad.Held(ControllerButton.South) && pad.Held(ControllerButton.DpadUp) && !pad.Held(ControllerButton.East)
+                && pad.LeftX == -32768 && pad.LeftY == 32767 && pad.LeftTrigger == 32767 && pad.Motion[0].Valid && Math.Abs(pad.Motion[0].AccelY - 9.6) < 1e-9 && !pad.Motion[1].Valid,
+                "The engine's controller monitor lines give the controller's name, buttons, sticks, triggers and motion");
+            monitor.Parse("state 0 garbage"); monitor.Parse("pad 0 disconnect");
+            Check(monitor.Snapshot().Count == 0, "A disconnected controller leaves the view and a damaged line is ignored");
+            Check(ControllerSettings.FromEngineType("xboxone", "") == ControllerKind.Xbox && ControllerSettings.FromEngineType("ps5", "") == ControllerKind.DualSense
+                && ControllerSettings.FromEngineType("ps4", "") == ControllerKind.DualShock4 && ControllerSettings.FromEngineType("switchpro", "") == ControllerKind.SwitchPro
+                && ControllerSettings.FromEngineType("joyconpair", "") == ControllerKind.JoyConPair && ControllerSettings.FromEngineType("unknown", "8BitDo Pro 2") == ControllerKind.Generic,
+                "Each controller family is recognised from the engine's type");
+            Func<ControllerKind, ButtonLayout, string, string> press = (k, l, b) => ControllerSettings.GameButtonChart(k, l).First(r => r[0] == b)[1];
+            Check(press(ControllerKind.DualSense, ButtonLayout.ByPosition, "A") == "Circle" && press(ControllerKind.DualSense, ButtonLayout.ByPosition, "B") == "Cross"
+                && press(ControllerKind.Xbox, ButtonLayout.ByPosition, "A") == "B" && press(ControllerKind.Xbox, ButtonLayout.ByLabel, "A") == "A" && press(ControllerKind.Xbox, ButtonLayout.ByLabel, "X") == "X"
+                && press(ControllerKind.SwitchPro, ButtonLayout.ByLabel, "A") == "A" && press(ControllerKind.DualShock4, ButtonLayout.ByPosition, "ZR") == "R2",
+                "The chart names the button to press for each Switch button, by position or by the controller's letters");
+            var letters = new ControllerSettings { Kind = ControllerKind.Xbox, Layout = ButtonLayout.ByLabel, PairJoyCons = false };
+            var ours = new Dictionary<string, string> { {"gamepad_map", ControllerSettings.LetterMap} };
+            var own = new Dictionary<string, string> { {"gamepad_map", "south:A east:A"} };
+            Check(letters.Values(null)["gamepad_map"] == "south:A east:B west:X north:Y" && letters.Values(null)["gamepad_joycon_pair"] == "0"
+                && !new ControllerSettings { Kind = ControllerKind.DualSense, Layout = ButtonLayout.ByLabel }.Values(null).ContainsKey("gamepad_map")
+                && new ControllerSettings().Values(ours)["gamepad_map"] == "", "Xbox letters map the engine's buttons by label; PlayStation and the default stay by position");
+            Check(!letters.Values(own).ContainsKey("gamepad_map") && !new ControllerSettings().Values(own).ContainsKey("gamepad_map"),
+                "A button map the player made in the game's own menu is never replaced");
+            Check(!ControllerSettings.Chosen, "Before the player saves a choice, games keep their own controller settings");
+            letters.Save();
+            var loaded = ControllerSettings.Load();
+            Check(loaded.Kind == ControllerKind.Xbox && loaded.Layout == ButtonLayout.ByLabel && !loaded.PairJoyCons, "The controller choice survives saving");
+            File.WriteAllBytes(config, bytes);
+            GameOptimization.SaveAndVerify(exe, profile, cap);
+            var padSaved = GameOptimization.ReadValues(File.ReadAllText(config));
+            Check(padSaved["gamepad_map"] == "A:B" && padSaved["gamepad_joycon_pair"] == "0", "Saving a game applies the controller choice while preserving its custom button map");
+            new ControllerSettings().Save(); File.WriteAllText(config, original.Replace("gamepad_map=A:B", "gamepad_map="));
+            var applied = new ControllerSettings { Kind = ControllerKind.Xbox, Layout = ButtonLayout.ByLabel }.ApplyTo(new[] { exe, exe, Path.Combine(root, "missing.exe") }, CancellationToken.None);
+            Check(applied.Count == 1 && applied[0].EndsWith(": applied") && GameOptimization.ReadValues(File.ReadAllText(config))["gamepad_map"] == "south:A east:B west:X north:Y"
+                && Directory.GetFiles(root, "*.before-portforge-*").Length > 0, "Save for all my games writes each known game once, with a backup, and skips missing ones");
+            File.WriteAllBytes(config, bytes);
+            // Motion: still for a second (tilt settles, view recentres), then a half-turn second about the face's normal.
+            var tracker = new MotionTracker(); var clock = new DateTime(2026, 1, 1);
+            var still = new MotionSample { Valid = true, AccelY = 9.81 };
+            for (int i = 0; i <= 100; i++) tracker.Update(still, clock.AddMilliseconds(10 * i));
+            var turning = new MotionSample { Valid = true, AccelY = 9.81, GyroY = 1.0 };
+            for (int i = 1; i <= 50; i++) tracker.Update(turning, clock.AddMilliseconds(1000 + 10 * i));
+            var turned = tracker.View();
+            Check(Math.Abs(turned[0] - Math.Cos(0.5)) < 0.02 && Math.Abs(Math.Abs(turned[2]) - Math.Sin(0.5)) < 0.02 && Math.Abs(turned[4] - 1) < 0.01,
+                "The motion tracker integrates the measured angle independently of the fixed controller picture");
+            tracker.Recenter(); var centred = tracker.View();
+            Check(Math.Abs(centred[0] - 1) < 1e-6 && Math.Abs(centred[4] - 1) < 1e-6 && Math.Abs(centred[8] - 1) < 1e-6, "The motion tracker's reference can reset independently of the picture");
+            var tilt = new MotionTracker(); var side = new MotionSample { Valid = true, AccelX = 9.81 };
+            for (int i = 0; i <= 200; i++) tilt.Update(side, clock.AddMilliseconds(10 * i));
+            Check(tilt.Up()[0] > 0.97, "With no rotation the accelerometer brings the tilt to where gravity is");
             Console.WriteLine(checks + " optimization checks passed. Evidence: " + root); return 0;
         }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }

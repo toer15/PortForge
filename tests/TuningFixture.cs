@@ -13,7 +13,7 @@ internal static class TuningFixture
             if (File.Exists(settingsPath) && File.ReadAllText(settingsPath).Contains("fixture_graphics_protection=1"))
                 Console.WriteLine("Test\trender_scale_safety\t0\tint\t0\t1\thelp\tlabel\t");
             if (Array.IndexOf(args, "--slow-probe") >= 0) Thread.Sleep(1500);
-            foreach (string key in new[] {"fps_limit", "resolution", "anisotropy", "upscaler", "pixel_smoothing", "shadows", "vsync", "docked", "fullscreen", "log", "compute", "vk_validation", "profile", "nvn_trace", "vk_gpu_profile", "mme_verify", "diag", "pipeline_threads", "jit_threads"})
+            foreach (string key in new[] {"fps_limit", "resolution", "anisotropy", "upscaler", "pixel_smoothing", "gamepad_map", "gamepad_swap_ab", "gamepad_joycon_pair", "shadows", "vsync", "docked", "fullscreen", "log", "compute", "vk_validation", "profile", "nvn_trace", "vk_gpu_profile", "mme_verify", "diag", "pipeline_threads", "jit_threads"})
                 Console.WriteLine("Test\t" + key + "\t0\tint\t0\t1000\thelp\tlabel\t");
             return;
         }

@@ -5649,6 +5649,26 @@ index 2f956fa..23ac531 100644
      uint64_t end_ofs = ofs + total_size;
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
+diff --git a/src/nx/runtime/main.c b/src/nx/runtime/main.c
+index 6a667e6..7e439c4 100644
+--- a/src/nx/runtime/main.c
++++ b/src/nx/runtime/main.c
+@@ -32,6 +32,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "nx/runtime/platform/gamepad.h"
+ 
+ #if defined(_WIN32)
+ #define MODULE_SUFFIX "_code.dll"
+@@ -459,6 +460,7 @@ int snx_main(int argc, char** argv) {
+     const SnxModule* mod;
+     int status, i;
+     hle_init(); /* before anything, the options included, touches g_hle */
++    if (argc == 2 && !strcmp(argv[1], "--gamepad-monitor")) return gamepad_monitor(); /* a launcher's controller view */
+     status = snx_startup_options(argc, argv);
+     if (status) return status;
+     if (argc == 2 && !strcmp(argv[1], "--settings")) {
 diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
 index addf082..2a2d1f5 100644
 --- a/src/nx/runtime/main.h
@@ -5692,6 +5712,95 @@ index 408db9e..0439f39 100644
  void fps_limit_text(int fps, char* out, size_t n); /* g_opt_fps as fps_limit's value: "game", "0", "30"... */
  /* ldn, read: local wireless over the LAN (ldn_mitm's protocol), through an Eden room, or off
     (hle/services/network/ldn.c) */
+diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
+index ac4acd5..f99ca1f 100644
+--- a/src/nx/runtime/platform/backend/gamepad.c
++++ b/src/nx/runtime/platform/backend/gamepad.c
+@@ -485,3 +485,84 @@ void gamepad_rumble_slot(int slot, u32 left, u32 right) {
+     hi = hi * strength(slot) / 100;
+     SDL_RumbleGamepad(g_pads[slot], (Uint16)lo, (Uint16)hi, 100);
+ }
++
++/* scarletnx --gamepad-monitor: what the engine reads from each controller, for a launcher's controller view, with no
++   game and no window. A line per change of connection and up to 100 state lines a second while one is connected:
++     pad <n> connect <SDL type> <name> | pad <n> disconnect
++     state <n> <SDL buttons, hex bits> <left x> <left y> <right x> <right y> <left trigger> <right trigger>
++           <motion: 0 or 1, then accel x y z (m/s^2) gyro x y z (rad/s)> for the pad, its left half and its right half
++   Values are SDL's own (sticks -32768 to 32767 with Y down, triggers 0 to 32767), before any player's map, so the
++   view shows the controller as it is. Ends when the reader closes the pipe. */
++static void monitor_sensor(SDL_Gamepad* g, SDL_SensorType accel, SDL_SensorType gyro, char* out, size_t size) {
++    float a[3], w[3];
++    if (!SDL_GamepadSensorEnabled(g, accel) || !SDL_GamepadSensorEnabled(g, gyro) ||
++        !SDL_GetGamepadSensorData(g, accel, a, 3) || !SDL_GetGamepadSensorData(g, gyro, w, 3)) {
++        snprintf(out, size, " 0 0 0 0 0 0 0");
++        return;
++    }
++    snprintf(out, size, " 1 %.4f %.4f %.4f %.4f %.4f %.4f", a[0], a[1], a[2], w[0], w[1], w[2]);
++}
++int gamepad_monitor(void) {
++    SDL_Gamepad* pads[SNX_GAMEPADS] = {0};
++    char last[SNX_GAMEPADS][256];
++    int quiet[SNX_GAMEPADS] = {0};
++    memset(last, 0, sizeof last);
++    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1"); /* the launcher's window has the focus, not ours */
++    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS, "1");
++    if (!SDL_Init(SDL_INIT_GAMEPAD | SDL_INIT_SENSOR)) {
++        fprintf(stderr, "scarletnx: SDL could not start its gamepads: %s\n", SDL_GetError());
++        return 1;
++    }
++    load_mappings();
++    printf("monitor ready\n");
++    for (;;) {
++        SDL_Event e;
++        int i;
++        while (SDL_PollEvent(&e)) {
++            if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
++                for (i = 0; i < SNX_GAMEPADS && pads[i] && SDL_GetGamepadID(pads[i]) != e.gdevice.which; i++) {}
++                if (i < SNX_GAMEPADS && !pads[i] && (pads[i] = SDL_OpenGamepad(e.gdevice.which)) != NULL) {
++                    enable_motion(pads[i]);
++                    last[i][0] = 0;
++                    printf("pad %d connect %s %s\n", i, SDL_GetGamepadStringForType(SDL_GetGamepadType(pads[i])),
++                           SDL_GetGamepadName(pads[i]) ? SDL_GetGamepadName(pads[i]) : "Gamepad");
++                }
++            } else if (e.type == SDL_EVENT_GAMEPAD_REMOVED) {
++                for (i = 0; i < SNX_GAMEPADS; i++)
++                    if (pads[i] && SDL_GetGamepadID(pads[i]) == e.gdevice.which) {
++                        SDL_CloseGamepad(pads[i]);
++                        pads[i] = NULL;
++                        printf("pad %d disconnect\n", i);
++                    }
++            }
++        }
++        for (i = 0; i < SNX_GAMEPADS; i++) {
++            char line[256], m[3][64];
++            unsigned buttons = 0;
++            int b;
++            if (!pads[i]) continue;
++            for (b = 0; b < SDL_GAMEPAD_BUTTON_COUNT && b < 32; b++)
++                if (SDL_GetGamepadButton(pads[i], (SDL_GamepadButton)b)) buttons |= 1u << b;
++            monitor_sensor(pads[i], SDL_SENSOR_ACCEL, SDL_SENSOR_GYRO, m[0], sizeof m[0]);
++            monitor_sensor(pads[i], SDL_SENSOR_ACCEL_L, SDL_SENSOR_GYRO_L, m[1], sizeof m[1]);
++            monitor_sensor(pads[i], SDL_SENSOR_ACCEL_R, SDL_SENSOR_GYRO_R, m[2], sizeof m[2]);
++            snprintf(line, sizeof line, "state %d %x %d %d %d %d %d %d%s%s%s", i, buttons,
++                     SDL_GetGamepadAxis(pads[i], SDL_GAMEPAD_AXIS_LEFTX), SDL_GetGamepadAxis(pads[i], SDL_GAMEPAD_AXIS_LEFTY),
++                     SDL_GetGamepadAxis(pads[i], SDL_GAMEPAD_AXIS_RIGHTX), SDL_GetGamepadAxis(pads[i], SDL_GAMEPAD_AXIS_RIGHTY),
++                     SDL_GetGamepadAxis(pads[i], SDL_GAMEPAD_AXIS_LEFT_TRIGGER),
++                     SDL_GetGamepadAxis(pads[i], SDL_GAMEPAD_AXIS_RIGHT_TRIGGER), m[0], m[1], m[2]);
++            /* motion always changes; a still pad without it is repeated twice a second so the reader knows it lives */
++            if (strcmp(line, last[i]) || ++quiet[i] >= 50) {
++                puts(line);
++                snprintf(last[i], sizeof last[i], "%s", line);
++                quiet[i] = 0;
++            }
++        }
++        if (fflush(stdout) || ferror(stdout)) break; /* the reader is gone */
++        SDL_Delay(10);
++    }
++    for (int i = 0; i < SNX_GAMEPADS; i++)
++        if (pads[i]) SDL_CloseGamepad(pads[i]);
++    SDL_Quit();
++    return 0;
++}
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
 index 87dfdc6..aae2f4c 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
@@ -5706,6 +5815,19 @@ index 87dfdc6..aae2f4c 100644
              break;
          }
          case SDLK_F5: kernel_dump_threads(); break;
+diff --git a/src/nx/runtime/platform/gamepad.h b/src/nx/runtime/platform/gamepad.h
+index 0821ef7..881b14c 100644
+--- a/src/nx/runtime/platform/gamepad.h
++++ b/src/nx/runtime/platform/gamepad.h
+@@ -29,6 +29,8 @@ u64 gamepad_button(u32 id, int button);
+ void gamepad_rumble(u32 left, u32 right);
+ /* one guest player's vibration (hid.h's PadState.rumble), played on that slot's gamepad each frame */
+ void gamepad_rumble_slot(int slot, u32 left, u32 right);
++/* scarletnx --gamepad-monitor: the controllers as the engine reads them, as text lines, until the reader leaves */
++int gamepad_monitor(void);
+ /* the settings are g_settings' (settings.txt: swap_a_b, stick_dead_zone, vibration, background_input, pair_joy_cons,
+    button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
+ typedef struct {
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
 index d3e4e35..064dffe 100644
 --- a/src/nx/runtime/platform/plat.h

@@ -1,4 +1,6 @@
-# PortForge 0.29
+# PortForge 0.30
+
+**Controllers:** open Controllers to choose Xbox, DualSense, DualShock 4, Switch Pro, Joy-Cons, another controller, or Automatic. The controller picture stays still while buttons light up, triggers fill and sticks move with live input. Save for all my games applies the button layout to known closed games and future conversions. Custom game button maps are preserved. The chart translates Switch prompts to your controller's buttons; it does not replace graphics drawn inside games.
 
 **Pixel smoothing:** choose On to remove jagged, staircase edges. The engine follows each edge in the game's image and blends along it before FSR enlarges the picture, and FSR sharpens less so the steps do not return. Text and fine detail soften a little, and it cannot add detail the game did not render. Save and restart the game to apply. Engine 1.12 or newer gives the full effect (the AI Doctor installs it under watched games).
 

@@ -120,7 +120,7 @@ internal static class CloudSaveTests
                 using(new GameStateGuard(a)){Save(a,"Temporary benchmark save");Check(first.Sync(a,Token).State=="WAITING","Scripted tests cannot upload their temporary progress");}
                 Check(Read(a)=="Concurrent B","Protected gameplay restores the original progress");
                 using(var running=Process.Start(new ProcessStartInfo(a,"-H --seconds=20"){UseShellExecute=false,CreateNoWindow=true}))
-                {try{Check(first.Sync(a,Token).State=="WAITING","Automatic sync waits while the actual game process is running");}finally{if(!running.HasExited)running.Kill();running.WaitForExit();}}
+                {var startedAt=Stopwatch.StartNew();while(!GameDiagnostics.Running(a)&&startedAt.ElapsedMilliseconds<5000)Thread.Sleep(50);try{Check(first.Sync(a,Token).State=="WAITING","Automatic sync waits while the actual game process is running");}finally{if(!running.HasExited)running.Kill();running.WaitForExit();}}
                 string leftover=Backup(a,"left-by-a-crash",Read(a));
                 Check(first.Sync(a,Token).State!="WAITING"&&!Directory.Exists(leftover)&&Read(a)=="Concurrent B","A backup left by an interrupted test no longer keeps cloud sync waiting forever");
                 Save(b,"New cloud progress");second.Sync(b,Token);server.Corrupt=true;

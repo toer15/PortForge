@@ -225,6 +225,7 @@ namespace PortForge
             if (capabilities.ProtectsRenderScale) { supported["resolution"] = "1"; supported["render_scale_safety"] = "1"; }
             if (!capabilities.Keys.Contains("upscaler")) supported.Remove("upscaler");
             if (!capabilities.Keys.Contains("pixel_smoothing")) supported.Remove("pixel_smoothing"); // an older engine still starts the game
+            ControllerSettings.AddTo(supported, capabilities, existing); // the Controllers window's choice, for every game
             if(supported.All(item=>existing.ContainsKey(item.Key)&&existing[item.Key]==item.Value))return null;
             string backup = File.Exists(path) ? path + ".before-portforge-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + ".bak" : null;
             AtomicWrite(path, new UTF8Encoding(false).GetBytes(Merge(text, supported)), backup);
