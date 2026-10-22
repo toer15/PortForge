@@ -1,5 +1,8 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
+using System.Threading;
+using System.Text;
 
 namespace PortForge
 {
@@ -13,10 +16,23 @@ namespace PortForge
         private readonly bool hadSave;
         private readonly byte[] logBytes;
         private bool disposed;
+        private Mutex syncMutex;
+        private static readonly Dictionary<string,int> protectedGames = new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
+        public static bool IsProtected(string exe) { lock(protectedGames) return protectedGames.ContainsKey(Path.GetFullPath(exe)); }
+        private void ReleaseProtection()
+        {
+            lock(protectedGames) { int count; if(protectedGames.TryGetValue(exePath,out count)) { if(count==1)protectedGames.Remove(exePath);else protectedGames[exePath]=count-1; } }
+            if(syncMutex!=null){syncMutex.ReleaseMutex();syncMutex.Dispose();syncMutex=null;}
+        }
 
         public GameStateGuard(string exe)
         {
             string full = exePath = Path.GetFullPath(exe), folder = Path.GetDirectoryName(full), stem = Path.GetFileNameWithoutExtension(full);
+            syncMutex = new Mutex(false,"Local\\PortForge.CloudSync."+CloudSaveService.Digest(Encoding.UTF8.GetBytes(full.ToLowerInvariant())).Substring(0,24));
+            bool held;try{held=syncMutex.WaitOne(30000);}catch(AbandonedMutexException){held=true;}
+            if(!held){syncMutex.Dispose();syncMutex=null;throw new IOException("Cloud saves are busy. Retry the protected game test shortly.");}
+            lock(protectedGames){int count;protectedGames.TryGetValue(full,out count);protectedGames[full]=count+1;}
+            try {
             saveFolder = Path.Combine(folder, stem + "_data", "save");
             logPath = Path.ChangeExtension(full, ".log");
             backupRoot = Path.Combine(folder, "PortForge-test-backup-" + Guid.NewGuid().ToString("N"));
@@ -25,6 +41,7 @@ namespace PortForge
             Directory.CreateDirectory(backupRoot);
             savedBackup = Path.Combine(backupRoot, "save");
             if (hadSave) CopyFolder(saveFolder, savedBackup);
+            } catch { ReleaseProtection();throw; }
         }
 
         public string BackupFolder { get { return backupRoot; } }
@@ -54,6 +71,7 @@ namespace PortForge
             {
                 throw new IOException("Could not put the game's save and log back after testing. Your original save is kept in: " + backupRoot, e);
             }
+            finally { ReleaseProtection(); }
         }
 
         private static void CopyFolder(string source, string target)

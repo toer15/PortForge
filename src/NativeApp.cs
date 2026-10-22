@@ -44,6 +44,7 @@ namespace PortForge
         private readonly System.Collections.Generic.List<DoctorEvent> doctorEvents = new System.Collections.Generic.List<DoctorEvent>();
         private readonly NotifyIcon tray = new NotifyIcon();
         private LiveDoctor doctor;
+        private CloudSaveMonitor cloudMonitor;
         private readonly System.Windows.Forms.Timer doctorUiTimer = new System.Windows.Forms.Timer { Interval = 500 };
         private DoctorEvent pendingDoctorEvent, pendingDoctorNotice;
         private DateTime lastDoctorNotice = DateTime.MinValue;
@@ -58,7 +59,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.18 | Switch to PC"; AppIcon.Apply(this);
+            Text = "PortForge 0.19 | Switch to PC"; AppIcon.Apply(this);
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -75,9 +76,9 @@ namespace PortForge
             header.Controls.Add(Caption("PortForge", 26, Color.White, true));
             header.Controls.Add(Caption("Create Windows game files from your Switch game.", 11, Muted, false));
             var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
-            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 560));
+            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 620));
             heading.Controls.Add(header, 0, 0);
-            var settings = Button("Graphics and FPS", true); settings.AccessibleName = "Graphics and FPS"; settings.Size = new Size(192, 40);
+            var settings = Button("Graphics and FPS", true); settings.AccessibleName = "Graphics and FPS"; settings.Size = new Size(165, 40);
             settings.Click += delegate
             {
                 string exe = Directory.Exists(result) ? Path.Combine(result, Path.GetFileName(result) + ".exe") : null;
@@ -86,7 +87,7 @@ namespace PortForge
                 using (var window = new GameSettingsWindow(exe,backend.Text)) window.ShowDialog(this);
             };
             var headerActions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = new Padding(0) };
-            downloads.AccessibleName = "Downloads"; downloads.Size = new Size(170, 40);
+            downloads.AccessibleName = "Downloads"; downloads.Size = new Size(120, 40);
             downloads.Click += async delegate
             {
                 using (var window = new DownloadWindow())
@@ -107,13 +108,14 @@ namespace PortForge
                     if (window.ConvertWhenReady && cancellation == null) await Compile();
                 }
             };
-            updates.AccessibleName = "Check for updates"; updates.Size = new Size(190, 40);
+            updates.AccessibleName = "Check for updates"; updates.Size = new Size(170, 40);
             updates.Click += delegate
             {
                 using (var window = new UpdateWindow(cancellation != null))
                     if (window.ShowDialog(this) == DialogResult.Yes && window.InstallStarted) Close();
             };
-            headerActions.Controls.Add(downloads); headerActions.Controls.Add(settings); headerActions.Controls.Add(updates);
+            var cloud=Button("Cloud saves",false);cloud.Size=new Size(130,40);cloud.Click+=delegate{string exe=Directory.Exists(result)?Path.Combine(result,Path.GetFileName(result)+".exe"):GameSettingsWindow.RememberedGame();using(var window=new CloudSaveWindow(exe))window.ShowDialog(this);};
+            headerActions.Controls.Add(downloads); headerActions.Controls.Add(settings); headerActions.Controls.Add(cloud); headerActions.Controls.Add(updates);
             heading.Controls.Add(headerActions, 1, 0); root.Controls.Add(heading, 0, 0);
             var columns = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0) };
             columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
@@ -242,11 +244,12 @@ namespace PortForge
             Shown += async delegate { await QuietUpdateCheck(); };
             Shown += async delegate { await DetectHardware(); };
             Shown += delegate { if (StartDoctorOnShow) StartDoctor(); };
-            FormClosed += delegate { doctorUiTimer.Stop(); doctorUiTimer.Dispose(); if (doctor != null) doctor.Dispose(); tray.Visible = false; tray.Dispose(); };
+            FormClosed += delegate { doctorUiTimer.Stop(); doctorUiTimer.Dispose(); if (doctor != null) doctor.Dispose(); if(cloudMonitor!=null)cloudMonitor.Dispose(); tray.Visible = false; tray.Dispose(); };
         }
 
         private void StartDoctor()
         {
+            cloudMonitor=new CloudSaveMonitor();
             tray.Icon = AppIcon.Get() ?? Icon ?? SystemIcons.Application; tray.Text = "PortForge AI Doctor"; tray.Visible = true;
             tray.BalloonTipClicked += delegate { doctorButton.PerformClick(); };
             doctor = new LiveDoctor(AppDomain.CurrentDomain.BaseDirectory) { AutoFix = doctorAuto.Checked, UseAi = doctorAi.Checked };

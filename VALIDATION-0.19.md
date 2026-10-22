@@ -1,0 +1,19 @@
+# PortForge 0.19 validation
+
+Cloud saves are available from the main window and the game settings window. Each game starts off. Players choose their own Windows OneDrive account folder or an HTTPS WebDAV folder, then enable synchronization. The app monitors enabled games independently of AI Doctor and Codex settings. Saves synchronize while PortForge is open and the game is closed, including a pre-launch check through Play game. Conflicts block that launch path until resolved. Cloud connection failures preserve local progress and permit offline play.
+
+Save-only archives, encrypted local credentials, verified upload/read-back, backups before restores and immutable revision history are implemented. Two devices with different progress require an explicit choice. Simultaneous uploads retain separate branches; resolving them creates a new revision referencing both. Timestamps do not choose the winning save. Named per-game mutexes and test protection keep temporary benchmark progress out of cloud saves. Turning the switch off cancels further commits without deleting existing saves.
+
+## Validation
+
+301 application checks passed: the existing 269-check suite and 32 cloud-save checks. The full suite passed after adding the cloud feature; following archive-bound and settings-change hardening, the app was rebuilt and the expanded cloud suite passed against that build. Cloud tests exercised authenticated MKCOL/PROPFIND/PUT/GET on a local TCP WebDAV server with separate PC settings folders, actual archive transfer and restoration, concurrent branches, explicit conflict resolution, corruption, invalid ZIP paths, missing archives, offline access, authentication failure, cancellation, protection during scripted tests, waiting for a real synthetic game process, and switching off during publication. OneDrive's file transport was checked with isolated local folders; it reports queued progress accurately. The visible switch was exercised through asynchronous upload and status completion. The cloud window was rendered and inspected for clipping and readable controls.
+
+All 10 installer checks passed in a temporary redirected installation, covering program and engine files, shortcuts, Windows registration, icon, removal and preservation of games. Engine 1.3 is unchanged. No cloud account was enabled for the user's real games and no real game saves were uploaded during testing.
+
+## Limits
+
+No live OneDrive or Nextcloud account was connected for this release. Local tests prove the implemented protocol and file operations, not compatibility with every cloud provider. OneDrive internet upload completion belongs to the Windows client; PortForge reports QUEUED and directs the player to OneDrive status. WebDAV verifies the server round trip directly. Each player supplies and signs into their own cloud account; no hosted PortForge account or storage service is included.
+
+Automatic sync requires PortForge to remain open. Checks normally run every 15 seconds; connection errors back off for two minutes. Launching a game executable directly bypasses the app's pre-launch check. A user starting the game or another program editing saves outside PortForge can still race file operations; the service rechecks that the game is stopped before publication or restore, and restore backups remain available. A stale protected-test backup blocks sync until recovered rather than risking a test save upload.
+
+Save limits are 256 MiB, 10,000 entries and 512 retained revisions; old snapshots need manual archive maintenance at that point. Cloud metadata and snapshots are protected by the user's provider account. App passwords use Windows DPAPI locally; save archives have no additional PortForge encryption. The player should use a private provider folder. Different editions, updates, incompatible game saves or different title IDs can still require manual selection and cannot be fixed by synchronization.

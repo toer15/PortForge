@@ -76,7 +76,7 @@ namespace PortForge
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 130)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
             root.Controls.Add(Label("Graphics and performance", 22, Color.White), 0, 0);
             var file = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = new Padding(0) };
-            file.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); file.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 252));
+            file.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); file.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 370));
             file.Controls.Add(Label("Windows game (.exe)", 10, Muted), 0, 0);
             file.Controls.Add(game, 0, 1); file.Controls.Add(fileButtons, 1, 1);
             foreach (string text in new[] {"Browse", "Clear", "Load"})
@@ -87,6 +87,7 @@ namespace PortForge
                 if (text == "Load") b.Click += async delegate { await LoadGame(); };
                 fileButtons.Controls.Add(b);
             }
+            var cloud=Button("Cloud saves",false);cloud.Size=new Size(110,30);cloud.Click+=delegate{using(var window=new CloudSaveWindow(loadedGame))window.ShowDialog(this);};fileButtons.Controls.Add(cloud);
             root.Controls.Add(file, 0, 1);
             var tabs=new TabControl {Dock=DockStyle.Fill,AccessibleName="Game settings tabs"};
             var graphicsTab=new TabPage("Graphics and FPS") {BackColor=Bg,ForeColor=Color.WhiteSmoke};
@@ -260,6 +261,13 @@ namespace PortForge
             try
             {
                 GameOptimization.EnsureStopped(loadedGame);
+                if(CloudSaves.Service.Get(loadedGame).Enabled)
+                {
+                    SetStatus("SYNCING","Checking cloud saves","Checking saved progress before starting the game.",Mint);
+                    var cloudResult=await Task.Run(()=>CloudSaves.Service.Sync(loadedGame,cancellation.Token));
+                    if(cloudResult.Conflict||cloudResult.State=="BUSY"||cloudResult.State=="WAITING")throw new IOException(cloudResult.Message+" Open Cloud saves before playing.");
+                    if(cloudResult.State=="ERROR")history.AppendText("Cloud saves: "+cloudResult.Message+" Playing with this PC's save; cloud sync will retry."+Environment.NewLine);
+                }
                 await Task.Run(()=>GameOptimization.SaveAndVerify(loadedGame,desired,capabilities));
                 if(autoRepair.Checked)history.AppendText(await Task.Run(()=>GameDiagnostics.Repair(loadedGame,capabilities,backendPath))+Environment.NewLine);
                 ShowProfile(GameOptimization.Load(loadedGame));

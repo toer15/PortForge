@@ -1,4 +1,24 @@
-# PortForge 0.6
+# PortForge 0.19
+
+## Cloud saves
+
+1. Open **Cloud saves** in the main window or beside the game selector in **Graphics and FPS**.
+2. Browse to the converted game's `.exe`. Cloud saves start **off** for every game.
+3. Choose **OneDrive** or **WebDAV** and enter the connection details below.
+4. Use the same **Cloud save name** and cloud account on every PC. A game's title ID is used automatically when available; otherwise check that the names match.
+5. Switch **Cloud saves on for this game** on. Close the game and keep PortForge open to synchronize. **Sync now** saves changed connection details and checks immediately.
+
+**OneDrive:** sign in to OneDrive in Windows first, then select its account root folder (for example `C:\Users\You\OneDrive`). PortForge puts versioned saves under `PortForgeCloudSaves`. Windows OneDrive uploads and downloads those files. A **QUEUED** status confirms the local OneDrive folder, not a completed internet upload. Before using another PC, confirm that OneDrive reports the files as synced on both PCs. If OneDrive is paused, offline or signed out, saves stay queued. See [Microsoft's OneDrive status guide](https://support.microsoft.com/en-us/onedrive/what-do-the-onedrive-icons-mean).
+
+**WebDAV / Nextcloud:** enter the HTTPS folder URL supplied by your cloud provider, the username and an app password. A typical Nextcloud URL is `https://your-server/remote.php/dav/files/your-user/`. The account needs folder creation, listing, download and upload permissions. PortForge creates a `PortForgeCloudSaves` subfolder and reads each uploaded archive back to verify its checksum. App passwords are encrypted for the current Windows user and must be entered separately on another PC. Never enter your cloud credentials in a game download link. See [Nextcloud's WebDAV instructions](https://docs.nextcloud.com/server/stable/user_manual/en/files/access_webdav.html).
+
+The app checks enabled games every 15 seconds while open and synchronizes before launching through **Play game**. It waits while the game runs or a protected gameplay test uses its save. If cloud access fails, local progress stays on the PC and syncing retries later. Launching a game's `.exe` directly bypasses the pre-launch check: open PortForge and let it sync first on a second PC.
+
+If both PCs changed progress, **CONFLICT** stops automatic replacement. **Keep this PC** publishes this PC's save as a new version. **Use cloud copy** restores the selected version; select a version first when multiple PCs uploaded simultaneously. A restore keeps the old local save in `PortForge-cloud-backups` beside the game. To recover it manually, close the game, turn cloud saves off, and copy the chosen backup's contents to `<game>_data\save` after backing up the current folder.
+
+Turning the switch **off** stops further synchronization and keeps both local and cloud copies. This is a per-game setting; enabling one game does not enable other games. Close PortForge to stop its background checks. OneDrive may finish already queued Windows uploads independently.
+
+Only `<game>_data\save` is synchronized. Game files, ROMs, keys, logs and hardware information are excluded. Sync requires a supported converted game, a real local save folder, and your own cloud account. PortForge does not provide cloud hosting. The save limit is 256 MB and 10,000 entries; linked files are rejected. Up to 512 revisions are retained before manual archive maintenance is required. Existing versions are kept to avoid automatic loss of older progress. Settings are stored under `%LOCALAPPDATA%\PortForge\CloudSaves` and survive app updates.
 
 ## Download a game file and continue to conversion
 

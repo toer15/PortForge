@@ -1,4 +1,4 @@
-﻿using System.Runtime.Versioning;
-[assembly: System.Reflection.AssemblyVersion("0.18.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("0.18.0.0")]
+using System.Runtime.Versioning;
+[assembly: System.Reflection.AssemblyVersion("0.19.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("0.19.0.0")]
 [assembly: TargetFramework(".NETFramework,Version=v4.8", FrameworkDisplayName = ".NET Framework 4.8")]
