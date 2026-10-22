@@ -12,7 +12,7 @@ The status panel shows progress, completion, pauses and errors. The speed displa
 
 The download manager automatically:
 
-- Uses up to eight simultaneous connections when the source supports safe byte ranges, and falls back to a full single transfer if ranges are refused.
+- Measures each server for a few seconds and uses the number of connections it serves fastest (one to eight; remembered for twelve hours), when the source supports byte ranges. Falls back to a full single transfer if ranges are refused, and resumes by itself up to three times after a dropped connection.
 - Retries temporary connection failures and busy-server responses with delays, including the server's Retry-After instruction up to two minutes.
 - Keeps partial download data when paused. A later download with the same destination resumes when the server supplies byte ranges and a matching strong ETag. Otherwise it restarts safely. If the source file changes, old and new bytes are never mixed.
 - Checks file headers and ZIP structure. A supplied checksum mismatch or broken file/ZIP structure triggers one fresh download. If that also fails, the app explains the problem and keeps the failed file out of the final destination.
@@ -134,3 +134,15 @@ The **PortForge Engine** is PortForge's own version of that engine, built to rem
 **AI Engine Lab** (needs the engine source, MSYS2 and Codex on the PC): the AI writes a change to the engine's code for your game's recorded problems. PortForge builds it, measures it on your game, and keeps it only if stutter measurably drops with no new errors. Otherwise it is thrown away.
 
 Loading freezes (the game creating many textures at once) are not fixed yet.
+
+## Installing PortForge
+
+Run **PortForge-Setup.exe**. It installs PortForge in `%LocalAppData%\Programs\PortForge` (or a folder you pick), adds a Start menu shortcut and, if you tick it, a desktop shortcut with the PortForge logo, and lists PortForge under Windows **Settings > Apps > Installed apps**. It needs no administrator rights. Games you convert go to `Documents\PortForge Games` and downloads to `Downloads\PortForge`, outside the program folder.
+
+To remove it, use **Installed apps > PortForge > Uninstall**. It removes the program, the shortcuts and the Windows entry, and keeps your converted games and downloads unless you ask for them to be deleted too. **Check for updates** inside the app updates an installed copy in place.
+
+Silent install for IT use: `PortForge-Setup.exe /S /D=C:\Tools\PortForge /NODESKTOP /NOLAUNCH`.
+
+## Auto fix everything
+
+On the **Engine** tab, **Auto fix everything** works through one game in four steps: it puts the PortForge Engine under the game, applies every repair the app knows (each with a backup), matches the engine's shader workers to this PC, and plays the game for 20 seconds to check it works. If the engine makes the game fail that check, the original engine is put back. The report lists what was fixed, what was already fine, what the check measured, and what no setting can change. Close the game first.

@@ -32,7 +32,7 @@ namespace PortForge
         public UpdateWindow(bool conversionRunning, string apiRoot, string repository, Version current)
         {
             busy = conversionRunning; this.apiRoot = apiRoot; this.repository = repository; this.current = current;
-            Text = "PortForge | Updates"; ClientSize = new Size(640, 520); MinimumSize = new Size(560, 460); StartPosition = FormStartPosition.CenterParent;
+            Text = "PortForge | Updates"; AppIcon.Apply(this); ClientSize = new Size(640, 520); MinimumSize = new Size(560, 460); StartPosition = FormStartPosition.CenterParent;
             BackColor = Bg; ForeColor = Color.WhiteSmoke; Font = new Font("Segoe UI", 10); AutoScaleMode = AutoScaleMode.Dpi;
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(22) };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 150)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));

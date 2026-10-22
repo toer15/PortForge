@@ -143,10 +143,40 @@ index b8247c0..331a5f8 100644
          g_dyn.pipe = pipe;
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..935ea20 100644
+index f3ac2e2..7e557a3 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
-@@ -467,6 +467,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -411,23 +411,25 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+            runs at) and the slowest, since the last line */
+         static u64 last_present_ns, slow_frames, slowest_ns;
+         /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
+-        static u64 was[10];
+-        u64 now_ns = plat_ns(), is[10];
++        static u64 was[12];
++        u64 now_ns = plat_ns(), is[12];
+         vk_pipeline_stats(&is[0], &is[1], &is[2], &is[3], &is[4], &is[5]);
+         vk_tex_stats(&is[6], &is[7]);
+         is[8] = vk_rt_made();
+         is[9] = g_vk_finish_ns / 1000000;
++        is[10] = vk_rt_make_ms();
++        is[11] = vk_tex_upload_ms();
+         if (last_present_ns) {
+             u64 d = now_ns - last_present_ns;
+             if (d > 50000000) {
+                 slow_frames++;
+                 LOG_LIMIT(200,
+                           "vulkan: a %llu ms frame: %llu shaders translated (%llu ms), %llu pipelines made (%llu ms waited "
+-                          "for), %llu render targets made, %llu texture uploads (%llu KB), %llu ms in finishes\n",
++                          "for), %llu render targets made (%llu ms), %llu texture uploads (%llu KB, %llu ms), %llu ms in finishes\n",
+                           (unsigned long long)(d / 1000000), (unsigned long long)(is[4] - was[4]),
+                           (unsigned long long)(is[5] - was[5]), (unsigned long long)(is[0] - was[0]),
+                           (unsigned long long)(is[3] - was[3]), (unsigned long long)(is[8] - was[8]),
+-                          (unsigned long long)(is[6] - was[6]), (unsigned long long)((is[7] - was[7]) >> 10),
++                          (unsigned long long)(is[10] - was[10]), (unsigned long long)(is[6] - was[6]), (unsigned long long)((is[7] - was[7]) >> 10), (unsigned long long)(is[11] - was[11]),
+                           (unsigned long long)(is[9] - was[9]));
+             }
+             if (d > slowest_ns) slowest_ns = d;
+@@ -467,6 +469,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -158,10 +188,37 @@ index f3ac2e2..935ea20 100644
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
 diff --git a/src/nx/gpu/vk/surface.c b/src/nx/gpu/vk/surface.c
-index 355bd29..c4b9f64 100644
+index 355bd29..c8ec5b7 100644
 --- a/src/nx/gpu/vk/surface.c
 +++ b/src/nx/gpu/vk/surface.c
-@@ -840,6 +840,14 @@ static u64 rt_mem_hash(const Surf* s) {
+@@ -157,9 +157,10 @@ u32 vk_sc(u32 v) {
+ }
+ float vk_scf(float v) { return v * g_vk_scale; }
+ 
+-static u64 g_rt_made; /* for the stats line */
++static u64 g_rt_made, g_rt_ns; /* for the stats line: render targets made, and the time spent making them */
+ u64 vk_rt_made(void) { return g_rt_made; }
+-static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 bh, u32 pitch, int is_rt, u32 layers) {
++u64 vk_rt_make_ms(void) { return g_rt_ns / 1000000; }
++static Surf* surf_create_untimed(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 bh, u32 pitch, int is_rt, u32 layers) {
+     Surf* s = calloc(1, sizeof *s);
+     if (!s) return NULL;
+     s->gva = gva;
+@@ -223,6 +224,13 @@ static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 b
+     return s;
+ }
+ 
++static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 bh, u32 pitch, int is_rt, u32 layers) {
++    u64 t0 = is_rt ? plat_ns() : 0;
++    Surf* s = surf_create_untimed(gva, w, h, f, fkey, bl, bh, pitch, is_rt, layers);
++    if (is_rt) g_rt_ns += plat_ns() - t0;
++    return s;
++}
++
+ /* SET_SRGB_WRITE selects the attachment view, leaving the image's stored bytes and sampling format intact. */
+ VkImageView vk_rt_attachment(Surf* s, int srgb_write) {
+     VkFormat linear = vk_srgb_as(s->f.vk, 0);
+@@ -840,6 +848,14 @@ static u64 rt_mem_hash(const Surf* s) {
      }
      return h;
  }
@@ -176,7 +233,7 @@ index 355bd29..c4b9f64 100644
  void vk_rt_drawn(Surf* s) {
      /* A memory write after the first draw can leave untouched pixels stale even when later draws touch the target.
         Keep that first baseline until the next present instead of scanning the whole target on every draw. */
-@@ -853,6 +861,7 @@ void vk_rt_drawn(Surf* s) {
+@@ -853,6 +869,7 @@ void vk_rt_drawn(Surf* s) {
          s->draw_wseen = vk_ww_now();
          s->draw_gw = gpu_mem_generation();
      }
@@ -184,8 +241,43 @@ index 355bd29..c4b9f64 100644
      s->drawn_at = g_vk_present;
      if (s->in_drawn) return;
      if (g_ndrawn == g_capdrawn) {
+diff --git a/src/nx/gpu/vk/texture.c b/src/nx/gpu/vk/texture.c
+index 6096f99..ed57f58 100644
+--- a/src/nx/gpu/vk/texture.c
++++ b/src/nx/gpu/vk/texture.c
+@@ -10,6 +10,7 @@
+ #include "nx/gpu/gpu.h"
+ #include "nx/gpu/renderer.h"
+ #include "nx/runtime/platform/log.h"
++#include "nx/runtime/platform/plat.h"
+ #include "nx/gpu/vk/vk.h"
+ #include "nx/memory/own.h"
+ 
+@@ -332,13 +333,21 @@ static u32 g_tex_upload_gen;
+    than g_vk.alloc_cap (memory.c) */
+ #define TEX_BAND (64ull << 20)
+ 
+-static u64 g_tex_uploads, g_tex_upload_bytes; /* for the stats line */
++static u64 g_tex_uploads, g_tex_upload_bytes, g_tex_upload_ns; /* for the stats line: uploads, their bytes, the time they took */
++u64 vk_tex_upload_ms(void) { return g_tex_upload_ns / 1000000; }
+ void vk_tex_stats(u64* uploads, u64* bytes) {
+     *uploads = g_tex_uploads;
+     *bytes = g_tex_upload_bytes;
+ }
+ /* 1 when every subresource was copied; 0 when memory or staging ran out, and upload_valid keeps it for a retry */
++static int tex_upload_untimed(Surf* t);
+ static int tex_upload(Surf* t) {
++    u64 t0 = plat_ns();
++    int ok = tex_upload_untimed(t);
++    g_tex_upload_ns += plat_ns() - t0;
++    return ok;
++}
++static int tex_upload_untimed(Surf* t) {
+     const VkFmt* f = &t->f;
+     g_tex_uploads++;
+     g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..c03ef7c 100644
+index db13c2d..1653fbc 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -367,6 +367,7 @@ typedef struct Surf {
@@ -196,7 +288,7 @@ index db13c2d..c03ef7c 100644
      int in_drawn;   /* in surface.c's list of drawn targets, entered at drawn_from */
      u64 drawn_from;
      u64 draw_gw;    /* guest-memory generation at the first draw this present or since a full replacement */
-@@ -846,6 +847,13 @@ int vk_pipeline_worker_count(int setting, int cpus);
+@@ -846,12 +847,21 @@ int vk_pipeline_worker_count(int setting, int cpus);
  /* a draw's pipeline: the pipeline, or a stand-in the recording thread waits for at its bind (vk_pipeline_resolve, the
     pipeline a stand-in names, or h itself) */
  VkPipeline vk_pipeline_get_deferred(const PipeKey* k);
@@ -210,6 +302,14 @@ index db13c2d..c03ef7c 100644
  VkPipeline vk_pipeline_resolve(VkPipeline h);
  /* so far: pipelines made, how many of them the pipeline cache had, ms the workers took making them, ms the GPU thread
     waited for new ones, shaders translated, ms translating them */
+ void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms);
+ void vk_tex_stats(u64* uploads, u64* bytes); /* texture uploads from guest memory so far, and their bytes */
+ u64 vk_rt_made(void);                         /* render targets made so far */
++u64 vk_tex_upload_ms(void);                  /* the time spent uploading textures, in milliseconds */
++u64 vk_rt_make_ms(void);                      /* the time spent making them, in milliseconds */
+ VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
+ void vk_pipeline_save(void);
+ VkShaderModule vk_module_spv(const u32* words, size_t count);
 diff --git a/src/nx/runtime/driver/hactool/nca.c b/src/nx/runtime/driver/hactool/nca.c
 index 2f956fa..23ac531 100644
 --- a/src/nx/runtime/driver/hactool/nca.c

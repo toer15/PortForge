@@ -13,7 +13,7 @@ namespace PortForge
     {
         private static readonly Color Bg = Color.FromArgb(17,21,30), Surface = Color.FromArgb(28,34,46), Mint = Color.FromArgb(105,226,183), Muted = Color.FromArgb(173,185,203);
         private readonly TextBox url = Box("Direct download link"), destination = Box("Download save path"), checksum = Box("Expected SHA-256"), log = Box("Download details");
-        private readonly CheckBox parallel = new CheckBox { Text = "Use up to 8 connections when supported", Checked = true, AutoSize = true }, unpack = new CheckBox { Text = "Unpack ZIP files automatically", Checked = true, AutoSize = true }, convertAfter = new CheckBox { Text = "Start conversion when the game is ready", Checked = true, AutoSize = true };
+        private readonly CheckBox parallel = new CheckBox { Text = "Use several connections when they help (automatic)", Checked = true, AutoSize = true }, unpack = new CheckBox { Text = "Unpack ZIP files automatically", Checked = true, AutoSize = true }, convertAfter = new CheckBox { Text = "Start conversion when the game is ready", Checked = true, AutoSize = true };
         private readonly Label badge = Caption("READY", 9, Mint), title = Caption("Download your game file", 18, Color.White), message = Caption("Paste a direct file link and choose where to save it.", 10, Muted), speed = Caption("", 10, Muted);
         private readonly Button start = Button("Download / Resume", true), pause = Button("Pause", false), use = Button("Use selected game", true), folder = Button("Open folder", false);
         private readonly ProgressBar bar = new ProgressBar { Dock = DockStyle.Fill };
@@ -26,7 +26,7 @@ namespace PortForge
 
         public DownloadWindow()
         {
-            Text = "PortForge | Downloads"; ClientSize = new Size(900, 820); MinimumSize = new Size(820,740); StartPosition = FormStartPosition.CenterParent;
+            Text = "PortForge | Downloads"; AppIcon.Apply(this); ClientSize = new Size(900, 820); MinimumSize = new Size(820,740); StartPosition = FormStartPosition.CenterParent;
             BackColor = Bg; ForeColor = Color.WhiteSmoke; Font = new Font("Segoe UI",10); AutoScaleMode = AutoScaleMode.Dpi;
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(22) };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute,45)); root.RowStyles.Add(new RowStyle(SizeType.Absolute,290)); root.RowStyles.Add(new RowStyle(SizeType.Absolute,120));
@@ -64,7 +64,7 @@ namespace PortForge
             use.Click += delegate { ChooseGame(); }; games.SelectedIndexChanged += delegate { use.Enabled = cancellation == null && games.SelectedItem != null; };
             folder.Click += delegate { if (File.Exists(completedPath)) Process.Start("explorer.exe",GameManifest.Quote(Path.GetDirectoryName(completedPath))); };
             root.Controls.Add(actions,0,5); Controls.Add(root);
-            destination.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Downloads","game.nro");
+            destination.Text = Path.Combine(AppPaths.DefaultDownloadsFolder,"game.nro");
             url.Leave += delegate
             {
                 Uri uri;
@@ -86,7 +86,7 @@ namespace PortForge
         private async Task Download()
         {
             if (cancellation != null) return;
-            var request = new DownloadRequest { Url = url.Text.Trim(), Destination = destination.Text.Trim(), Sha256 = checksum.Text.Trim(), Connections = parallel.Checked ? 8 : 1 };
+            var request = new DownloadRequest { Url = url.Text.Trim(), Destination = destination.Text.Trim(), Sha256 = checksum.Text.Trim(), Connections = parallel.Checked ? 0 : 1 };
             try { GameDownloads.Validate(request); } catch (Exception e) { Error(e); return; }
             cancellation = new CancellationTokenSource(); var token = cancellation.Token;
             fields.Enabled = start.Enabled = use.Enabled = folder.Enabled = false; pause.Enabled = true;
@@ -104,7 +104,9 @@ namespace PortForge
             bool automaticallyUse = false;
             try
             {
-                var result = await Task.Run(() => GameDownloads.Download(request,updates,token)); completedPath = result.File;
+                var started = System.Diagnostics.Stopwatch.StartNew();
+                var result = await DownloadWithRecovery(request,updates,token); completedPath = result.File;
+                TellDoctor(result, started.Elapsed);
                 log.AppendText("Local SHA-256: " + result.Sha256 + Environment.NewLine);
                 if (result.Kind == "ZIP" && unpack.Checked)
                 {
@@ -125,6 +127,28 @@ namespace PortForge
                 use.Enabled = games.SelectedItem != null; folder.Enabled = File.Exists(completedPath); bar.Style = ProgressBarStyle.Continuous;
             }
             if (automaticallyUse) ChooseGame();
+        }
+        /// <summary>A dropped connection or a busy server is not the end: the download resumes by itself, up to three times, from the parts already saved.</summary>
+        private async Task<DownloadResult> DownloadWithRecovery(DownloadRequest request, IProgress<DownloadProgress> updates, CancellationToken token)
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                IOException failure;
+                try { return await Task.Run(() => GameDownloads.Download(request,updates,token)); }
+                catch (IOException e) { if (attempt >= 3 || !e.Message.StartsWith("Download paused after", StringComparison.Ordinal)) throw; failure = e; }
+                int wait = attempt == 0 ? 5 : attempt == 1 ? 15 : 30;
+                updates.Report(new DownloadProgress { Message = "The connection failed. Resuming automatically in " + wait + " seconds (" + (attempt + 1) + " of 3). " + (failure.InnerException != null ? failure.InnerException.Message : ""), Total = -1 });
+                if (LiveDoctor.Current != null) LiveDoctor.Current.Note(new DoctorEvent { Game = "Download", Kind = "download", Title = "Connection problem, resuming automatically", Text = "Attempt " + (attempt + 1) + " of 3." });
+                await Task.Delay(wait * 1000, token);
+            }
+        }
+        /// <summary>The doctor's list gets how fast the download went and, when it was slow, what that most likely means.</summary>
+        private static void TellDoctor(DownloadResult result, TimeSpan took)
+        {
+            if (LiveDoctor.Current == null || result.Reused || !File.Exists(result.File)) return;
+            long bytes = new FileInfo(result.File).Length; double mbps = bytes / 1048576.0 / Math.Max(1, took.TotalSeconds);
+            string slow = bytes > 100L * 1048576 && mbps < 5 ? " That is slow. The app measured the server and used the best number of connections, so the limit is the source's own speed or your internet. A different mirror or link is the fix." : "";
+            LiveDoctor.Current.Note(new DoctorEvent { Game = "Download", Kind = "download", Title = "Download finished", Text = (bytes / 1048576.0).ToString("F0") + " MB in " + Math.Round(took.TotalSeconds) + " s (" + mbps.ToString("F1") + " MB/s)." + slow });
         }
         private void ChooseGame() { if (cancellation != null || games.SelectedItem == null) return; SelectedInput = games.SelectedItem.ToString(); DialogResult = DialogResult.OK; Close(); }
         private void Error(Exception e) { SetStatus("ERROR",File.Exists(completedPath) ? "File saved; preparation stopped" : "Download needs attention",e.Message,Color.FromArgb(255,157,148)); }

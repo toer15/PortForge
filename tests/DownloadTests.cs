@@ -56,12 +56,12 @@ internal sealed class DownloadServer : IDisposable
             if(ranged && !ignore)
             {
                 string[] pair=range.Substring(6).Split('-'); start=Int64.Parse(pair[0]); if(pair[1].Length>0) end=Int64.Parse(pair[1]);
-                if(start>0) { Interlocked.Increment(ref ResumeRequests); if(!headers.ContainsKey("If-Range")) throw new Exception("Missing If-Range"); }
+                if(start>0) { Interlocked.Increment(ref ResumeRequests); if(!headers.ContainsKey("If-Range") && route!="/no-etag.nro") throw new Exception("Missing If-Range"); }
             }
             bool body=!probe; if(body) { int active=Interlocked.Increment(ref Active); lock(sync) MaxActive=Math.Max(MaxActive,active); Thread.Sleep(35); }
             try
             {
-                string etag=route=="/no-etag.nro"?"":"\"version-"+version+"\"";
+                string etag=route=="/no-etag.nro"?"":route=="/lastmod.nro"?"lm:Wed, 21 Oct 2015 07:28:00 GMT":"\"version-"+version+"\"";
                 bool drop=route=="/drop.nro" && !ranged;
                 Reply(stream,ranged&&!ignore?"206 Partial Content":"200 OK",data,start,end,ranged&&!ignore,etag,drop,route=="/slow.nro");
             }
@@ -74,7 +74,7 @@ internal sealed class DownloadServer : IDisposable
     {
         string head="HTTP/1.1 "+status+"\r\nContent-Type: application/octet-stream\r\nContent-Length: "+Math.Max(0,end-start+1)+"\r\nConnection: close\r\n";
         if(range) head+="Content-Range: bytes "+start+"-"+end+"/"+data.Length+"\r\n";
-        if(etag.Length>0) head+="ETag: "+etag+"\r\n"; Write(stream,head+"\r\n");
+        if(etag.StartsWith("lm:")) head+="Last-Modified: "+etag.Substring(3)+"\r\n"; else if(etag.Length>0) head+="ETag: "+etag+"\r\n"; Write(stream,head+"\r\n");
         long actualEnd=drop?Math.Min(end,start+(end-start)/2):end;
         for(long at=start;at<=actualEnd;at+=16384) { int n=(int)Math.Min(16384,actualEnd-at+1); stream.Write(data,(int)at,n); if(slow) Thread.Sleep(20); }
     }
@@ -116,7 +116,11 @@ internal static class DownloadTests
                 Check(GameDownloads.Download(fallback,messages,CancellationToken.None).Sha256==expected && messages.Messages.Any(s=>s.Contains("Falling back")),"A server refusing parallel requests falls back to one complete transfer");
                 Check(GameDownloads.Download(request("/no-range.nro","plain.nro",4),new Updates(),CancellationToken.None).Sha256==expected,"Servers ignoring byte ranges still download correctly");
                 Check(GameDownloads.Download(request("/reject-probe.nro","rejected-range.nro",4),new Updates(),CancellationToken.None).Sha256==expected,"Servers rejecting the range probe fall back to a normal request");
-                Check(GameDownloads.Download(request("/no-etag.nro","no-etag.nro",4),new Updates(),CancellationToken.None).Sha256==expected,"A missing strong validator uses a safe full transfer");
+                Check(GameDownloads.Download(request("/no-etag.nro","no-etag.nro",4),new Updates(),CancellationToken.None).Sha256==expected,"A server with no validator at all still downloads the exact file");
+                int lastModifiedBefore=server.Gets("/lastmod.nro");
+                Check(GameDownloads.Download(request("/lastmod.nro","lastmod.nro",4),new Updates(),CancellationToken.None).Sha256==expected && server.Gets("/lastmod.nro")-lastModifiedBefore>=4,"A server that gives Last-Modified instead of an ETag is still split into parallel connections");
+                var automatic=request("/game.nro","automatic.nro",0); var autoUpdates=new Updates();
+                Check(GameDownloads.Download(automatic,autoUpdates,CancellationToken.None).Sha256==expected,"Automatic connection choice downloads the exact file");
                 Check(GameDownloads.Download(request("/chunked.nro","chunked.nro",4),new Updates(),CancellationToken.None).Sha256==expected,"Chunked downloads without a known total length finish correctly");
                 Check(GameDownloads.Download(request("/busy.nro","busy.nro",1),new Updates(),CancellationToken.None).Sha256==expected && server.BusyRequests>1,"Temporary server failures are retried");
                 var repair=request("/repair.nro","repair.nro",1); repair.Sha256=expected; var repairUpdates=new Updates();

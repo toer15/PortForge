@@ -34,7 +34,7 @@ namespace PortForge
     }
     public static class GameDiagnostics
     {
-        private static readonly Regex StallLine=new Regex(@"a (\d+) ms frame: (\d+) shaders translated \((\d+) ms\), (\d+) pipelines made \((\d+) ms waited for\)(?:, (\d+) render targets made, (\d+) texture uploads \((\d+) KB\))?",RegexOptions.Compiled);
+        private static readonly Regex StallLine=new Regex(@"a (\d+) ms frame: (\d+) shaders translated \((\d+) ms\), (\d+) pipelines made \((\d+) ms waited for\)(?:, (\d+) render targets made, (\d+) texture uploads \((\d+) KB(?:, \d+ ms)?\))?",RegexOptions.Compiled);
         public static List<StallFrame> StallFrames(string log)
         {
             var list=new List<StallFrame>();

@@ -16,7 +16,7 @@ namespace PortForge
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183), Muted = Color.FromArgb(173, 185, 203), Amber = Color.FromArgb(255, 199, 120), Red = Color.FromArgb(255, 157, 148);
         private readonly Label status = Caption("Load a game above to see its engine.", 12, Color.White), detail = Caption("", 9, Muted);
         private readonly CheckBox asyncShaders = new CheckBox { Text = "Smart async shaders (no shader stutter; an object can be missing for a frame)", Checked = true, AutoSize = true, AccessibleName = "Smart async shaders" };
-        private readonly Button install = Action("Install PortForge Engine", true), restore = Action("Restore original engine", false), measure = Action("Measure the stutter fix", false),
+        private readonly Button autoFix = Action("Auto fix everything", true), install = Action("Install PortForge Engine", false), restore = Action("Restore original engine", false), measure = Action("Measure the stutter fix", false),
             lab = Action("Let AI improve the engine", true), stop = Action("Stop", false);
         private readonly TextBox results = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 230, Dock = DockStyle.Top, BackColor = Surface, ForeColor = Color.WhiteSmoke, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "Engine results" };
         private readonly TableLayoutPanel stack = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(10, 12, 22, 8) };
@@ -31,8 +31,10 @@ namespace PortForge
             stack.Controls.Add(Caption("PortForge Engine", 13, Mint));
             var about = Caption("Games converted from the Switch run on an engine made for emulation. The PortForge Engine is our own build of it, made to remove stutter: when a new shader isn't ready, it no longer stops the game. It skips that one draw for a frame in parts of the picture the game redraws every frame (the 3D world), and still waits in menus and loading screens so nothing goes missing. The original engine is kept and can be put back at any time.", 9, Muted);
             stack.Controls.Add(about); stack.Controls.Add(status); stack.Controls.Add(detail);
+            var fixAbout = Caption("Auto fix everything: puts the PortForge Engine under this game, applies every repair the app knows, matches the engine to this PC, then plays the game for 20 seconds to check it works. Everything keeps a backup, and an engine that breaks the game is taken out again. Close the game first.", 9, Muted);
+            stack.Controls.Add(fixAbout);
             var row = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
-            foreach (var b in new[] { install, restore, measure }) row.Controls.Add(b);
+            foreach (var b in new[] { autoFix, install, restore, measure }) row.Controls.Add(b);
             stack.Controls.Add(row); stack.Controls.Add(asyncShaders);
             stack.Controls.Add(Caption("AI Engine Lab", 13, Mint));
             var labAbout = Caption("The AI (Codex on this PC) studies the game's recorded problems, writes a change to the engine's code, and PortForge builds it and measures it on the game with scripted play. A change is kept only when it measurably reduces stutter without new errors; otherwise it is thrown away. Needs the engine source and build tools on this PC.", 9, Muted);
@@ -40,8 +42,9 @@ namespace PortForge
             var labRow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
             labRow.Controls.Add(lab); labRow.Controls.Add(stop); stack.Controls.Add(labRow);
             stack.Controls.Add(Caption("Results", 11, Mint)); stack.Controls.Add(results);
-            SizeChanged += delegate { int w = Math.Max(240, ClientSize.Width - 50); foreach (var l in new[] { about, labAbout, detail, status }) l.MaximumSize = new Size(w, 0); };
+            SizeChanged += delegate { int w = Math.Max(240, ClientSize.Width - 50); foreach (var l in new[] { about, labAbout, detail, status, fixAbout }) l.MaximumSize = new Size(w, 0); };
             Controls.Add(stack);
+            autoFix.Click += async delegate { await Work("Fixing everything", (p, t) => AutoFix.Run(game, p, t, package)); };
             install.Click += async delegate { await Work("Installing the PortForge Engine", (p, t) => EngineManager.Install(game, package, p, t)); };
             restore.Click += async delegate { await Work("Restoring the original engine", (p, t) => { EngineManager.Restore(game); EngineManager.Decline(game, "The player restored the original engine."); return "The original engine is back in place. The AI Doctor won't install the PortForge Engine for this game again unless you select Install."; }); };
             measure.Click += async delegate { await Work("Measuring", Measure); };
@@ -63,6 +66,7 @@ namespace PortForge
             bool idle = cancellation == null, has = game != null, installed = has && EngineManager.IsInstalled(game, package);
             status.Text = !has ? "No game is loaded yet. Click Browse at the top, choose your converted game's .exe, then click Load." : EngineManager.Describe(game, package);
             detail.Text = package == null ? "The PortForge Engine is not included in this copy of the app (Engine folder missing)." : package.Name + (package.Base.Length > 0 ? ", based on ScarletNX " + package.Base : "") + (package.Features.Length > 0 ? ". " + package.Features : "") + ". " + EngineLab.Availability();
+            autoFix.Enabled = idle && has;
             install.Enabled = idle && has && package != null && !installed;
             restore.Enabled = idle && has && File.Exists(Path.Combine(Path.GetDirectoryName(game ?? "C:\\"), EngineManager.BackupFolderName, Path.GetFileName(game ?? "x")));
             measure.Enabled = idle && has && package != null;

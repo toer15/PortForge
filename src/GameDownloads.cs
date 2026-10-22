@@ -18,7 +18,7 @@ namespace PortForge
     public sealed class DownloadRequest
     {
         public string Url, Destination, Sha256;
-        public int Connections = 8;
+        public int Connections = 8; // 0 lets the downloader measure the server and choose
     }
     public sealed class DownloadProgress
     {
@@ -44,7 +44,7 @@ namespace PortForge
             if (String.IsNullOrWhiteSpace(r.Destination) || !Path.IsPathRooted(r.Destination)) throw new ArgumentException("Choose an absolute Save as path.");
             string ext = Path.GetExtension(r.Destination).ToLowerInvariant();
             if (!new[] {".nro", ".nsp", ".xci", ".dnsp", ".dxci", ".zip"}.Contains(ext)) throw new ArgumentException("Save as an .nro, .nsp, .xci or .zip file. Unpack RAR/7z archives first.");
-            if (r.Connections < 1 || r.Connections > 16) throw new ArgumentException("Choose between one and sixteen download connections.");
+            if (r.Connections < 0 || r.Connections > 16) throw new ArgumentException("Choose automatic (0) or between one and sixteen download connections.");
             if (!String.IsNullOrWhiteSpace(r.Sha256) && !Regex.IsMatch(r.Sha256.Trim(), "^[0-9a-fA-F]{64}$")) throw new ArgumentException("The optional SHA-256 must contain exactly 64 hexadecimal characters.");
             Paths.CheckLinks(r.Destination);
             return uri;
@@ -61,6 +61,14 @@ namespace PortForge
         }
         private static void Tell(IProgress<DownloadProgress> progress, string message, long received = 0, long total = -1, double speed = 0)
         { if (progress != null) progress.Report(new DownloadProgress { Message = message, Received = received, Total = total, BytesPerSecond = speed }); }
+        /// <summary>What proves a resumed or split request still reads the same file: a strong ETag, else the Last-Modified date ("lm:" before it), else nothing.</summary>
+        private static string Validator(HttpWebResponse response)
+        {
+            string etag = response.Headers[HttpResponseHeader.ETag]; DateTime when; string modified = response.Headers[HttpResponseHeader.LastModified];
+            if (!String.IsNullOrEmpty(etag) && etag.StartsWith("\"", StringComparison.Ordinal) && etag.EndsWith("\"", StringComparison.Ordinal)) return etag;
+            if (!String.IsNullOrEmpty(modified) && DateTime.TryParse(modified, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out when)) return "lm:" + modified;
+            return "";
+        }
         private static HttpWebRequest Request(Uri uri, long? start, long? end, string etag)
         {
             var req = (HttpWebRequest)WebRequest.Create(uri);
@@ -68,7 +76,7 @@ namespace PortForge
             req.AllowAutoRedirect = true; req.MaximumAutomaticRedirections = 5; req.AutomaticDecompression = DecompressionMethods.None;
             req.Headers[HttpRequestHeader.AcceptEncoding] = "identity"; req.ServicePoint.ConnectionLimit = Math.Max(req.ServicePoint.ConnectionLimit, 16); req.ServicePoint.UseNagleAlgorithm = false; req.ServicePoint.Expect100Continue = false;
             if (start.HasValue) { if (end.HasValue) req.AddRange(start.Value, end.Value); else req.AddRange(start.Value); }
-            if (!String.IsNullOrEmpty(etag) && start.HasValue) req.Headers["If-Range"] = etag;
+            if (!String.IsNullOrEmpty(etag) && start.HasValue) req.Headers["If-Range"] = etag.StartsWith("lm:", StringComparison.Ordinal) ? etag.Substring(3) : etag;
             return req;
         }
         private static bool Transient(WebException e)
@@ -120,8 +128,7 @@ namespace PortForge
                         if (response.ContentType != null && (response.ContentType.IndexOf("text/html", StringComparison.OrdinalIgnoreCase) >= 0 || response.ContentType.IndexOf("application/json", StringComparison.OrdinalIgnoreCase) >= 0))
                             throw new SourceFailure("That link returned a web page or API response. Paste the direct game-file download link.");
                         var meta = new Metadata { Source = HashBytes(Encoding.UTF8.GetBytes(uri.AbsoluteUri)), Length = response.ContentLength };
-                        string etag = response.Headers[HttpResponseHeader.ETag];
-                        if (!String.IsNullOrEmpty(etag) && etag.StartsWith("\"", StringComparison.Ordinal) && etag.EndsWith("\"", StringComparison.Ordinal)) meta.ETag = etag;
+                        meta.ETag = Validator(response);
                         var range = Regex.Match(response.Headers["Content-Range"] ?? "", @"^bytes 0-0/(\d+)$");
                         if (response.StatusCode == HttpStatusCode.PartialContent && !range.Success) throw new RangeFailure();
                         if (response.StatusCode == HttpStatusCode.PartialContent && range.Success) { meta.Length = Int64.Parse(range.Groups[1].Value); meta.Ranges = true; }
@@ -181,7 +188,7 @@ namespace PortForge
                 long size = end < 0 ? -1 : end - begin + 1;
                 if (size >= 0 && local == size) return;
                 if (local > size && size >= 0) { File.Delete(file); local = 0; }
-                bool ranged = m.Ranges && m.ETag.Length > 0 && (m.Parts > 1 || local > 0);
+                bool ranged = m.Ranges && (m.Parts > 1 || (local > 0 && m.ETag.Length > 0));
                 if (!ranged && local > 0) { File.Delete(file); local = 0; }
                 var req = Request(uri, ranged ? (long?)(begin + local) : null, ranged && end >= 0 ? (long?)end : null, ranged ? m.ETag : null);
                 using (token.Register(req.Abort))
@@ -192,7 +199,7 @@ namespace PortForge
                         if (ranged)
                         {
                             string expected = "bytes " + (begin + local) + "-" + end + "/" + m.Length;
-                            if (response.StatusCode != HttpStatusCode.PartialContent || response.Headers["Content-Range"] != expected || response.Headers[HttpResponseHeader.ETag] != m.ETag) throw new RangeFailure();
+                            if (response.StatusCode != HttpStatusCode.PartialContent || response.Headers["Content-Range"] != expected || (m.ETag.Length > 0 && Validator(response) != m.ETag)) throw new RangeFailure();
                         }
                         else if (response.StatusCode != HttpStatusCode.OK) throw new SourceFailure("The source did not return a complete file.");
                         using (var source = response.GetResponseStream()) using (var dest = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.Read))
@@ -230,7 +237,7 @@ namespace PortForge
             Paths.CheckLinks(receipt);
             if (File.Exists(destination) && expectedHash.Length > 0 && HashFile(destination,token) == expectedHash)
             { Tell(progress,"The source checksum matches your existing file. Reusing it without a network transfer."); return new DownloadResult { File=destination, Sha256=expectedHash, Kind=FileKind(destination), Reused=true }; }
-            Metadata meta = Probe(uri, token, progress); meta.Parts = meta.Ranges && meta.ETag.Length > 0 && meta.Length >= 1024 * 1024 ? r.Connections : 1;
+            Metadata meta = Probe(uri, token, progress); meta.Parts = meta.Ranges && meta.Length >= 1024 * 1024 ? r.Connections : 1; // 0: chosen below, once it is known whether an earlier download is resumed
             if (File.Exists(destination))
             {
                 string acceptedHash = expectedHash;
@@ -256,6 +263,7 @@ namespace PortForge
                     else { Tell(progress, "The source changed or cannot safely resume. Restarting its temporary download."); ClearParts(work); }
                 }
                 else if (Directory.EnumerateFiles(work).Any(f => Path.GetFileName(f) != "active.lock")) throw new IOException("The temporary download folder contains unrecognized files. Choose another Save as path.");
+                if (meta.Parts <= 0) meta.Parts = ChooseParts(uri, meta, token, progress);
                 WriteMetadata(manifest, meta, null);
                 long existing = Enumerable.Range(0, meta.Parts).Sum(i => File.Exists(Part(work, i)) ? new FileInfo(Part(work, i)).Length : 0);
                 Space(destination, meta.Length < 0 ? -1 : checked(meta.Length * 2 - Math.Min(existing, meta.Length)));
@@ -329,6 +337,73 @@ namespace PortForge
                     return new DownloadResult { File = destination, Sha256 = actual, Kind = kind };
                 }
             }
+        }
+        /// <summary>Where the number of connections that worked best for each server is remembered, for twelve hours.</summary>
+        public static string HostCacheFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PortForge", "download-hosts.txt");
+        private static readonly object HostLock = new object();
+
+        /// <summary>Bytes a second from n connections reading different parts of the file for a couple of seconds, the start-up of the connections left out. 0 when the server refused.</summary>
+        private static double Trial(Uri uri, Metadata m, int n, CancellationToken token, int milliseconds = 2600)
+        {
+            long total = 0, warm = 0; var clock = Stopwatch.StartNew();
+            var tasks = Enumerable.Range(0, n).Select(i => Task.Run(() =>
+            {
+                try
+                {
+                    long start = m.Length / n * i, end = Math.Min(m.Length - 1, start + 512L * 1024 * 1024 - 1);
+                    var req = Request(uri, start, end, null);
+                    using (token.Register(req.Abort))
+                    using (var response = Open(req, token))
+                    {
+                        if (response.StatusCode != HttpStatusCode.PartialContent) return;
+                        using (var source = response.GetResponseStream())
+                        {
+                            byte[] buffer = new byte[256 * 1024]; int k;
+                            while (clock.ElapsedMilliseconds < milliseconds && (k = source.Read(buffer, 0, buffer.Length)) > 0) Interlocked.Add(ref total, k);
+                        }
+                        req.Abort();
+                    }
+                }
+                catch (Exception) { }
+            })).ToArray();
+            token.WaitHandle.WaitOne(milliseconds / 4); warm = Interlocked.Read(ref total); double from = clock.Elapsed.TotalSeconds;
+            Task.WaitAll(tasks); token.ThrowIfCancellationRequested();
+            double seconds = Math.Max(.2, clock.Elapsed.TotalSeconds - from);
+            return Math.Max(0, Interlocked.Read(ref total) - warm) / seconds;
+        }
+
+        /// <summary>How many connections to use for this server. Some servers give each connection a share of their speed, so more connections are faster; others slow down or refuse extra connections. So it is measured, once per server.</summary>
+        private static int ChooseParts(Uri uri, Metadata m, CancellationToken token, IProgress<DownloadProgress> progress)
+        {
+            if (m.Length < 16L * 1024 * 1024) return 1;
+            if (m.Length < 64L * 1024 * 1024) return 4;
+            string host = uri.Host.ToLowerInvariant();
+            try
+            {
+                lock (HostLock) if (File.Exists(HostCacheFile))
+                    foreach (string line in File.ReadAllLines(HostCacheFile))
+                    {
+                        var f = line.Split('|'); long ticks; int n;
+                        if (f.Length == 3 && f[0] == host && Int32.TryParse(f[1], out n) && Int64.TryParse(f[2], out ticks) && n >= 1 && n <= 16 && DateTime.UtcNow.Ticks - ticks < TimeSpan.FromHours(12).Ticks)
+                        { Tell(progress, "This server was tested recently: using " + n + " connection(s)."); return n; }
+                    }
+            }
+            catch (IOException) { }
+            Tell(progress, "Testing how many connections this server serves fastest (about 8 seconds).");
+            double one = Trial(uri, m, 1, token), four = Trial(uri, m, 4, token), best = one; int parts = 1;
+            if (four >= one * 1.2 && four > 0) { parts = 4; best = four; double eight = Trial(uri, m, 8, token); if (eight >= four * 1.2) { parts = 8; best = eight; } }
+            Tell(progress, "Fastest for this server: " + parts + " connection(s), about " + (best / 1048576).ToString("F0", CultureInfo.InvariantCulture) + " MB/s (one connection reached " + (one / 1048576).ToString("F0", CultureInfo.InvariantCulture) + " MB/s).");
+            try
+            {
+                lock (HostLock)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(HostCacheFile));
+                    var keep = File.Exists(HostCacheFile) ? File.ReadAllLines(HostCacheFile).Where(l => !l.StartsWith(host + "|", StringComparison.Ordinal)).ToList() : new List<string>();
+                    keep.Add(host + "|" + parts + "|" + DateTime.UtcNow.Ticks); File.WriteAllLines(HostCacheFile, keep);
+                }
+            }
+            catch (IOException) { } catch (UnauthorizedAccessException) { }
+            return parts;
         }
         public static IList<string> Unpack(string zip, IProgress<DownloadProgress> progress, CancellationToken token)
         {

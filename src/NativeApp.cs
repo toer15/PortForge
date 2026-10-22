@@ -50,7 +50,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.14 | Switch to PC";
+            Text = "PortForge 0.16 | Switch to PC"; AppIcon.Apply(this);
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -130,7 +130,7 @@ namespace PortForge
             name.Text = "My Switch Game";
             fields.Controls.Add(Section("2   Choose where to save"));
             AddField(fields, "Save folder", output, "A new folder with your game name will be created here.", delegate { PickFolder(output); }, false);
-            output.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "NativeGames");
+            output.Text = AppPaths.DefaultGamesFolder;
             fields.Controls.Add(autoTune);
 
             extraToggle.Height = 34;
@@ -225,6 +225,7 @@ namespace PortForge
             ShowStatus("READY", "Ready when you are", "Choose a game file and a save folder, then select Start conversion.", Muted);
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             { if (cancellation != null) { e.Cancel = true; CancelConversion(); } };
+            Shown += delegate { AppPaths.RefreshRegistration(); };
             Shown += async delegate { await QuietUpdateCheck(); };
             Shown += delegate { if (StartDoctorOnShow) StartDoctor(); };
             FormClosed += delegate { if (doctor != null) doctor.Dispose(); tray.Visible = false; tray.Dispose(); };
@@ -232,7 +233,7 @@ namespace PortForge
 
         private void StartDoctor()
         {
-            tray.Icon = Icon ?? SystemIcons.Application; tray.Text = "PortForge AI Doctor"; tray.Visible = true;
+            tray.Icon = AppIcon.Get() ?? Icon ?? SystemIcons.Application; tray.Text = "PortForge AI Doctor"; tray.Visible = true;
             tray.BalloonTipClicked += delegate { doctorButton.PerformClick(); };
             doctor = new LiveDoctor(AppDomain.CurrentDomain.BaseDirectory) { AutoFix = doctorAuto.Checked, UseAi = doctorAi.Checked };
             doctor.StartDiscovery(LiveDoctor.DefaultDiscoveryRoots(AppDomain.CurrentDomain.BaseDirectory));

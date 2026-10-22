@@ -179,6 +179,9 @@ namespace PortForge
             return true;
         }
 
+        /// <summary>Lets other parts of the app (the download window) tell the player something through the doctor's list and notices.</summary>
+        public void Note(DoctorEvent e) { Report(e); }
+
         private void Report(DoctorEvent e)
         {
             try

@@ -64,7 +64,7 @@ namespace PortForge
             if(!File.Exists(backendPath)&&File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Engine","scarletnx.exe")))backendPath=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Engine","scarletnx.exe");
             if(!File.Exists(backendPath)) {try {string locator=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"backend-location.txt");if(File.Exists(locator))backendPath=File.ReadAllText(locator).Trim();}catch(IOException){}}
             reportsRoot=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Diagnostics");
-            Text = "PortForge | Graphics and performance";
+            Text = "PortForge | Graphics and performance"; AppIcon.Apply(this);
             ClientSize = new Size(880, 810); MinimumSize = new Size(810, 700); BackColor = Bg; ForeColor = Color.WhiteSmoke;
             Font = new Font("Segoe UI", 10); AutoScaleMode = AutoScaleMode.Dpi; StartPosition = FormStartPosition.CenterParent;
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(22) };
