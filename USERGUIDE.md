@@ -1,14 +1,14 @@
-# PortForge 0.21
+# PortForge 0.22
 
 ## Game speed lock
 
-PortForge Engine 1.5 has a **Speed lock**, on by default. Most games count their frames, so on earlier engines an FPS cap above the game's own pace (for example 120 on a 60 FPS game), Unlimited or F4 made the game itself run faster. With the speed lock on, the engine never shows frames sooner than the pace the game asks for. A 30 FPS game stays at its speed, and so does a 60 FPS game, whatever the cap. A lower cap still lowers FPS. A game that times itself (swap interval 0) is still limited only by the cap you set.
+PortForge Engine 1.6 has a **Speed lock**, on by default. Most games count their frames, so on earlier engines an FPS cap above the game's own pace (for example 120 on a 60 FPS game), Unlimited or F4 made the game itself run faster, and a cap below it (for example 30 on a 60 FPS game) made it run in slow motion. With the speed lock on, the engine always runs the game at the pace it asks for. A 30 FPS game stays at its speed, and so does a 60 FPS game, whatever the cap. A lower cap shows fewer of the game's frames, the way a console game drops frames, instead of slowing it down. (Engine 1.5 in PortForge 0.21 covered only higher caps.) A game that times itself (swap interval 0) is still limited only by the cap you set.
 
-Your PC's power goes into picture quality instead of speed. PC matching and automatic tuning pick the highest render scale and texture filtering that hold the game's pace on your hardware. New conversions, watched games that receive Engine 1.5, PC matching and **Auto fix everything** all keep the lock on. If it is ever switched off, the Doctor reports it and its automatic repair turns it back on. Advanced users can set `speed_lock=0` in the game's .ini to go back to the old behavior.
+Your PC's power goes into picture quality instead of speed. PC matching and automatic tuning pick the highest render scale and texture filtering that hold the game's pace on your hardware. New conversions, watched games that receive Engine 1.6, PC matching and **Auto fix everything** all keep the lock on. If it is ever switched off, the Doctor reports it and its automatic repair turns it back on. Advanced users can set `speed_lock=0` in the game's .ini to go back to the old behavior.
 
 ## Automatic engine performance protection
 
-The bundled PortForge Engine 1.5 has **Frame guard** on by default. New conversions use it automatically, including conversions handed over from Downloads. The setting works inside the generated game's runtime when the game is launched directly.
+The bundled PortForge Engine 1.6 has **Frame guard** on by default. New conversions use it automatically, including conversions handed over from Downloads. The setting works inside the generated game's runtime when the game is launched directly.
 
 Frame guard shares one short optional shader-wait allowance across a frame, instead of waiting again for each new pipeline. It also keeps cached background compilation from taking every shader worker. Draws needed to preserve menus or game data still complete. In **Graphics and FPS > Engine**, **Automatic frame guard** can be turned off for a compatibility comparison; it applies at the next launch. Smart async shaders and threaded command recording must remain enabled for optional draw waits to be avoided.
 

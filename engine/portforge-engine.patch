@@ -703,7 +703,7 @@ index b8247c01dc3ee77c1c4e3334be9cdcb012bde5f5..f1fb7dc54cdba18484d071608674e10b
          g_dyn.pipe = pipe;
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2d42061dda155a3e396f9471ab321b7033..1f7eb025f8bd27e388f725e1b83e3fbcb6a23fa7 100644
+index f3ac2e2d42061dda155a3e396f9471ab321b7033..25310a2882ecd63d05e2b172fe1263635d9958db 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -15,6 +15,7 @@
@@ -714,7 +714,18 @@ index f3ac2e2d42061dda155a3e396f9471ab321b7033..1f7eb025f8bd27e388f725e1b83e3fbc
  #include "nx/runtime/platform/backend.h"
  #include "nx/runtime/platform/log.h"
  #include "nx/runtime/platform/plat.h"
-@@ -411,24 +412,28 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -313,7 +314,9 @@ static void flip_src(VkImageBlit* b, u32 transform) {
+    Under vk_lock */
+ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+     /* the size the swapchain was made for, not the extent the surface clamped it to: that can stay different */
+-    int ww, wh, srgb = src ? is_srgb(src->f.vk) : g_sc_srgb, shown = backend_window_shown();
++    /* a game's frame the speed lock keeps off the display under a lower fps_limit is still drawn and submitted */
++    int ww, wh, srgb = src ? is_srgb(src->f.vk) : g_sc_srgb,
++                shown = backend_window_shown() && (!game || present_show_due());
+     backend_window_size(&ww, &wh);
+     if (shown && (g_lost || backend_window_generation() != g_generation)) {
+         vk_finish();
+@@ -411,24 +414,28 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
@@ -748,7 +759,7 @@ index f3ac2e2d42061dda155a3e396f9471ab321b7033..1f7eb025f8bd27e388f725e1b83e3fbc
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -467,6 +472,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +474,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -762,7 +773,7 @@ index f3ac2e2d42061dda155a3e396f9471ab321b7033..1f7eb025f8bd27e388f725e1b83e3fbc
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -518,6 +530,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -518,6 +532,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      }
      /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
      vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
@@ -992,15 +1003,18 @@ index 2f956fa8b2c467637e2a2c5a5cd70195334c5723..23ac531182acbb93d8c5e0cc84fd7a6d
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
 diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
-index addf0820d8186c7ca58312d41f1b478ab3090332..bd83ab9b54b87b7cf56c3c0a23b08712e28905f3 100644
+index addf0820d8186c7ca58312d41f1b478ab3090332..2a2d1f5555843048167c1d40f79428c4d0f6b899 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
-@@ -38,5 +38,7 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -38,5 +38,10 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
  /* the wait before vi hands the game a buffer for its next frame, as fps_limit says: with fps_limit=game until the
     frame before has been on the display for interval refreshes (its swap interval) */
  void present_pace(u32 interval);
 +/* the wait between the display's frames for fps_limit fps, the game's swap interval and the speed lock; 0 = none */
 +u64 present_period(int fps, u32 interval, int lock);
++/* the GPU thread, for each of the game's frames: 0 when the speed lock keeps a frame of a game paced faster than a
++   lower fps_limit off the display (it is still drawn and submitted), else 1 */
++int present_show_due(void);
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
@@ -1046,10 +1060,10 @@ index 87dfdc6384b6d72ddcbf69785eb2735e43dcdd38..aae2f4c139b4b744a0b3d1aced899ef1
          }
          case SDLK_F5: kernel_dump_threads(); break;
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181ee87f341deb05820e098bc289ae153694..bf5cec9d3d6ddb573ed7bdc6209a137f1bbe65c9 100644
+index 2bd6181ee87f341deb05820e098bc289ae153694..b587bf4fafb68687a0b287ae50aceb322830aeba 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
-@@ -31,14 +31,41 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +31,67 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -1057,14 +1071,38 @@ index 2bd6181ee87f341deb05820e098bc289ae153694..bf5cec9d3d6ddb573ed7bdc6209a137f
 +static u64 g_pace_period;
 +
 +/* PortForge speed lock: a game that asks for a swap interval counts its frames, so frames sooner than that interval
-+   run the game itself faster. With the lock on, an FPS limit above the game's pace (or none) still waits for its pace;
-+   a lower limit still lowers it. A game that asks for interval 0 times itself and is paced only by a set limit */
++   run the game itself faster, and later ones slower. With the lock on, such a game is always paced at its interval:
++   an FPS limit above it (or none) can't speed it up, and a lower one shows fewer of its frames (present_show_due)
++   instead of slowing it down. A game that asks for interval 0 times itself and is paced only by a set limit */
++static u64 g_game_period; /* atomic: the game's pace from its last swap interval, 0 when it times itself */
++static u64 g_show_next;   /* the GPU thread's: when a lower limit lets the next frame on the display */
++
 +u64 present_period(int fps, u32 interval, int lock) {
 +    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
 +    u64 cap = fps > 0 ? 1000000000u / (u64)fps : 0;
-+    if (fps == SNX_FPS_GAME) return game;
-+    if (lock && game > cap) return game;
++    if (fps == SNX_FPS_GAME || (lock && game)) return game;
 +    return cap;
++}
++
++int present_show_due(void) {
++    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
++    u64 game = __atomic_load_n(&g_game_period, __ATOMIC_RELAXED), cap, now;
++    if (!__atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED) || fps <= 0 || !game ||
++        (cap = 1000000000u / (u64)fps) <= game) {
++        g_show_next = 0;
++        return 1;
++    }
++    now = plat_ns();
++    /* frames come a game period apart: one within half of it of the due time is shown, so the beat stays even */
++    if (g_show_next && now + game / 2 < g_show_next) {
++        static u64 kept;
++        if (++kept % 600 == 1)
++            LOG("speed lock: %llu of the game's frames kept off the display for fps_limit=%d, its speed unchanged\n",
++                (unsigned long long)kept, fps);
++        return 0;
++    }
++    g_show_next = g_show_next && now < g_show_next + cap ? g_show_next + cap : now + cap;
++    return 1;
 +}
  
  void present_pace(u32 interval) {
@@ -1073,6 +1111,7 @@ index 2bd6181ee87f341deb05820e098bc289ae153694..bf5cec9d3d6ddb573ed7bdc6209a137f
 -    if (!fps || (fps == SNX_FPS_GAME && !interval)) return;
 -    refresh = 1000000000u / (fps == SNX_FPS_GAME ? (u64)VI_REFRESH_HZ : (u64)fps);
 -    period = fps == SNX_FPS_GAME ? refresh * interval : refresh;
++    __atomic_store_n(&g_game_period, interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0, __ATOMIC_RELAXED);
 +    period = present_period(fps, interval, __atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED));
 +    if (!period) {
 +        pm_lock(&g_pace_lock);
@@ -1083,9 +1122,10 @@ index 2bd6181ee87f341deb05820e098bc289ae153694..bf5cec9d3d6ddb573ed7bdc6209a137f
 +    }
 +    refresh = 1000000000u / (fps > 0 ? (u64)fps : (u64)VI_REFRESH_HZ);
 +    if (refresh > period) refresh = period;
-+    if (fps != SNX_FPS_GAME && interval && (!fps || period != 1000000000u / (u64)fps) && fps != g_pace_fps)
-+        LOG("speed lock: fps_limit %s held to the game's pace, %u frame(s) of %d Hz\n", fps ? "above it" : "off",
-+            interval, VI_REFRESH_HZ);
++    if (fps != SNX_FPS_GAME && interval && (!fps || period != 1000000000u / (u64)fps) &&
++        (fps != g_pace_fps || period != g_pace_period))
++        LOG("speed lock: the game keeps its pace of %u frame(s) of %d Hz, fps_limit %s\n", interval, VI_REFRESH_HZ,
++            !fps ? "off" : period > 1000000000u / (u64)fps ? "above it" : "below it shows fewer frames");
      pm_lock(&g_pace_lock);
 +    /* Switching limits or the game's interval must not inherit a future deadline from the old pace. */
 +    if (fps != g_pace_fps || period != g_pace_period) g_pace_last = 0;
@@ -1219,7 +1259,7 @@ index 0000000000000000000000000000000000000000..335b027815a14a88b1e486caca48f3f8
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45d1eb900062ff9afd53ee8cef8b2f1fd30..07a95b7623699ff26292de8caad4e6fd29c48fa7 100644
+index 53c5e45d1eb900062ff9afd53ee8cef8b2f1fd30..3c043fc54c528b3dd85fa0a93455217b75836012 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,7 @@
@@ -1230,7 +1270,7 @@ index 53c5e45d1eb900062ff9afd53ee8cef8b2f1fd30..07a95b7623699ff26292de8caad4e6fd
  static u64 now_ns, slept_ns;
  static unsigned checks, failures;
  #define CHECK(c, ...)                                                                                                  \
-@@ -84,12 +85,54 @@ static void pacing(void) {
+@@ -84,12 +85,81 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -1263,7 +1303,8 @@ index 53c5e45d1eb900062ff9afd53ee8cef8b2f1fd30..07a95b7623699ff26292de8caad4e6fd
 +    CHECK(present_period(120, 2, 1) == 2 * refresh, "120 FPS sped up a 30 FPS game");
 +    CHECK(present_period(0, 1, 1) == refresh, "no limit sped up a 60 FPS game");
 +    CHECK(present_period(1000, 1, 1) == refresh, "1000 FPS sped up a 60 FPS game");
-+    CHECK(present_period(30, 1, 1) == 1000000000u / 30, "a lower limit no longer lowered the pace");
++    CHECK(present_period(30, 1, 1) == refresh, "a lower limit slowed a 60 FPS game down");
++    CHECK(present_period(30, 0, 1) == 1000000000u / 30, "a self-timed game lost a lower limit");
 +    CHECK(present_period(120, 0, 1) == 1000000000u / 120, "a self-timed game lost its limit");
 +    CHECK(present_period(0, 0, 1) == 0, "a self-timed game without a limit waited");
 +    CHECK(present_period(SNX_FPS_GAME, 2, 1) == 2 * refresh, "the game's pace changed");
@@ -1283,10 +1324,36 @@ index 53c5e45d1eb900062ff9afd53ee8cef8b2f1fd30..07a95b7623699ff26292de8caad4e6fd
 +    present_pace(1);
 +    CHECK(slept_ns - before == 2 * refresh, "locked unlimited waited %llu ns over two frames",
 +          (unsigned long long)(slept_ns - before));
++    /* a lower limit shows fewer of the game's frames instead of slowing it */
++    {
++        static const int caps[][3] = {{30, 1, 30}, {45, 1, 45}, {20, 1, 20}, {120, 1, 60}, {20, 2, 20}, {30, 0, 60}};
++        size_t c;
++        int f;
++        for (c = 0; c < sizeof caps / sizeof *caps; c++) {
++            int shown = 0;
++            g_opt_fps = caps[c][0];
++            present_pace((u32)caps[c][1]);
++            for (f = 0; f < 600; f++) {
++                now_ns += caps[c][1] == 2 ? 2 * refresh : refresh;
++                shown += present_show_due();
++            }
++            /* 600 frames are 10 s of a 60 FPS game, 20 s of a 30 FPS one */
++            int want = caps[c][2] * (caps[c][1] == 2 ? 20 : 10);
++            if (caps[c][1] == 2 && caps[c][0] >= 30) want = 600;
++            if (caps[c][1] == 0) want = 600;
++            CHECK(shown >= want - 2 && shown <= want + 2, "fps_limit=%d on interval %d showed %d of 600 frames, not %d",
++                  caps[c][0], caps[c][1], shown, want);
++        }
++        g_opt_speed_lock = 0;
++        g_opt_fps = 30;
++        present_pace(1);
++        CHECK(present_show_due() && present_show_due(), "speed_lock=0 kept frames off the display");
++        g_opt_speed_lock = 1;
++    }
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -98,6 +141,7 @@ int main(void) {
+@@ -98,6 +168,7 @@ int main(void) {
      clock_start();
      ticks();
      pacing();

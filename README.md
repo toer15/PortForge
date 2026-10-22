@@ -8,7 +8,7 @@ PortForge is a Windows app (.NET Framework 4.8, no install needed) built around 
 
 ## Features
 
-- **Game speed lock** - Engine 1.5 never shows frames sooner than the game's own pace, so a higher FPS cap, Unlimited or F4 can't make a 30 or 60 FPS game run faster. The PC's power goes into render scale and filtering instead. On by default, and the Doctor turns it back on if it is switched off.
+- **Game speed lock** - Engine 1.6 always runs a game at its own pace: a higher FPS cap, Unlimited or F4 can't make a 30 or 60 FPS game run faster, and a lower cap shows fewer frames instead of slow motion. The PC's power goes into render scale and filtering instead. On by default, and the Doctor turns it back on if it is switched off.
 - **Automatic engine frame guard** - Engine 1.4 shares optional shader waits across each frame, reserves compilation capacity for current draws, chooses worker counts on each launch, and resets stale pacing deadlines when FPS modes change. On by default for converted games, including Downloads handoff. Required game work and hardware limits can still stall.
 - **Automatic cloud saves** - connect OneDrive or HTTPS WebDAV once per PC. Existing known games, new conversions and discovered converted games join automatically. A global switch pauses automatic saving, and each game can be excluded. Syncs while the app is open and the game is closed, verifies archives, keeps restore backups and asks which copy to keep when PCs have different progress. Nothing uploads before an account is configured; no PortForge-hosted account is included.
 - **Simple conversion screen** – game file, game name, save folder. Clear buttons beside every input, and a status card for progress, done, errors and cancelled.

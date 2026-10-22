@@ -1,1 +1,1 @@
-Game speed lock, per-frame shader wait budget, demand worker reservation, per-launch CPU adaptation, pacing reset, smart async shaders, optional async translation, faster extraction
+Game speed lock with frame dropping for lower caps, per-frame shader wait budget, demand worker reservation, per-launch CPU adaptation, pacing reset, smart async shaders, optional async translation, faster extraction
