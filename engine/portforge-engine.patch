@@ -143,23 +143,32 @@ index b8247c0..331a5f8 100644
          g_dyn.pipe = pipe;
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..7e557a3 100644
+index f3ac2e2..25b873c 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
-@@ -411,23 +411,25 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -15,6 +15,7 @@
+ #include "nx/runtime/options.h"
+ #include "nx/gpu/gpu.h"
+ #include "nx/hle/services/nvdrv.h"
++#include "nx/hle/filesystem/fs.h"
+ #include "nx/runtime/platform/backend.h"
+ #include "nx/runtime/platform/log.h"
+ #include "nx/runtime/platform/plat.h"
+@@ -411,24 +412,28 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
 -        static u64 was[10];
 -        u64 now_ns = plat_ns(), is[10];
-+        static u64 was[12];
-+        u64 now_ns = plat_ns(), is[12];
++        static u64 was[15];
++        u64 now_ns = plat_ns(), is[15];
          vk_pipeline_stats(&is[0], &is[1], &is[2], &is[3], &is[4], &is[5]);
          vk_tex_stats(&is[6], &is[7]);
          is[8] = vk_rt_made();
          is[9] = g_vk_finish_ns / 1000000;
 +        is[10] = vk_rt_make_ms();
 +        is[11] = vk_tex_upload_ms();
++        hle_fs_stats(&is[12], &is[13], &is[14]);
          if (last_present_ns) {
              u64 d = now_ns - last_present_ns;
              if (d > 50000000) {
@@ -167,16 +176,19 @@ index f3ac2e2..7e557a3 100644
                  LOG_LIMIT(200,
                            "vulkan: a %llu ms frame: %llu shaders translated (%llu ms), %llu pipelines made (%llu ms waited "
 -                          "for), %llu render targets made, %llu texture uploads (%llu KB), %llu ms in finishes\n",
-+                          "for), %llu render targets made (%llu ms), %llu texture uploads (%llu KB, %llu ms), %llu ms in finishes\n",
++                          "for), %llu render targets made (%llu ms), %llu texture uploads (%llu KB, %llu ms), %llu ms in finishes, %llu file reads (%llu KB, %llu ms)\n",
                            (unsigned long long)(d / 1000000), (unsigned long long)(is[4] - was[4]),
                            (unsigned long long)(is[5] - was[5]), (unsigned long long)(is[0] - was[0]),
                            (unsigned long long)(is[3] - was[3]), (unsigned long long)(is[8] - was[8]),
 -                          (unsigned long long)(is[6] - was[6]), (unsigned long long)((is[7] - was[7]) >> 10),
+-                          (unsigned long long)(is[9] - was[9]));
 +                          (unsigned long long)(is[10] - was[10]), (unsigned long long)(is[6] - was[6]), (unsigned long long)((is[7] - was[7]) >> 10), (unsigned long long)(is[11] - was[11]),
-                           (unsigned long long)(is[9] - was[9]));
++                          (unsigned long long)(is[9] - was[9]), (unsigned long long)(is[12] - was[12]),
++                          (unsigned long long)((is[13] - was[13]) >> 10), (unsigned long long)(is[14] - was[14]));
              }
              if (d > slowest_ns) slowest_ns = d;
-@@ -467,6 +469,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+         }
+@@ -467,6 +472,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -310,6 +322,43 @@ index db13c2d..1653fbc 100644
  VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
+diff --git a/src/nx/hle/filesystem/fs.c b/src/nx/hle/filesystem/fs.c
+index 354a1fc..fc9b0b9 100644
+--- a/src/nx/hle/filesystem/fs.c
++++ b/src/nx/hle/filesystem/fs.c
+@@ -957,7 +957,22 @@ static FILE* rf_open(FsNode* node) {
+     return f;
+ }
+ /* size bytes of the file at offset rel into dst: 0, or -1 with the part that couldn't be read zeroed */
++static u64 g_fs_reads, g_fs_bytes, g_fs_ns; /* for the stall line: the game's file reads, their bytes, the time they took */
++void hle_fs_stats(u64* reads, u64* bytes, u64* ms) {
++    *reads = __atomic_load_n(&g_fs_reads, __ATOMIC_RELAXED);
++    *bytes = __atomic_load_n(&g_fs_bytes, __ATOMIC_RELAXED);
++    *ms = __atomic_load_n(&g_fs_ns, __ATOMIC_RELAXED) / 1000000;
++}
++static int rfile_read_untimed(RFile* rf, u64 rel, u8* dst, u64 size);
+ static int rfile_read(RFile* rf, u64 rel, u8* dst, u64 size) {
++    u64 t0 = plat_ns();
++    int rc = rfile_read_untimed(rf, rel, dst, size);
++    __atomic_add_fetch(&g_fs_ns, plat_ns() - t0, __ATOMIC_RELAXED);
++    __atomic_add_fetch(&g_fs_reads, 1, __ATOMIC_RELAXED);
++    __atomic_add_fetch(&g_fs_bytes, size, __ATOMIC_RELAXED);
++    return rc;
++}
++static int rfile_read_untimed(RFile* rf, u64 rel, u8* dst, u64 size) {
+     FsNode* node = rf->node;
+     i64 got = (i64)size;
+     if (!node) return image_read(rf->base + rel, dst, size, 0); /* the game's image's, under the mods' */
+diff --git a/src/nx/hle/filesystem/fs.h b/src/nx/hle/filesystem/fs.h
+index fd64ad4..2845a4a 100644
+--- a/src/nx/hle/filesystem/fs.h
++++ b/src/nx/hle/filesystem/fs.h
+@@ -115,4 +115,5 @@ typedef struct {
+     int rlayered; /* the RomFS image is made up with the mods' over the game's (romfs_init) */
+ } HleFs;
+ /* all zero: fs_init sets the tree up */
++void hle_fs_stats(u64* reads, u64* bytes, u64* ms); /* the game's file reads so far: how many, their bytes, the time they took */
+ #endif
 diff --git a/src/nx/runtime/driver/hactool/nca.c b/src/nx/runtime/driver/hactool/nca.c
 index 2f956fa..23ac531 100644
 --- a/src/nx/runtime/driver/hactool/nca.c
