@@ -1,5 +1,52 @@
+diff --git a/src/nx/CMakeLists.txt b/src/nx/CMakeLists.txt
+index f6a4f52..3320901 100644
+--- a/src/nx/CMakeLists.txt
++++ b/src/nx/CMakeLists.txt
+@@ -86,7 +86,7 @@ snx_component(shader gpu/shader/shader.c gpu/shader/decode.c gpu/shader/corpus.c
+ # the opcode enum and decoder, generated from gpu/shader/maxwell_opcodes.def
+ include("${PROJECT_SOURCE_DIR}/cmake/shaderdec.cmake")
+ snx_shaderdec(snx_shader)
+-snx_component(vk gpu/vk/renderer.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/record.c gpu/vk/format.c gpu/vk/surface.c gpu/vk/texture.c
++snx_component(vk gpu/vk/renderer.c gpu/vk/frame_times.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/record.c gpu/vk/format.c gpu/vk/surface.c gpu/vk/texture.c
+                  gpu/vk/buffer.c gpu/vk/writeback.c gpu/vk/pipeline.c gpu/vk/pipeline_file.c gpu/vk/render.c gpu/vk/release.c gpu/vk/query.c gpu/vk/compute.c
+                  gpu/vk/pending_pages.c gpu/vk/memory.c gpu/vk/renderdoc.c gpu/vk/astc.c gpu/vk/blocklinear.c gpu/vk/texconv.c gpu/vk/owned.c gpu/vk/nvdec.c gpu/vk/dma.c gpu/vk/blit.c gpu/vk/ui.c gpu/texture/blocklinear.c gpu/texture/depth.c gpu/vk/vic.c gpu/vk/vma.cpp gpu/vk/gpuprof.c
+                  "${volk_SOURCE_DIR}/volk.c")
+@@ -173,11 +173,33 @@ include("${PROJECT_SOURCE_DIR}/cmake/pad_sdl.cmake")
+ target_link_libraries(snx_platform PRIVATE SDL3::SDL3 snx_window_icon snx_build_info snx_pad_sdl snx_splash)
+ # the build is part of the key of the shader and pipeline file (gpu/vk/pipeline.c)
+ target_link_libraries(snx_vk PRIVATE snx_build_info FFmpeg::avutil) # vk/nvdec.c: FFmpeg's Vulkan device and pictures
++# PortForge: the shader and pipeline file is keyed on the sources that make its SPIR-V and give a PipeKey its meaning,
++# not on the whole build, so an update that leaves them alone keeps every player's translated shaders. Configure runs
++# again when any of them changes
++file(GLOB snx_shader_abi_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/*.c"
++     "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/*.def")
++list(SORT snx_shader_abi_files)
++list(APPEND snx_shader_abi_files "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/pipeline.c" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/vk.h"
++     "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/render.c" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/format.c"
++     "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/record.c" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/pipeline_file.c"
++     "${PROJECT_SOURCE_DIR}/tools/shaderdec/shaderdec.c" "${PROJECT_SOURCE_DIR}/cmake/dependencies.cmake")
++set(snx_shader_abi "")
++foreach(snx_abi_file IN LISTS snx_shader_abi_files)
++  file(SHA256 "${snx_abi_file}" snx_abi_hash)
++  string(APPEND snx_shader_abi "${snx_abi_hash}")
++  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${snx_abi_file}")
++endforeach()
++string(SHA256 snx_shader_abi "${snx_shader_abi}")
++string(SUBSTRING "${snx_shader_abi}" 0 16 snx_shader_abi)
++target_compile_definitions(snx_vk PRIVATE SNX_SHADER_ABI="${snx_shader_abi}")
+ # the game's menu in YoRHa's colours, from src/gui/themes/yorha/theme.ini (cmake/gui_themes.cmake)
+ target_include_directories(snx_platform PRIVATE "${CMAKE_BINARY_DIR}/generated")
+ target_link_libraries(scarletnx PRIVATE SDL3::SDL3)
+ 
+ if(BUILD_TESTING)
++    add_executable(snx-test-frame-times "${PROJECT_SOURCE_DIR}/tests/frame_times.c" gpu/vk/frame_times.c)
++    target_link_libraries(snx-test-frame-times PRIVATE snx_nx_flags)
++    add_test(NAME frame_times COMMAND $<TARGET_FILE:snx-test-frame-times>)
+     add_executable(snx-test-shader-direct "${PROJECT_SOURCE_DIR}/tests/shader_direct.c")
+     snx_test_target(snx-test-shader-direct 11)
+     target_link_libraries(snx-test-shader-direct PRIVATE snx_shader)
 diff --git a/src/nx/gpu/shader/shader.c b/src/nx/gpu/shader/shader.c
-index 43d443b920317e2b7dda9054ab5d6b73bfb39c8e..5866e243e95621b7c53a4892687b7c4f62932dd9 100644
+index 43d443b..5866e24 100644
 --- a/src/nx/gpu/shader/shader.c
 +++ b/src/nx/gpu/shader/shader.c
 @@ -14,7 +14,7 @@
@@ -12,7 +59,7 @@ index 43d443b920317e2b7dda9054ab5d6b73bfb39c8e..5866e243e95621b7c53a4892687b7c4f
  const u64* shader_words(const u8* code, u32 bytes, u64** copy) {
      u32 i, n = bytes / 8;
 diff --git a/src/nx/gpu/shader/shader.h b/src/nx/gpu/shader/shader.h
-index 4e94d17e8be868c63300a4ba8db25127c73d963f..7cdb3103d09b0700a3539a9924650dcb193ef0e5 100644
+index 4e94d17..7cdb310 100644
 --- a/src/nx/gpu/shader/shader.h
 +++ b/src/nx/gpu/shader/shader.h
 @@ -138,7 +138,8 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
@@ -25,9 +72,53 @@ index 4e94d17e8be868c63300a4ba8db25127c73d963f..7cdb3103d09b0700a3539a9924650dcb
  /* the targets of the BRX at word index from its jump table, at most max_targets, or -1 */
  int shader_brx_targets(const u64* words, u32 index, u32 count, u32* targets, int max_targets);
  /* the program's hash, and its length in bytes in out_len */
+diff --git a/src/nx/gpu/vk/cmd.c b/src/nx/gpu/vk/cmd.c
+index cd9e27e..08c51fd 100644
+--- a/src/nx/gpu/vk/cmd.c
++++ b/src/nx/gpu/vk/cmd.c
+@@ -222,9 +222,11 @@ static void ring_reset(Ring* r, const VmaBudget* budget) {
+ static void timeline_wait(u64 value) {
+     VkSemaphoreWaitInfo wi = {
+         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1, .pSemaphores = &g_gsem, .pValues = &value};
++    u64 t0 = plat_ns();
+     gpu_wait_note("a graphics submission", value);
+     VK_OK(vkWaitSemaphores(g_vk.dev, &wi, UINT64_MAX));
+     gpu_wait_note(NULL, 0);
++    __atomic_add_fetch(&g_vk.gfx_wait_ns, plat_ns() - t0, __ATOMIC_RELAXED);
+ }
+ /* the storage results of every submission up to value, which has finished, land in guest memory, in order */
+ static void land_through(u64 value) {
+diff --git a/src/nx/gpu/vk/device.c b/src/nx/gpu/vk/device.c
+index 8579250..f3ffe2c 100644
+--- a/src/nx/gpu/vk/device.c
++++ b/src/nx/gpu/vk/device.c
+@@ -18,6 +18,13 @@ VkShaderStageFlags g_vk_subgroup_stages;
+ 
+ VkState g_vk;
+ /* reentrant on the thread that holds it: landing compute results writes guest memory, which can come back here */
++/* PortForge statistics: the device memory allocations made, for the slow-frame line */
++static void VKAPI_PTR vk_counted_alloc(VmaAllocator a, uint32_t type, VkDeviceMemory mem, VkDeviceSize size, void* user) {
++    (void)a, (void)type, (void)mem, (void)user;
++    __atomic_add_fetch(&g_vk.allocs, 1, __ATOMIC_RELAXED);
++    __atomic_add_fetch(&g_vk.alloc_bytes, (u64)size, __ATOMIC_RELAXED);
++}
++
+ static PMutex g_vklock;
+ static _Thread_local int t_vkdepth;
+ static u32 g_vk_owner; /* the thread holding it (plat_tid), 0 when none: a trap's fault on it can't be answered */
+@@ -612,7 +619,9 @@ static int create_device(void) {
+                              .vkGetDeviceProcAddr = vkGetDeviceProcAddr};
+     vk_mem_init(sparse_queue);
+     /* VMA's blocks are 256 MiB at most already, and kept within a smaller cap */
++    static const VmaDeviceMemoryCallbacks counted = {.pfnAllocate = vk_counted_alloc};
+     VmaAllocatorCreateInfo vai = {.physicalDevice = g_vk.phys,
++                                  .pDeviceMemoryCallbacks = &counted,
+                                   .device = g_vk.dev,
+                                   .instance = g_vk.instance,
+                                   .preferredLargeHeapBlockSize = g_vk.alloc_cap < (256ull << 20) ? g_vk.alloc_cap : 0,
 diff --git a/src/nx/gpu/vk/frame_policy.h b/src/nx/gpu/vk/frame_policy.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..147ff8e1ebff4b5c1ad8ff138a1fdb79cccadba2
+index 0000000..147ff8e
 --- /dev/null
 +++ b/src/nx/gpu/vk/frame_policy.h
 @@ -0,0 +1,24 @@
@@ -55,8 +146,49 @@ index 0000000000000000000000000000000000000000..147ff8e1ebff4b5c1ad8ff138a1fdb79
 +    return guard && workers > 1 ? workers - 1 : workers;
 +}
 +#endif
+diff --git a/src/nx/gpu/vk/frame_times.c b/src/nx/gpu/vk/frame_times.c
+new file mode 100644
+index 0000000..faec9fa
+--- /dev/null
++++ b/src/nx/gpu/vk/frame_times.c
+@@ -0,0 +1,35 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#include <stdlib.h>
++#include <string.h>
++#include "nx/gpu/vk/vk.h"
++
++#define FRAME_TIME_WINDOW 600
++
++typedef struct {
++    u64 ns[FRAME_TIME_WINDOW];
++    u32 count;
++} FrameTimes;
++static FrameTimes g_frame_times;
++
++static int frame_time_compare(const void* a, const void* b) {
++    u64 x = *(const u64*)a, y = *(const u64*)b;
++    return x < y ? -1 : x > y;
++}
++
++void vk_frame_time_add(u64 ns) {
++    if (g_frame_times.count < FRAME_TIME_WINDOW) g_frame_times.ns[g_frame_times.count++] = ns;
++}
++
++u64 vk_frame_time_p99(u32* count) {
++    u64 ordered[FRAME_TIME_WINDOW], result = 0;
++    u32 n = g_frame_times.count;
++    *count = n;
++    if (n) {
++        u32 at = (n * 99 + 99) / 100 - 1;
++        memcpy(ordered, g_frame_times.ns, n * sizeof *ordered);
++        qsort(ordered, n, sizeof *ordered, frame_time_compare);
++        result = ordered[at];
++    }
++    g_frame_times.count = 0;
++    return result;
++}
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6758dd038cc13a41d41bca71f12d639278..66f0670bf57946aaafce9e3774f524cfdcb96095 100644
+index 33f94b6..a67a5eb 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
 @@ -16,6 +16,7 @@
@@ -540,8 +672,52 @@ index 33f94b6758dd038cc13a41d41bca71f12d639278..66f0670bf57946aaafce9e3774f524cf
  void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms) {
      *pipes = g_pipes_new;
      *hits = __atomic_load_n(&g_pipe_hits, __ATOMIC_RELAXED);
+@@ -1157,15 +1452,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
+     g_pf.npipe++;
+ }
+ 
+-/* The file's key: whatever changes the SPIR-V translation makes or what a PipeKey means. The build (commit, compiler,
+-   host), and for a tree with changes, which has one commit for every build of it, the runtime's own file; the device
+-   and its driver; the features and limits the translator, vk_shader_get and pipe_create consult; the sizes of what
+-   records hold whole */
++/* The file's key: whatever changes the SPIR-V translation makes or what a PipeKey means. PortForge: the hash of the
++   sources that make them (SNX_SHADER_ABI, from src/nx/CMakeLists.txt), so an engine update that leaves the translator
++   alone keeps the player's shaders instead of starting over; the device and its driver; the features and limits the
++   translator, vk_shader_get and pipe_create consult; the sizes of what records hold whole */
+ static void pf_key(char* out, size_t n) {
+     const VkPhysicalDeviceProperties* d = &g_vk.props;
+-    const char* commit = snx_build_commit();
+-    size_t len = strlen(commit);
+-    char exe[64] = "", uuid[33];
++    char uuid[33];
+     u32 caps[] = {(u32)g_vk.has_divisor,
+                   (u32)g_vk.has_dynamic_stride,
+                   (u32)g_vk.has_shader_draw_parameters,
+@@ -1187,20 +1480,9 @@ static void pf_key(char* out, size_t n) {
+                   g_vk_buffer_image_slots,
+                   d->limits.maxPerStageDescriptorStorageImages,
+                   d->limits.maxDescriptorSetStorageImages};
+-    /* a tree with changes builds under one commit name: the runtime's own bytes tell those builds apart. Not its
+-       modification time, which a copy of the same runtime (each game has one) changes */
+-    if (len >= 6 && !strcmp(commit + len - 6, "-dirty")) {
+-        char* self = snx_executable("scarletnx");
+-        PFileMap m;
+-        if (self && !plat_file_map(&m, self) && m.data) {
+-            snprintf(exe, sizeof exe, " exe=%016llx", (unsigned long long)vk_hash(m.data, (size_t)m.size));
+-            plat_file_unmap(&m);
+-        }
+-        free(self);
+-    }
+     for (int i = 0; i < 16; i++) snprintf(uuid + 2 * i, 3, "%02x", d->pipelineCacheUUID[i]);
+-    snprintf(out, n, "%s%s gpu=%04x:%04x driver=%u api=%u uuid=%s features=%016llx caps=%016llx sizes=%u,%u,%u",
+-             snx_build_info(), exe, d->vendorID, d->deviceID, d->driverVersion, d->apiVersion, uuid,
++    snprintf(out, n, "shaders=%s gpu=%04x:%04x driver=%u api=%u uuid=%s features=%016llx caps=%016llx sizes=%u,%u,%u",
++             SNX_SHADER_ABI, d->vendorID, d->deviceID, d->driverVersion, d->apiVersion, uuid,
+              (unsigned long long)vk_hash(&g_vk.feat, sizeof g_vk.feat), (unsigned long long)vk_hash(caps, sizeof caps),
+              (unsigned)sizeof(ShaderInfo), (unsigned)sizeof(PipeKey), (unsigned)sizeof(PfShader));
+ }
 diff --git a/src/nx/gpu/vk/query.c b/src/nx/gpu/vk/query.c
-index 2b46a4cc44f5e8e7c4aef59d3d1d01cc090cdba3..7648adaa83d50e196d205e011afd10858006ab54 100644
+index 2b46a4c..7648ada 100644
 --- a/src/nx/gpu/vk/query.c
 +++ b/src/nx/gpu/vk/query.c
 @@ -131,6 +131,10 @@ static u32 msaa_samples(u32 mode) {
@@ -556,7 +732,7 @@ index 2b46a4cc44f5e8e7c4aef59d3d1d01cc090cdba3..7648adaa83d50e196d205e011afd1085
      QCounter* c = counter(chan, 0);
      u32 mul = msaa_samples(msaa_mode);
 diff --git a/src/nx/gpu/vk/record.c b/src/nx/gpu/vk/record.c
-index b3b0e2cb416b8b8ba4fe16d1bfd76917391fe350..305079dffed92352e6cf0e05fdc42ccc22684238 100644
+index b3b0e2c..305079d 100644
 --- a/src/nx/gpu/vk/record.c
 +++ b/src/nx/gpu/vk/record.c
 @@ -155,6 +155,11 @@ void vk_rec_queue(VkQueue q) {
@@ -581,7 +757,7 @@ index b3b0e2cb416b8b8ba4fe16d1bfd76917391fe350..305079dffed92352e6cf0e05fdc42ccc
  }
  typedef struct {
 diff --git a/src/nx/gpu/vk/render.c b/src/nx/gpu/vk/render.c
-index b8247c01dc3ee77c1c4e3334be9cdcb012bde5f5..f1fb7dc54cdba18484d071608674e10b29be2f77 100644
+index b8247c0..f1fb7dc 100644
 --- a/src/nx/gpu/vk/render.c
 +++ b/src/nx/gpu/vk/render.c
 @@ -822,6 +822,45 @@ u32 vk_gbuf_desc(int stage, u32 off, const u32* v, u64* addr) {
@@ -703,7 +879,7 @@ index b8247c01dc3ee77c1c4e3334be9cdcb012bde5f5..f1fb7dc54cdba18484d071608674e10b
          g_dyn.pipe = pipe;
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2d42061dda155a3e396f9471ab321b7033..25310a2882ecd63d05e2b172fe1263635d9958db 100644
+index f3ac2e2..1d4ed2e 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -15,6 +15,7 @@
@@ -725,14 +901,14 @@ index f3ac2e2d42061dda155a3e396f9471ab321b7033..25310a2882ecd63d05e2b172fe126363
      backend_window_size(&ww, &wh);
      if (shown && (g_lost || backend_window_generation() != g_generation)) {
          vk_finish();
-@@ -411,24 +414,28 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -411,24 +414,38 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
 -        static u64 was[10];
 -        u64 now_ns = plat_ns(), is[10];
-+        static u64 was[15];
-+        u64 now_ns = plat_ns(), is[15];
++        static u64 was[19];
++        u64 now_ns = plat_ns(), is[19];
          vk_pipeline_stats(&is[0], &is[1], &is[2], &is[3], &is[4], &is[5]);
          vk_tex_stats(&is[6], &is[7]);
          is[8] = vk_rt_made();
@@ -740,14 +916,22 @@ index f3ac2e2d42061dda155a3e396f9471ab321b7033..25310a2882ecd63d05e2b172fe126363
 +        is[10] = vk_rt_make_ms();
 +        is[11] = vk_tex_upload_ms();
 +        hle_fs_stats(&is[12], &is[13], &is[14]);
++        is[15] = __atomic_load_n(&g_vk.gfx_wait_ns, __ATOMIC_RELAXED) / 1000000;
++        is[16] = __atomic_load_n(&g_vk_cs_wait_ns, __ATOMIC_RELAXED) / 1000000;
++        is[17] = __atomic_load_n(&g_vk.allocs, __ATOMIC_RELAXED);
++        is[18] = __atomic_load_n(&g_vk.alloc_bytes, __ATOMIC_RELAXED) >> 20;
          if (last_present_ns) {
              u64 d = now_ns - last_present_ns;
++            vk_frame_time_add(d);
              if (d > 50000000) {
                  slow_frames++;
++#if defined(_WIN32)
++                if (g_settings.profiler) plat_prof_stall(now_ns, d);
++#endif
                  LOG_LIMIT(200,
                            "vulkan: a %llu ms frame: %llu shaders translated (%llu ms), %llu pipelines made (%llu ms waited "
 -                          "for), %llu render targets made, %llu texture uploads (%llu KB), %llu ms in finishes\n",
-+                          "for), %llu render targets made (%llu ms), %llu texture uploads (%llu KB, %llu ms), %llu ms in finishes, %llu file reads (%llu KB, %llu ms)\n",
++                          "for), %llu render targets made (%llu ms), %llu texture uploads (%llu KB, %llu ms), %llu ms in finishes, %llu file reads (%llu KB, %llu ms), %llu ms waiting for the GPU's graphics and %llu ms its compute, %llu memory allocations (%llu MB)\n",
                            (unsigned long long)(d / 1000000), (unsigned long long)(is[4] - was[4]),
                            (unsigned long long)(is[5] - was[5]), (unsigned long long)(is[0] - was[0]),
                            (unsigned long long)(is[3] - was[3]), (unsigned long long)(is[8] - was[8]),
@@ -755,11 +939,26 @@ index f3ac2e2d42061dda155a3e396f9471ab321b7033..25310a2882ecd63d05e2b172fe126363
 -                          (unsigned long long)(is[9] - was[9]));
 +                          (unsigned long long)(is[10] - was[10]), (unsigned long long)(is[6] - was[6]), (unsigned long long)((is[7] - was[7]) >> 10), (unsigned long long)(is[11] - was[11]),
 +                          (unsigned long long)(is[9] - was[9]), (unsigned long long)(is[12] - was[12]),
-+                          (unsigned long long)((is[13] - was[13]) >> 10), (unsigned long long)(is[14] - was[14]));
++                          (unsigned long long)((is[13] - was[13]) >> 10), (unsigned long long)(is[14] - was[14]),
++                          (unsigned long long)(is[15] - was[15]), (unsigned long long)(is[16] - was[16]),
++                          (unsigned long long)(is[17] - was[17]), (unsigned long long)(is[18] - was[18]));
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -467,6 +474,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -441,6 +458,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+         vk_buf_frame();
+         vk_mem_trim(0, 0);
+         if (g_vk_present % 600 == 0) {
++            u32 n;
++            u64 p99 = vk_frame_time_p99(&n);
++            if (n) {
++                LOG("vulkan: frame-time p99 %.3f ms (1%% low %.1f FPS) across %u frames\n",
++                    (double)p99 / 1000000.0, p99 ? 1000000000.0 / (double)p99 : 0.0, n);
++            }
+             char cs_why[256];
+             u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
+             LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
+@@ -467,6 +490,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -773,7 +972,7 @@ index f3ac2e2d42061dda155a3e396f9471ab321b7033..25310a2882ecd63d05e2b172fe126363
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -518,6 +532,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -518,6 +548,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      }
      /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
      vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
@@ -782,7 +981,7 @@ index f3ac2e2d42061dda155a3e396f9471ab321b7033..25310a2882ecd63d05e2b172fe126363
      vk_frame_next(); /* every show used this frame's slot and acquire semaphore, the menu's own too */
      if (signal) {
 diff --git a/src/nx/gpu/vk/surface.c b/src/nx/gpu/vk/surface.c
-index 355bd292cf23698f5e8d27a929ee51c7c4d9e0c1..c8ec5b705b589bbd9ccbaed315a00610895ac39f 100644
+index 355bd29..c8ec5b7 100644
 --- a/src/nx/gpu/vk/surface.c
 +++ b/src/nx/gpu/vk/surface.c
 @@ -157,9 +157,10 @@ u32 vk_sc(u32 v) {
@@ -836,7 +1035,7 @@ index 355bd292cf23698f5e8d27a929ee51c7c4d9e0c1..c8ec5b705b589bbd9ccbaed315a00610
      if (s->in_drawn) return;
      if (g_ndrawn == g_capdrawn) {
 diff --git a/src/nx/gpu/vk/texture.c b/src/nx/gpu/vk/texture.c
-index 6096f99ac8b2a5db414a3f0e04109dd1c9b262b1..ed57f5809cc8788c259f807ddb508f8f2651d722 100644
+index 6096f99..ed57f58 100644
 --- a/src/nx/gpu/vk/texture.c
 +++ b/src/nx/gpu/vk/texture.c
 @@ -10,6 +10,7 @@
@@ -871,10 +1070,27 @@ index 6096f99ac8b2a5db414a3f0e04109dd1c9b262b1..ed57f5809cc8788c259f807ddb508f8f
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d52e5ecc728b36ffb53cff6505e093aff8..d2d19aa772bc22c117e702497e43ef527a432cd3 100644
+index db13c2d..1c6080d 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
-@@ -367,6 +367,7 @@ typedef struct Surf {
+@@ -74,6 +74,7 @@ typedef struct {
+     u32 sc_count;
+     VkImage sc_images[VK_SC_MAX];
+     VkSemaphore sc_done[VK_SC_MAX]; /* per swapchain image: rendering into it finished, it can be presented */
++    u64 gfx_wait_ns, allocs, alloc_bytes; /* atomic Vulkan performance counters (cmd.c, device.c) */
+     /* optional features that were enabled */
+     VkPhysicalDeviceFeatures feat;
+     int has_divisor;      /* VK_EXT_vertex_attribute_divisor: instance divisors above 1 */
+@@ -156,6 +157,8 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
+ void vk_submit_after(VkSemaphore sem, u64 wait, u64 signal);
+ void vk_finish(void); /* submits and waits until the GPU has done everything, and lands every result */
+ extern u64 g_vk_finishes, g_vk_finish_ns; /* statistics: vk_finish calls and their wait (the GPU thread idles) */
++void vk_frame_time_add(u64 ns);
++u64 vk_frame_time_p99(u32* count);
+ void vk_frame_next(void);                 /* ends the frame (a present): the next records in the other slot */
+ void vk_frame_check(void);                /* at the start of a draw or dispatch: ends a frame that has grown too big */
+ /* a buffer for GPU -> host copies: record the copy into it, vk_finish(), vk_readback_ready(), then read */
+@@ -367,6 +370,7 @@ typedef struct Surf {
      u64 wseq;       /* when its image last changed, counted across surfaces: of two over the same bytes, the higher
                         holds them (vk_surf_wrote) */
      u32 drawn_at;   /* render targets: g_vk_present when last drawn to */
@@ -882,7 +1098,7 @@ index db13c2d52e5ecc728b36ffb53cff6505e093aff8..d2d19aa772bc22c117e702497e43ef52
      int in_drawn;   /* in surface.c's list of drawn targets, entered at drawn_from */
      u64 drawn_from;
      u64 draw_gw;    /* guest-memory generation at the first draw this present or since a full replacement */
-@@ -708,6 +709,7 @@ void vk_release_drain(void);
+@@ -708,6 +712,7 @@ void vk_release_drain(void);
     a game's draw in a rendering pass, vk_query_pass_end before the pass ends or a draw of the renderer's own in it
     (render.c), vk_query_flush outside a pass before a submit (cmd.c) */
  void vk_query_draw(VkCommandBuffer cb, u32 chan, u32 msaa_mode); /* msaa_mode: 3D 0x574 */
@@ -890,7 +1106,7 @@ index db13c2d52e5ecc728b36ffb53cff6505e093aff8..d2d19aa772bc22c117e702497e43ef52
  void vk_query_pass_end(VkCommandBuffer cb);
  void vk_query_flush(VkCommandBuffer cb);
  void vk_query_reset(u32 chan);
-@@ -780,6 +782,8 @@ typedef struct VkSh {
+@@ -780,6 +785,8 @@ typedef struct VkSh {
      int failed;
      u32 clen, clen_a;
      u64 qh, qh_a;
@@ -899,7 +1115,7 @@ index db13c2d52e5ecc728b36ffb53cff6505e093aff8..d2d19aa772bc22c117e702497e43ef52
      struct VkSh* next;
  } VkSh;
  /* the pipeline layout whose sets have no texture array bindings: compute's, and the one push constants go through
-@@ -810,6 +814,15 @@ void vk_pipeline_init(void);
+@@ -810,6 +817,15 @@ void vk_pipeline_init(void);
     rasterization's outputs (ShaderInfo.xfb), NULL for none */
  VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
                      u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb);
@@ -915,7 +1131,7 @@ index db13c2d52e5ecc728b36ffb53cff6505e093aff8..d2d19aa772bc22c117e702497e43ef52
  typedef struct {
      VkShaderModule vs, fs;
      VkShaderModule tcs, tes, gs; /* tessellation control and evaluation, geometry: VK_NULL_HANDLE when off */
-@@ -843,15 +856,26 @@ VkPipeline vk_pipeline_get(const PipeKey* k);
+@@ -843,15 +859,26 @@ VkPipeline vk_pipeline_get(const PipeKey* k);
  /* the threads making new pipelines: setting (pipeline_threads) when it is one or more, else a quarter of cpus, two
     to six */
  int vk_pipeline_worker_count(int setting, int cpus);
@@ -943,7 +1159,7 @@ index db13c2d52e5ecc728b36ffb53cff6505e093aff8..d2d19aa772bc22c117e702497e43ef52
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
 diff --git a/src/nx/hle/filesystem/fs.c b/src/nx/hle/filesystem/fs.c
-index 354a1fcea19d0f117a4cb61c7dacc41dfbc703d0..fc9b0b91eba960dc2fbb8192bdded3c5e61fdeaa 100644
+index 354a1fc..fc9b0b9 100644
 --- a/src/nx/hle/filesystem/fs.c
 +++ b/src/nx/hle/filesystem/fs.c
 @@ -957,7 +957,22 @@ static FILE* rf_open(FsNode* node) {
@@ -970,7 +1186,7 @@ index 354a1fcea19d0f117a4cb61c7dacc41dfbc703d0..fc9b0b91eba960dc2fbb8192bdded3c5
      i64 got = (i64)size;
      if (!node) return image_read(rf->base + rel, dst, size, 0); /* the game's image's, under the mods' */
 diff --git a/src/nx/hle/filesystem/fs.h b/src/nx/hle/filesystem/fs.h
-index fd64ad451c660689656d1e7a947a1b0714ea21fb..2845a4aa5d28a90476a635d1181f578709117ff9 100644
+index fd64ad4..2845a4a 100644
 --- a/src/nx/hle/filesystem/fs.h
 +++ b/src/nx/hle/filesystem/fs.h
 @@ -115,4 +115,5 @@ typedef struct {
@@ -980,7 +1196,7 @@ index fd64ad451c660689656d1e7a947a1b0714ea21fb..2845a4aa5d28a90476a635d1181f5787
 +void hle_fs_stats(u64* reads, u64* bytes, u64* ms); /* the game's file reads so far: how many, their bytes, the time they took */
  #endif
 diff --git a/src/nx/runtime/driver/hactool/nca.c b/src/nx/runtime/driver/hactool/nca.c
-index 2f956fa8b2c467637e2a2c5a5cd70195334c5723..23ac531182acbb93d8c5e0cc84fd7a6dcaae6505 100644
+index 2f956fa..23ac531 100644
 --- a/src/nx/runtime/driver/hactool/nca.c
 +++ b/src/nx/runtime/driver/hactool/nca.c
 @@ -1420,13 +1420,15 @@ void nca_save_section_file(nca_section_ctx_t *ctx, uint64_t ofs, uint64_t total_
@@ -1003,7 +1219,7 @@ index 2f956fa8b2c467637e2a2c5a5cd70195334c5723..23ac531182acbb93d8c5e0cc84fd7a6d
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
 diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
-index addf0820d8186c7ca58312d41f1b478ab3090332..2a2d1f5555843048167c1d40f79428c4d0f6b899 100644
+index addf082..2a2d1f5 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
 @@ -38,5 +38,10 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
@@ -1018,7 +1234,7 @@ index addf0820d8186c7ca58312d41f1b478ab3090332..2a2d1f5555843048167c1d40f79428c4
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
-index a0ef76b8cfd4aabb7f3f28c0f4eea0993dfc9844..ddbc003cdee94b23e5644172f06354d8d33c57ae 100644
+index a0ef76b..ddbc003 100644
 --- a/src/nx/runtime/options.c
 +++ b/src/nx/runtime/options.c
 @@ -58,6 +58,11 @@ void options_fps_set(const IniOpt* o, const char* v) {
@@ -1034,7 +1250,7 @@ index a0ef76b8cfd4aabb7f3f28c0f4eea0993dfc9844..ddbc003cdee94b23e5644172f06354d8
      if (fps == SNX_FPS_GAME)
          snprintf(out, n, "game");
 diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
-index 408db9ed22fdb03ebd0ef7f6fae62c0e6760b105..0439f393b00a7ca13eb81a666d25309727b229a1 100644
+index 408db9e..0439f39 100644
 --- a/src/nx/runtime/options.h
 +++ b/src/nx/runtime/options.h
 @@ -34,6 +34,7 @@ void ini_poll(int final);
@@ -1046,7 +1262,7 @@ index 408db9ed22fdb03ebd0ef7f6fae62c0e6760b105..0439f393b00a7ca13eb81a666d253097
  /* ldn, read: local wireless over the LAN (ldn_mitm's protocol), through an Eden room, or off
     (hle/services/network/ldn.c) */
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
-index 87dfdc6384b6d72ddcbf69785eb2735e43dcdd38..aae2f4c139b4b744a0b3d1aced899ef111971f3f 100644
+index 87dfdc6..aae2f4c 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
 +++ b/src/nx/runtime/platform/backend/sdl3.c
 @@ -713,7 +713,8 @@ static void hotkey(SDL_Keycode k) {
@@ -1059,8 +1275,210 @@ index 87dfdc6384b6d72ddcbf69785eb2735e43dcdd38..aae2f4c139b4b744a0b3d1aced899ef1
              break;
          }
          case SDLK_F5: kernel_dump_threads(); break;
+diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
+index d3e4e35..064dffe 100644
+--- a/src/nx/runtime/platform/plat.h
++++ b/src/nx/runtime/platform/plat.h
+@@ -173,6 +173,8 @@ void plat_install_crash_handler(void);
+ void plat_prof_start(void); /* starts the sampling profiler (the profile option): Windows only */
+ #if defined(_WIN32)
+ void plat_prof_add_thread(HANDLE h); /* a thread to sample; the profiler keeps its own handle */
++/* a slow frame that ended at end_ns after len_ns: the profiler appends what each thread ran in it to stall-profile.txt */
++void plat_prof_stall(u64 end_ns, u64 len_ns);
+ #endif
+ 
+ #endif
+diff --git a/src/nx/runtime/platform/profiler_win32.c b/src/nx/runtime/platform/profiler_win32.c
+index ebfd9c6..dc8cc1f 100644
+--- a/src/nx/runtime/platform/profiler_win32.c
++++ b/src/nx/runtime/platform/profiler_win32.c
+@@ -38,6 +38,24 @@ typedef struct {
+ static ProfFn* g_fns; /* the game module's functions by host address */
+ static u32 g_nfns;
+ 
++/* PortForge: the last samples with their time and thread, so a slow frame can say what each thread ran during it */
++#define PROF_RING 262144 /* a power of two: about 8 s of 32 threads */
++typedef struct {
++    u64 t;
++    u64 key;
++    u32 slot;
++} ProfSample;
++typedef struct {
++    ProfSample* ring;
++    u64 n, end, len, written;
++} ProfStalls;
++static ProfStalls g_stalls;
++
++void plat_prof_stall(u64 end_ns, u64 len_ns) {
++    __atomic_store_n(&g_stalls.len, len_ns, __ATOMIC_RELAXED);
++    __atomic_store_n(&g_stalls.end, end_ns, __ATOMIC_RELEASE);
++}
++
+ void plat_prof_add_thread(HANDLE h) {
+     HANDLE own;
+     int i, used;
+@@ -87,12 +105,16 @@ static const ProfFn* fn_at(u64 pc) {
+     return lo && pc - g_fns[lo - 1].host < (1u << 20) ? &g_fns[lo - 1] : NULL;
+ }
+ 
+-static void record(u64 pc) {
++static void record(u64 pc, u32 slot, u64 now) {
+     const ProfFn* f = fn_at(pc);
+     u64 key = f ? f->host : pc & ~(u64)15;
+     u32 i, probe;
+     g_samples++;
+     if (!key) key = 16; /* 0 marks a free bucket */
++    if (g_stalls.ring) {
++        g_stalls.ring[g_stalls.n & (PROF_RING - 1)] = (ProfSample){now, key, slot};
++        g_stalls.n++;
++    }
+     i = (u32)((key >> 4) * 0x9E3779B1u) & (PROF_BUCKETS - 1);
+     for (probe = 0; probe < 64; probe++, i = (i + 1) & (PROF_BUCKETS - 1)) {
+         if (g_buckets[i].key == key || !g_buckets[i].key) {
+@@ -137,13 +159,102 @@ static void write_profile(u64 started) {
+     fclose(f);
+ }
+ 
++static void key_text(u64 key, char* out, size_t n) {
++    u64 image = (u64)(size_t)&__ImageBase;
++    const ProfFn* fn = fn_at(key);
++    HMODULE mod;
++    if (fn && fn->host == key)
++        snprintf(out, n, "game function %llx", (unsigned long long)fn->guest);
++    else if (key >= image && key - image < 0x10000000u)
++        snprintf(out, n, "runtime +%llx", (unsigned long long)(key - image));
++    else if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                                (LPCWSTR)(size_t)key, &mod)) {
++        char name[MAX_PATH];
++        DWORD len = GetModuleFileNameA(mod, name, sizeof name);
++        const char* base = name;
++        for (DWORD k = 0; k < len; k++)
++            if (name[k] == '\\' || name[k] == '/') base = name + k + 1;
++        snprintf(out, n, "%s+%llx", len ? base : "module", (unsigned long long)(key - (u64)(size_t)mod));
++    } else
++        snprintf(out, n, "host %llx", (unsigned long long)key);
++}
++static int sample_cmp(const void* a, const void* b) {
++    const ProfSample *x = a, *y = b;
++    if (x->slot != y->slot) return x->slot < y->slot ? -1 : 1;
++    return x->key < y->key ? -1 : x->key > y->key;
++}
++typedef struct {
++    u64 key;
++    u32 count;
++} ProfTop;
++/* the samples of [start, end) by thread, each thread's busiest functions first */
++static void write_stall(u64 start, u64 end, u64 len) {
++    char path[1200], text[MAX_PATH + 64];
++    u64 i, first = g_stalls.n > PROF_RING ? g_stalls.n - PROF_RING : 0, count = 0, at = 0;
++    ProfSample* win;
++    FILE* f;
++    for (i = first; i < g_stalls.n; i++) {
++        const ProfSample* s = &g_stalls.ring[i & (PROF_RING - 1)];
++        if (s->t >= start && s->t < end) count++;
++    }
++    if (!g_stalls.ring || !count || ++g_stalls.written > 60) return;
++    if (count > SIZE_MAX / sizeof *win) {
++        WARN("profiler: slow-frame sample list exceeds the address space\n");
++        return;
++    }
++    win = malloc((size_t)count * sizeof *win);
++    if (!win) { WARN("profiler: cannot allocate the slow-frame sample list\n"); return; }
++    for (i = first; i < g_stalls.n; i++) {
++        const ProfSample* s = &g_stalls.ring[i & (PROF_RING - 1)];
++        if (s->t >= start && s->t < end) win[at++] = *s;
++    }
++    qsort(win, (size_t)count, sizeof *win, sample_cmp);
++    snprintf(path, sizeof path, "%sstall-profile.txt", g_exedir);
++    f = fopen(path, g_stalls.written == 1 ? "w" : "a");
++    if (!f) {
++        free(win);
++        return;
++    }
++    fprintf(f, "=== a %llu ms frame ending at %.3f s: %llu samples\n", (unsigned long long)(len / 1000000),
++            (double)end / 1e9, (unsigned long long)count);
++    for (i = 0; i < count;) {
++        u32 slot = win[i].slot, total = 0, tops = 0, k;
++        ProfTop top[6] = {{0}};
++        u64 j = i;
++        while (j < count && win[j].slot == slot) {
++            u64 r = j;
++            u32 c = 0;
++            while (r < count && win[r].slot == slot && win[r].key == win[j].key) r++, c++;
++            total += c;
++            for (k = 0; k < 6; k++)
++                if (c > top[k].count) {
++                    memmove(&top[k + 1], &top[k], (5 - k) * sizeof *top);
++                    top[k] = (ProfTop){win[j].key, c};
++                    break;
++                }
++            j = r;
++        }
++        for (k = 0; k < 6 && top[k].count; k++) tops++;
++        fprintf(f, "thread %u: %u samples\n", slot, total);
++        for (k = 0; k < tops; k++) {
++            key_text(top[k].key, text, sizeof text);
++            fprintf(f, "    %5.1f%%  %s\n", 100.0 * top[k].count / total, text);
++        }
++        i = j;
++    }
++    fclose(f);
++    free(win);
++}
++
+ static DWORD WINAPI sampler(LPVOID unused) {
+     u64 started = plat_ns(), next_write = started + (u64)PROF_PERIOD_MS * 1000000u;
+     (void)unused;
+     fns_index();
+     for (;;) {
+         int i, used = __atomic_load_n(&g_threads_used, __ATOMIC_ACQUIRE);
++        u64 now;
+         Sleep(1);
++        now = plat_ns();
+         for (i = 0; i < used; i++) {
+             HANDLE h = __atomic_load_n(&g_threads[i], __ATOMIC_ACQUIRE);
+             CONTEXT c;
+@@ -159,13 +270,20 @@ static DWORD WINAPI sampler(LPVOID unused) {
+             c.ContextFlags = CONTEXT_CONTROL;
+             if (GetThreadContext(h, &c)) {
+ #if defined(_M_ARM64) || defined(__aarch64__)
+-                record((u64)c.Pc);
++                record((u64)c.Pc, (u32)i, now);
+ #else
+-                record((u64)c.Rip);
++                record((u64)c.Rip, (u32)i, now);
+ #endif
+             }
+             ResumeThread(h);
+         }
++        {
++            u64 end = __atomic_exchange_n(&g_stalls.end, 0, __ATOMIC_ACQUIRE);
++            if (end) {
++                u64 len = __atomic_load_n(&g_stalls.len, __ATOMIC_RELAXED);
++                write_stall(end - len, end, len);
++            }
++        }
+         if (plat_ns() >= next_write) {
+             write_profile(started);
+             next_write += (u64)PROF_PERIOD_MS * 1000000u;
+@@ -175,11 +293,15 @@ static DWORD WINAPI sampler(LPVOID unused) {
+ 
+ void plat_prof_start(void) {
+     HANDLE h;
++    g_stalls.ring = malloc(PROF_RING * sizeof *g_stalls.ring);
++    if (!g_stalls.ring) WARN("profile: slow-frame sampling is unavailable (memory allocation failed)\n");
+     plat_prof_add_thread(GetCurrentThread()); /* the main thread (the window and the frame loop) */
+     h = CreateThread(NULL, 0, sampler, NULL, 0, NULL);
+     if (!h) {
+         char why[256];
+         WARN("profile: the sampling thread could not start: %s\n", snx_os_error(why, sizeof why));
++        free(g_stalls.ring);
++        g_stalls.ring = NULL;
+         return;
+     }
+     SetThreadPriority(h, THREAD_PRIORITY_HIGHEST);
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181ee87f341deb05820e098bc289ae153694..b587bf4fafb68687a0b287ae50aceb322830aeba 100644
+index 2bd6181..b587bf4 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
 @@ -31,14 +31,67 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
@@ -1135,7 +1553,7 @@ index 2bd6181ee87f341deb05820e098bc289ae153694..b587bf4fafb68687a0b287ae50aceb32
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac55cdc777adf66dd5c76b5a7c3ba506fde7..777316b1edd0a6fd97066c48f302b048a8988ec8 100644
+index be57ac5..777316b 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
 @@ -166,7 +166,17 @@ setting FPS limit
@@ -1195,7 +1613,7 @@ index be57ac55cdc777adf66dd5c76b5a7c3ba506fde7..777316b1edd0a6fd97066c48f302b048
      key jit_threads
      int 0 8
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 64bdd9b33c597b626f8e8a95729f20c50b412c6d..b07de67f4f27d542da809062c397c232bccf78eb 100644
+index 64bdd9b..b07de67 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -644,6 +644,9 @@ add_test(NAME vi_service COMMAND snx-test-vi-service)
@@ -1209,7 +1627,7 @@ index 64bdd9b33c597b626f8e8a95729f20c50b412c6d..b07de67f4f27d542da809062c397c232
  # nvdrv's IPC side (nvdrv.c), with the GPU and host1x stand-ins in the test
  add_executable(snx-test-nvdrv-service nvdrv_service.c)
 diff --git a/tests/astc_vulkan.c b/tests/astc_vulkan.c
-index fda0deac43c3a1894b3112bc7512ad12edff53a8..488b8dd9705ab18edce8536330d79fcc8733be48 100644
+index fda0dea..488b8dd 100644
 --- a/tests/astc_vulkan.c
 +++ b/tests/astc_vulkan.c
 @@ -72,6 +72,7 @@ void vk_lock(void) {}
@@ -1222,7 +1640,7 @@ index fda0deac43c3a1894b3112bc7512ad12edff53a8..488b8dd9705ab18edce8536330d79fcc
  /* cmd.c's waits note themselves for gpu.c's stall report, which isn't here */
 diff --git a/tests/frame_policy.c b/tests/frame_policy.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..335b027815a14a88b1e486caca48f3f8154aeec8
+index 0000000..335b027
 --- /dev/null
 +++ b/tests/frame_policy.c
 @@ -0,0 +1,32 @@
@@ -1258,8 +1676,35 @@ index 0000000000000000000000000000000000000000..335b027815a14a88b1e486caca48f3f8
 +    puts("frame policy: burst budget, reset, oversleep, CPU counts and demand reservation passed");
 +    return 0;
 +}
+diff --git a/tests/frame_times.c b/tests/frame_times.c
+new file mode 100644
+index 0000000..17e9fa2
+--- /dev/null
++++ b/tests/frame_times.c
+@@ -0,0 +1,21 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#include <stdio.h>
++#include "nx/gpu/vk/vk.h"
++
++int main(void) {
++    u32 count;
++    u64 p99;
++    for (u64 i = 1; i <= 100; i++) vk_frame_time_add(i * 1000000ull);
++    p99 = vk_frame_time_p99(&count);
++    if (count != 100 || p99 != 99000000ull) {
++        fprintf(stderr, "p99 of 1..100 ms: got %u samples, %llu ns\n", count, (unsigned long long)p99);
++        return 1;
++    }
++    p99 = vk_frame_time_p99(&count);
++    if (count || p99) {
++        fprintf(stderr, "p99 window did not reset: got %u samples, %llu ns\n", count, (unsigned long long)p99);
++        return 1;
++    }
++    puts("frame time p99: PASS");
++    return 0;
++}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45d1eb900062ff9afd53ee8cef8b2f1fd30..3c043fc54c528b3dd85fa0a93455217b75836012 100644
+index 53c5e45..3c043fc 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,7 @@
@@ -1362,7 +1807,7 @@ index 53c5e45d1eb900062ff9afd53ee8cef8b2f1fd30..3c043fc54c528b3dd85fa0a93455217b
      vi_show_buffer(7, 0x40, 1, 1, 4, 1, 0, 1, crop, 0);
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
 diff --git a/tests/vulkan_headless.c b/tests/vulkan_headless.c
-index 25f0af2c67e6668d89c518d8ce79f5e55e8533fd..b1fc032672c5c32c6f9149825c2eda3ac0155ce4 100644
+index 25f0af2..b1fc032 100644
 --- a/tests/vulkan_headless.c
 +++ b/tests/vulkan_headless.c
 @@ -826,7 +826,7 @@ int main(int argc, char** argv) {

@@ -12,6 +12,12 @@ Cached background pipeline jobs can occupy at most one fewer than the available 
 
 FPS pacing drops the old scheduling deadline when the limit or native game interval changes. This prevents an obsolete future deadline from causing an avoidable pause after a mode change. The requested game speed and FPS limit are preserved.
 
+The engine reports the 99th-percentile frame time and its equivalent 1% low for each 600-frame sample. PortForge's measured tuning compares that alongside average FPS, freezes and the worst frame; when two profiles are within 0.5 ms at p99, it favors the higher render scale. These are measurements of the scenes tested, not a guarantee for later gameplay.
+
+The shader/pipeline cache is keyed by the translated-shader ABI, GPU and driver rather than the engine build number. Compatible engine updates therefore reuse cached shaders; translator or pipeline-key changes still invalidate them, as do GPU/driver changes. This avoids needlessly repeating first-use shader compilation after routine engine updates.
+
+Render scale changes the game's internal 3D resolution, and the Vulkan renderer scales that image to the window with the device's standard linear blit. This can trade detail for GPU work, but it is not AMD FSR 4 or NVIDIA DLSS: those vendor features require supported hardware and integration with game-specific motion/depth data. No post-process can guarantee fixed 99% lows or remove CPU-bound loading and emulation stalls.
+
 **Smart async shaders** (`async_shaders`, on by default). The original engine stops the game whenever a draw needs a GPU pipeline that isn't built yet. The PortForge Engine waits at most 1.5 ms, then skips that draw for one frame, but only when every image the draw writes was drawn in each of the last three frames (the game's 3D world). Draws into anything else, such as menus, loading screens and images drawn once, still wait, so nothing goes missing for good.
 
 Historical Engine 1.0 measurement on one game's opening with an empty shader cache (45 seconds of scripted play): 20 frames over 50 ms with the worst at 4,234 ms and 7,660 ms spent waiting became 4 frames over 50 ms (all loading) with the worst at 349 ms and 1 ms waiting. This is not a benchmark of Engine 1.3 or a prediction for other games. See [0.17 validation](../VALIDATION-0.17.md) for current evidence and limitations.

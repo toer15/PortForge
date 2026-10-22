@@ -128,12 +128,12 @@ namespace PortForge
             AddHint("Click an FPS button to set a custom cap and turn VSync off. Play game saves and verifies these settings automatically. Game speed uses the game's own timing; the hidden custom number is not active in that mode.");
             AddHint("Speed lock: with PortForge Engine 1.6 or newer, a game always runs at its own speed, whatever the cap. A higher cap can't speed up a 30 or 60 FPS game, and a lower cap shows fewer frames instead of slowing the game down. Your PC's power goes into sharper graphics instead. VSync may also limit FPS to your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
-            AddHint("100% = the game's original resolution. Lower values reduce GPU work; higher values sharpen the picture and cost performance.");
+            AddHint("100% = the game's original resolution. Lower values reduce 3D GPU work; Vulkan scales the final image to your window. Higher values sharpen it and cost performance. Scaling cannot remove CPU, game-loading or shader-compilation stalls.");
             AddOption("Texture detail at angles", filtering, delegate { filtering.SelectedIndex = 0; });
             var checks = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
             checks.Controls.AddRange(new Control[] { vsync, shadows, docked, fullscreen }); options.Controls.Add(checks);
             options.Controls.Add(Label("Automatic tuning", 12, Mint));
-            AddHint("Auto tune uses the custom FPS limit above as its target (60 in Game speed or Unlimited mode). It plays the first minute of the game with scripted button presses (A) from a backed-up save, so it measures real gameplay and loading. Later areas can be heavier. The Automatic fixes tab checks logs and provides Codex AI diagnosis.");
+            AddHint("Auto tune uses the custom FPS limit above as its target (60 in Game speed or Unlimited mode). It compares average FPS, freezes and the 99th-percentile frame time (1% low), then favors higher image quality when results are within measurement noise. It plays the first minute from a backed-up save; later areas can be heavier. FSR 4 and DLSS need supported hardware and game-provided motion data, so this engine does not claim to provide them.");
             details.Height = 105; details.MinimumSize = new Size(0, 100); details.BackColor = Surface; details.ForeColor = Color.WhiteSmoke; options.Controls.Add(details);
             report.AutoSize = true; report.Enabled = false; report.Click += delegate { if (File.Exists(reportPath)) Process.Start("notepad.exe", GameManifest.Quote(reportPath)); };
             options.Controls.Add(report);

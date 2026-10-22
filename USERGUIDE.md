@@ -1,4 +1,4 @@
-# PortForge 0.23
+# PortForge 0.24
 
 ## Play any time
 
@@ -27,7 +27,7 @@ Frame guard shares one short optional shader-wait allowance across a frame, inst
 
 New games matched by this engine use automatic shader/JIT worker counts on every launch. Counts follow the CPUs available on the PC running the game. Explicit manual thread counts remain available. The engine also resets its pacing deadline when an FPS limit or native game interval changes, avoiding a pause from the previous pace. It preserves the selected game speed, FPS cap and VSync setting.
 
-The Doctor installs a newer bundled engine under watched converted games when they are closed, with the existing backup and startup check. **Auto fix everything** also selects the new engine's automatic shader workers. A game restored manually to its original engine remains an exception until you choose to install again.
+The Doctor installs a newer bundled engine under watched converted games when they are closed, with the existing backup and startup check. **Auto fix everything** also selects the new engine's automatic shader workers. Engine 1.7 reuses compatible shader caches across routine engine updates and reports p99 frame time/1% low and GPU-wait details for diagnosis. A game restored manually to its original engine remains an exception until you choose to install again.
 
 These changes address specific engine stalls. Game loading, new shader translation, driver waits, CPU/GPU limits and compatibility problems can still produce slow frames. See `Source/VALIDATION-0.21.md` in the source ZIP for measured results and limits.
 

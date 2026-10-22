@@ -82,6 +82,7 @@ namespace PortForge
             report.AppendLine("\r\n" + result.Summary);
             report.AppendLine("Engine 1.4 and newer use frame_guard=1 by default and resolve automatic worker counts on the PC running the game. A copied game can therefore adapt its workers on each launch.");
             report.AppendLine("Engine 1.6 and newer keep speed_lock=1: no FPS cap can make the game run faster or slower than its own pace, so this PC's power goes into render scale and filtering instead.");
+            report.AppendLine("Engine 1.7 and newer report measured p99 frame time/1% low and GPU wait details, and reuse shader caches across compatible engine updates. These diagnostics and measurements do not guarantee future scenes will run without stutter.");
             report.AppendLine("Local hardware rules and measured samples; no AI account or hardware upload is needed. FPS, VSync, controllers and experimental shader preferences are preserved. The game selects its Vulkan device; the highest-rated Windows adapter is not proof of the active GPU. Later areas can behave differently; zero lag and universal compatibility are not guaranteed.");
             try { File.WriteAllText(result.ReportPath, report.ToString(), new UTF8Encoding(false)); }
             catch (IOException e) { result.Warning = (result.Warning ?? "") + " Could not save the PC settings report: " + e.Message; }

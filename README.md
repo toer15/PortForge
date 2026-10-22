@@ -14,7 +14,7 @@ PortForge is a Windows app (.NET Framework 4.8, no install needed) built around 
 - **Simple conversion screen** – game file, game name, save folder. Clear buttons beside every input, and a status card for progress, done, errors and cancelled.
 - **Downloads** – paste a direct link: automatic connection count, retries, pause/resume, checksum checks, ZIP unpacking, hand-off to conversion.
 - **Automatic PC matching** – shows CPU, graphics adapters, dedicated graphics memory and usable RAM on startup. New conversions get supported settings for that PC, followed by optional measurements that favor FPS and fewer freezes. On by default, works for local and downloaded inputs, and needs no AI account. Each game gets a report separating hardware estimates from measured results.
-- **Graphics and FPS** – per-game FPS limit (10–1,000 or unlimited), render scale, texture filtering, shadows, VSync, plus an automatic benchmark tuner (local measurements, no AI model).
+- **Graphics and FPS** – per-game FPS limit (10–1,000 or unlimited), render scale, texture filtering, shadows, VSync, plus an automatic benchmark tuner that compares average FPS, freezes, worst frames and measured p99 frame time/1% low (local measurements, no AI model). Engine 1.7 keeps compatible shader caches across routine engine updates and reports per-frame GPU waits.
 - **Automatic fixes** – reads a game's log, reports known problems, applies supported repairs with backups and undo, and can ask a locally installed Codex for an AI diagnosis. Engine-level glitches are reported, not fixed.
 - **AI Doctor** – watches converted games while they run, explains every slowdown live (shader stutter, loading freezes, or other programs using the CPU), and when the game closes applies the supported repairs and asks Codex AI about new problems. It never changes a running game, and saves and settings are backed up first.
 - **PortForge Engine** (Engine tab) – our own build of the ScarletNX runtime with background pipeline compilation to reduce some shader stalls, plus experimental background translation that is off by default. Game loading and compatibility problems can remain. Keeps the original engine for restore. See [engine/README.md](engine/README.md).
@@ -49,6 +49,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test -BackendPa
 
 - [USERGUIDE.md](USERGUIDE.md) – how to use the app
 - [NATIVE.md](NATIVE.md) – setup, evidence, limitations
+- [VALIDATION-0.24.md](VALIDATION-0.24.md) – Engine 1.7 and p99 tuning checks and limitations
 - [BENCHMARKS.md](BENCHMARKS.md), [ROADMAP.md](ROADMAP.md)
 - `PACKAGER-0.1.md` / `src/App.cs` – the legacy emulator-packaging prototype, kept for reference only
 

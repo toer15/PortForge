@@ -42,8 +42,8 @@ internal static class OptimizationTests
             Check(read.FpsLimit == "144" && read.Resolution == 1.25m && read.Anisotropy == 3 && !read.VSync && !read.Shadows && !read.Docked, "Per-game settings round-trip without losing non-preset values");
             var quality = GraphicsProfile.Preset("Quality", profile);
             Check(quality.FpsLimit == "144" && !quality.VSync && !quality.Docked, "Quality presets preserve timing and display choices");
-            var sample = GameOptimization.ParseSample("sample", profile, "vulkan: 3 frames over 50 ms in the last 600\nframes=1160 hash=ab12\n", 20);
-            Check(sample.Fps == 58 && sample.SlowFrames == 3, "Measured FPS and reported stalls parse from runtime output");
+            var sample = GameOptimization.ParseSample("sample", profile, "vulkan: 3 frames over 50 ms in the last 600\nvulkan: frame-time p99 18.250 ms (1% low 54.8 FPS) across 600 frames\nvulkan: frame-time p99 20.125 ms (1% low 49.7 FPS) across 600 frames\nframes=1160 hash=ab12\n", 20);
+            Check(sample.Fps == 58 && sample.SlowFrames == 3 && sample.HasFramePercentile && sample.P99FrameMs == 20.125m, "Measured FPS, worst-block p99 frame time and stalls parse from runtime output");
             Fails(() => GameOptimization.ParseSample("bad", profile, "frames=0 hash=0", 20), "A no-frame or failed startup never becomes a valid tuning result");
             Fails(() => GameOptimization.ParseSample("crashed",profile,"FATAL: guest crash\nframes=1200 hash=1",20),"A crash report cannot become a tuning recommendation even when frames were recorded");
             var low = new BenchmarkSample { Success = true, Frames = 1200, Fps = 60, Profile = new GraphicsProfile { Resolution = .75m } };
@@ -101,6 +101,12 @@ internal static class OptimizationTests
             Check(GameOptimization.SelectSmooth(new[]{steady,hitching},60,1)==steady,"A much longer worst freeze can lower the selected resolution despite equal FPS and stall counts");
             hitching.WorstFrameMs=100;
             Check(GameOptimization.SelectSmooth(new[]{steady,hitching},60,1)==hitching,"Small timing differences do not unnecessarily lower image quality");
+            var stableP99=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=1,WorstFrameMs=100,P99FrameMs=16.8m,HasFramePercentile=true,Profile=new GraphicsProfile{Resolution=.75m}};
+            var unstableP99=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=1,WorstFrameMs=100,P99FrameMs=20.2m,HasFramePercentile=true,Profile=new GraphicsProfile{Resolution=1.25m}};
+            var similarP99=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=1,WorstFrameMs=100,P99FrameMs=17.1m,HasFramePercentile=true,Profile=new GraphicsProfile{Resolution=1m}};
+            Check(GameOptimization.Select(new[]{stableP99,unstableP99},60)==stableP99,"Auto tune prefers the measured lower-p99 profile when average FPS is equal");
+            Check(GameOptimization.SelectSmooth(new[]{stableP99,unstableP99},60,2)==stableP99,"PC matching rejects a profile with materially worse measured p99 frame time");
+            Check(GameOptimization.SelectSmooth(new[]{stableP99,similarP99},60,2)==similarP99,"PC matching keeps higher image quality when p99 differs by less than the measurement tolerance");
             string pcIni="fps_limit=120\nvsync=0\nresolution=2\nanisotropy=16\ngamepad_map=A:B\nasync_translation=0\npc_profile_test=1\n";
             File.WriteAllText(config,pcIni);
             var baseline=PcOptimization.Configure(exe,strong,false,new Updates(),CancellationToken.None);

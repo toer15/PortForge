@@ -38,6 +38,8 @@ internal static class TuningFixture
                 decimal scale = resolution == null ? 1 : Decimal.Parse(resolution.Substring(13), System.Globalization.CultureInfo.InvariantCulture);
                 int slow = scale >= 1 ? 8 : scale >= .75m ? 1 : 0, worst = scale >= 1 ? 400 : scale >= .75m ? 60 : 0;
                 Console.WriteLine("vulkan: " + slow + " frames over 50 ms in the last 600, the slowest " + worst + " ms");
+                decimal p99 = scale >= 1 ? 28m : scale >= .75m ? 16.7m : 16.4m;
+                Console.WriteLine("vulkan: frame-time p99 " + p99.ToString("F3", System.Globalization.CultureInfo.InvariantCulture) + " ms (1% low " + (1000m / p99).ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " FPS) across 600 frames");
                 File.WriteAllText(path, originalConfig);
                 Console.WriteLine("frames=" + (Int32.Parse(seconds.Substring(10))*60) + " hash=1234");
             }

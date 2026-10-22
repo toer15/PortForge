@@ -70,6 +70,8 @@ namespace PortForge
         public string Name, Diagnostic;
         public GraphicsProfile Profile;
         public int Frames, SlowFrames, WorstFrameMs;
+        public decimal P99FrameMs;
+        public bool HasFramePercentile;
         public double Fps;
         public bool Success;
     }
@@ -262,7 +264,9 @@ namespace PortForge
             var slow = Regex.Matches(output, @"(\d+) frames over 50 ms").Cast<Match>().Select(x => Int32.Parse(x.Groups[1].Value)).ToList();
             var stalls = GameDiagnostics.StallFrames(output);
             var worst = Regex.Matches(output, @"(?:the slowest|worst) (\d+) ms").Cast<Match>().Select(x => Int32.Parse(x.Groups[1].Value)).Concat(stalls.Select(f => f.FrameMs)).ToList();
-            return new BenchmarkSample { Name = name, Profile = profile, Frames = frames, Fps = (double)frames / seconds, SlowFrames = Math.Max(slow.Count == 0 ? 0 : slow.Max(), stalls.Count), WorstFrameMs = worst.Count == 0 ? 0 : worst.Max(), Success = true, Diagnostic = output };
+            var percentiles = Regex.Matches(output, @"frame-time p99 ([0-9]+(?:\.[0-9]+)?) ms").Cast<Match>()
+                .Select(x => Decimal.Parse(x.Groups[1].Value, NumberStyles.AllowDecimalPoint, Invariant)).Where(x => x > 0).ToList();
+            return new BenchmarkSample { Name = name, Profile = profile, Frames = frames, Fps = (double)frames / seconds, SlowFrames = Math.Max(slow.Count == 0 ? 0 : slow.Max(), stalls.Count), WorstFrameMs = worst.Count == 0 ? 0 : worst.Max(), P99FrameMs = percentiles.Count == 0 ? 0 : percentiles.Max(), HasFramePercentile = percentiles.Count > 0, Success = true, Diagnostic = output };
         }
         public static BenchmarkSample Select(IEnumerable<BenchmarkSample> samples, int target, decimal maxResolution = 4)
         {
@@ -270,7 +274,8 @@ namespace PortForge
             if (good.Count == 0) throw new IOException("No profile completed a usable test. Your settings were left unchanged.");
             double fastest = good.Max(x => x.Fps), threshold = Math.Min(target * .95, fastest * .97);
             // At a game's own lower ceiling, retain quality when a reduced resolution brings no measured benefit.
-            return good.Where(x => x.Fps >= threshold).OrderByDescending(x => x.Profile.Resolution).ThenByDescending(x => x.Profile.Anisotropy).ThenBy(x => x.SlowFrames).First();
+            var fast = good.Where(x => x.Fps >= threshold).ToList();
+            return PreferStableFrameTimes(fast);
         }
         public static int GameplaySeconds = 45;
         public static readonly string GameplayScript = String.Join(",", Enumerable.Range(0, 9).Select(i => (6000 + i * 4000) + ":1"));
@@ -283,7 +288,23 @@ namespace PortForge
             int slowBudget = fast.Min(x => x.SlowFrames) + 1;
             var smooth = fast.Where(x => x.SlowFrames <= slowBudget).ToList();
             double worstBudget = Math.Max(smooth.Min(x => x.WorstFrameMs) * 1.5, smooth.Min(x => x.WorstFrameMs) + 100);
-            return smooth.Where(x => x.WorstFrameMs <= worstBudget).OrderByDescending(x => x.Profile.Resolution).ThenByDescending(x => x.Profile.Anisotropy).ThenBy(x => x.SlowFrames).First();
+            return PreferStableFrameTimes(smooth.Where(x => x.WorstFrameMs <= worstBudget).ToList());
+        }
+        private static BenchmarkSample PreferStableFrameTimes(List<BenchmarkSample> samples)
+        {
+            if (samples.All(x => x.HasFramePercentile))
+            {
+                decimal best = samples.Min(x => x.P99FrameMs);
+                // Treat sub-half-millisecond differences as measurement noise; prefer image quality within that band.
+                samples = samples.Where(x => x.P99FrameMs <= best + .5m).ToList();
+            }
+            return samples.OrderByDescending(x => x.Profile.Resolution).ThenByDescending(x => x.Profile.Anisotropy).ThenBy(x => x.SlowFrames).First();
+        }
+        private static string FrameTimeSummary(BenchmarkSample sample)
+        {
+            return sample.HasFramePercentile
+                ? ", p99 " + sample.P99FrameMs.ToString("F3", Invariant) + " ms (about " + (1000.0 / (double)sample.P99FrameMs).ToString("F1", Invariant) + " FPS 1% low)"
+                : ", 99th-percentile frame time not reported by this engine";
         }
 
         private static string RunProtectedSample(string exe, string args, int timeout, CancellationToken token, bool gameplay)
@@ -334,7 +355,7 @@ namespace PortForge
                         try
                         {
                             var sample = ParseSample(name, p, RunProtectedSample(exe, args, seconds + 45, token, gameplay), seconds);
-                            result.Samples.Add(sample); log.WriteLine("\r\n" + name + ": " + sample.Fps.ToString("F1", Invariant) + " FPS, " + sample.SlowFrames + " reported frames over 50 ms, worst " + sample.WorstFrameMs + " ms\r\n" + sample.Diagnostic);
+                            result.Samples.Add(sample); log.WriteLine("\r\n" + name + ": " + sample.Fps.ToString("F1", Invariant) + " FPS, " + sample.SlowFrames + " reported frames over 50 ms, worst " + sample.WorstFrameMs + " ms" + FrameTimeSummary(sample) + "\r\n" + sample.Diagnostic);
                             progress.Report(name + ": " + sample.Fps.ToString("F1") + " FPS in the " + (gameplay ? "gameplay" : "startup") + " sample.");
                         }
                         catch (OperationCanceledException) { throw; }
@@ -343,7 +364,7 @@ namespace PortForge
                     token.ThrowIfCancellationRequested();
                     var best = preferSmoothness ? SelectSmooth(result.Samples, target, desired.Resolution) : Select(result.Samples, target, desired.Resolution);
                     result.Profile = best.Profile.Copy();
-                    result.Summary = best.Name + " chosen: " + best.Fps.ToString("F1") + " FPS average in the " + (gameplay ? "gameplay" : "startup") + " sample at " + (best.Profile.Resolution * 100).ToString("0") + "% scale. " +
+                    result.Summary = best.Name + " chosen: " + best.Fps.ToString("F1") + " FPS average in the " + (gameplay ? "gameplay" : "startup") + " sample at " + (best.Profile.Resolution * 100).ToString("0") + "% scale" + FrameTimeSummary(best) + ". " +
                         (!gameplay && best.Fps < target * .95 ? "The test did not reach the target. " : "") + (gameplay ? "Measured while playing the first scenes, including loading. Later areas can be heavier. " : "Includes loading/menus; test demanding gameplay before raising quality. ") + " Your FPS and VSync choices are preserved. Select Save settings to apply.";
                     result.ReportPath = report; log.WriteLine("\r\n" + result.Summary);
                     if (preferSmoothness) log.WriteLine("Automatic PC matching prioritized measured FPS and freezes before resolution. Scripted inputs may stay in a menu in some games; these are samples, not proof of later gameplay. Each sample starts from the original backed-up save.");
