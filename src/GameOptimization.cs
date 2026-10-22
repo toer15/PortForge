@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Runtime.InteropServices;
 
 namespace PortForge
 {
@@ -15,6 +16,7 @@ namespace PortForge
         public string FpsLimit = "game";
         public decimal Resolution = 1;
         public int Anisotropy = 0;
+        public int Upscaler = 1;
         public bool Shadows = true, VSync = true, Docked = true, Fullscreen;
 
         public GraphicsProfile Copy() { return (GraphicsProfile)MemberwiseClone(); }
@@ -25,13 +27,14 @@ namespace PortForge
                 throw new ArgumentException("FPS must be Game speed, Unlimited, or a whole number from 10 to 1000.");
             if (Resolution < .25m || Resolution > 4m) throw new ArgumentException("Render scale must be between 25% and 400%.");
             if (Anisotropy < 0 || Anisotropy > 16) throw new ArgumentException("Texture filtering must be between 0 and 16.");
+            if (Upscaler < 0 || Upscaler > 1) throw new ArgumentException("Choose Linear or AMD FSR 1 upscaling.");
         }
         public Dictionary<string, string> Values()
         {
             Validate();
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
                 {"fps_limit", FpsLimit}, {"resolution", Resolution.ToString(CultureInfo.InvariantCulture)},
-                {"anisotropy", Anisotropy.ToString(CultureInfo.InvariantCulture)}, {"shadows", Shadows ? "1" : "0"},
+                {"anisotropy", Anisotropy.ToString(CultureInfo.InvariantCulture)}, {"upscaler", Upscaler.ToString(CultureInfo.InvariantCulture)}, {"shadows", Shadows ? "1" : "0"},
                 {"vsync", VSync ? "1" : "0"}, {"docked", Docked ? "1" : "0"}, {"fullscreen", Fullscreen ? "1" : "0"} };
         }
         public static GraphicsProfile Preset(string name, GraphicsProfile previous)
@@ -86,6 +89,51 @@ namespace PortForge
     public static class GameOptimization
     {
         private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
+        private static readonly object processGate = new object();
+        private static readonly HashSet<int> probes = new HashSet<int>();
+        [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
+        [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+        // A --settings query has the game's filename too, but does not own its save or run the game.
+        public static Process FindRunningGame(string exe)
+        {
+            string full = Path.GetFullPath(exe);
+            lock (processGate)
+            foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(full)))
+            {
+                bool keep = false;
+                try {
+                    if (probes.Contains(process.Id) || process.HasExited) continue;
+                    keep = String.Equals(process.MainModule.FileName, full, StringComparison.OrdinalIgnoreCase);
+                    if (keep) return process;
+                }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) {
+                    throw new IOException("Windows could not check a process with this game's name. Close that process or retry Play.");
+                }
+                finally { if (!keep) process.Dispose(); }
+            }
+            return null;
+        }
+        public static bool BringGameForward(string exe)
+        {
+            using (var process = FindRunningGame(exe))
+            {
+                if (process == null) return false;
+                try { process.Refresh(); if (process.MainWindowHandle != IntPtr.Zero) { ShowWindowAsync(process.MainWindowHandle, 9); SetForegroundWindow(process.MainWindowHandle); } }
+                catch (InvalidOperationException) { return false; }
+                return true;
+            }
+        }
+        public static Process StartForPlayer(string exe)
+        {
+            ValidateGame(exe);
+            lock (processGate)
+            {
+                var existing = FindRunningGame(exe);
+                if (existing != null) { BringGameForward(exe); return existing; }
+                return Process.Start(new ProcessStartInfo(Path.GetFullPath(exe)) { WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(exe)) });
+            }
+        }
         public static string ConfigPath(string exe) { return Path.ChangeExtension(Path.GetFullPath(exe), ".ini"); }
         public static void ValidateGame(string exe)
         {
@@ -98,15 +146,8 @@ namespace PortForge
         }
         public static void EnsureStopped(string exe)
         {
-            foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exe)))
-            using (process)
-            {
-                bool same;
-                try { same = String.Equals(process.MainModule.FileName, Path.GetFullPath(exe), StringComparison.OrdinalIgnoreCase); }
-                catch (System.ComponentModel.Win32Exception) { throw new IOException("Close the game before changing its settings or running a tuning test."); }
-                catch (InvalidOperationException) { continue; }
-                if (same) throw new IOException("Close the game before changing its settings or running a tuning test. Your game has been left running.");
-            }
+            using (var process = FindRunningGame(exe))
+                if (process != null) throw new IOException("Close the game before changing its settings or running a tuning test. Use Play game to return to its window.");
         }
         public static GraphicsProfile Load(string exe)
         {
@@ -118,6 +159,7 @@ namespace PortForge
             if (values.TryGetValue("fps_limit", out v)) p.FpsLimit = v;
             if (values.TryGetValue("resolution", out v) && Decimal.TryParse(v, NumberStyles.Number, Invariant, out scale)) p.Resolution = scale;
             if (values.TryGetValue("anisotropy", out v) && Int32.TryParse(v, out n)) p.Anisotropy = n;
+            if (values.TryGetValue("upscaler", out v) && Int32.TryParse(v, out n)) p.Upscaler = n;
             if (values.TryGetValue("shadows", out v)) p.Shadows = v != "0";
             if (values.TryGetValue("vsync", out v)) p.VSync = v != "0";
             if (values.TryGetValue("docked", out v)) p.Docked = v != "0";
@@ -170,21 +212,25 @@ namespace PortForge
             string path = ConfigPath(exe);
             string text = File.Exists(path) ? File.ReadAllText(path) : "";
             var existing=ReadValues(text);
-            if(profile.Values().All(item=>existing.ContainsKey(item.Key)&&existing[item.Key]==item.Value))return null;
+            var supported = profile.Values();
+            if (!capabilities.Keys.Contains("upscaler")) supported.Remove("upscaler");
+            if(supported.All(item=>existing.ContainsKey(item.Key)&&existing[item.Key]==item.Value))return null;
             string backup = File.Exists(path) ? path + ".before-portforge-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + ".bak" : null;
-            AtomicWrite(path, new UTF8Encoding(false).GetBytes(Merge(text, profile.Values())), backup);
+            AtomicWrite(path, new UTF8Encoding(false).GetBytes(Merge(text, supported)), backup);
             return backup;
         }
         public static void SaveAndVerify(string exe, GraphicsProfile profile, RuntimeCapabilities capabilities)
         {
             Save(exe,profile,capabilities);
             var actual=Load(exe).Values();
-            foreach(var item in profile.Values()) if(actual[item.Key]!=item.Value) throw new IOException("The saved "+item.Key+" setting did not match. The game was not started.");
+            foreach(var item in profile.Values()) if(capabilities.Keys.Contains(item.Key)&&actual[item.Key]!=item.Value) throw new IOException("The saved "+item.Key+" setting did not match. The game was not started.");
         }
         public static Process SaveAndStart(string exe, GraphicsProfile profile, RuntimeCapabilities capabilities)
         {
+            var existing = FindRunningGame(exe);
+            if (existing != null) { BringGameForward(exe); return existing; }
             SaveAndVerify(exe,profile,capabilities);
-            return Process.Start(new ProcessStartInfo(Path.GetFullPath(exe)) { WorkingDirectory=Path.GetDirectoryName(Path.GetFullPath(exe)) });
+            return StartForPlayer(exe);
         }
         public static void Initialize(string exe)
         {
@@ -227,7 +273,10 @@ namespace PortForge
             string tested = owner.Success ? owner.Groups[1].Value.Trim('"') : exe;
             bool gameplay = Regex.IsMatch(arguments, @"(^|\s)--seconds=");
             if (gameplay && PlayFirst.Holding(tested)) throw new OperationCanceledException("The player started this game. PortForge's test will run another time.");
-            using (var process = Process.Start(info))
+            bool probe = Regex.IsMatch(arguments, @"(^|\s)--(?:settings|version|help)(?:\s|$)");
+            Process started;
+            lock (processGate) { started = Process.Start(info); if (probe) probes.Add(started.Id); }
+            using (var process = started)
             {
                 var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
                 var watch = Stopwatch.StartNew();
@@ -251,6 +300,7 @@ namespace PortForge
                 finally
                 {
                     if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); }
+                    if (probe) lock (processGate) probes.Remove(process.Id);
                     if (played != null) PlayFirst.Release(played);
                 }
             }
@@ -334,6 +384,7 @@ namespace PortForge
             {
                 log.WriteLine("PortForge measured " + (gameplay ? "gameplay" : "startup") + " tuning | " + DateTime.UtcNow.ToString("u"));
                 log.WriteLine("Game: " + exe + "\r\nTarget: " + target + " FPS. " + (gameplay ? "Each sample plays the first minute of the game with scripted button presses (A) from a backed-up save. Other areas can still differ." : "Samples include loading and menus, not a gameplay guarantee."));
+                log.WriteLine("Samples render offscreen. Display upscaling and presentation costs are excluded; these measurements do not establish FSR speedups or displayed 1% lows.");
                 try
                 {
                     progress.Report(gameplay ? "Warming the shader cache by playing the opening of the game (" + seconds + " seconds). Your settings and save will be restored." : "Warming the startup scene and shader cache (8 seconds). Your original settings will be restored.");

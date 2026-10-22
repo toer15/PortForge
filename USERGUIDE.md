@@ -1,3 +1,11 @@
+# PortForge 0.25
+
+**Play game** opens the game or returns to its existing window. Background engine-settings probes do not count as gameplay. Play starts from the local save immediately; to fetch another PC's progress first, use **Cloud saves** before playing. Automatic cloud saving resumes after the game closes. If a game exits during startup, the status shows the exit and available log details.
+
+**Upscaler:** in Graphics and performance, choose **AMD FSR 1 (automatic)** and try **75% render scale** to reduce GPU work. Engine 1.8 reconstructs and sharpens the image when the game window is larger than the rendered image. Linear is the off switch, and every input has a Clear button. Equal-size images, downscaling, unsupported formats or insufficient memory keep standard scaling. Older engines omit the new setting; install Engine 1.8 from the Engine tab to use it.
+
+FSR 1 is spatial upscaling, without frame generation. FSR 4 and NVIDIA DLSS are not included. It does not change game speed or guarantee doubled FPS, zero stutter or fixed 1% lows. Auto tune renders offscreen and excludes display upscaling cost; compare actual gameplay as well.
+
 # PortForge 0.24
 
 ## Play any time

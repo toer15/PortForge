@@ -1,3 +1,9 @@
+# PortForge 0.25 / Engine 1.8
+
+Play opens your game or returns to the existing window; background settings probes no longer count as gameplay. The Graphics and performance window now includes **AMD FSR 1 spatial upscaling**, with a Linear off switch and per-game settings. It applies automatically on Engine 1.8 when the rendered SDR image is smaller than the game window. Try 75% render scale to reduce GPU load. New conversions and the existing backed-up engine upgrade path include it.
+
+344 application checks, 10 installer checks and five selected engine suites cover this release. Mario launched on this PC with FSR actually active; short samples did not establish a game-wide speedup. **FSR 4, DLSS and frame generation are not implemented.** There is no promise of doubled FPS, fixed 1% lows, zero lag, or fully static native execution; the engine retains AOT/JIT translation. See VALIDATION-0.25.md for the test scope.
+
 # PortForge
 
 **Turn a Switch game file into a Windows game folder you can play from an `.exe`.**

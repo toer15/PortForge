@@ -9,7 +9,8 @@ internal static class TuningFixture
         Console.OutputEncoding = new System.Text.UTF8Encoding(false);
         if (Array.IndexOf(args, "--settings") >= 0)
         {
-            foreach (string key in new[] {"fps_limit", "resolution", "anisotropy", "shadows", "vsync", "docked", "fullscreen", "log", "compute", "vk_validation", "profile", "nvn_trace", "vk_gpu_profile", "mme_verify", "diag", "pipeline_threads", "jit_threads"})
+            if (Array.IndexOf(args, "--slow-probe") >= 0) Thread.Sleep(1500);
+            foreach (string key in new[] {"fps_limit", "resolution", "anisotropy", "upscaler", "shadows", "vsync", "docked", "fullscreen", "log", "compute", "vk_validation", "profile", "nvn_trace", "vk_gpu_profile", "mme_verify", "diag", "pipeline_threads", "jit_threads"})
                 Console.WriteLine("Test\t" + key + "\t0\tint\t0\t1000\thelp\tlabel\t");
             return;
         }

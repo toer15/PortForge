@@ -16,6 +16,8 @@ internal static class EngineTests
         File.WriteAllText(Path.Combine(folder, "libengine-test.dll"), "engine library");
         File.WriteAllText(Path.Combine(folder, "zlib1.dll"), "new zlib");
         File.WriteAllText(Path.Combine(folder, "ENGINE.txt"), "version=1.0\nbase=0de0a87\nfeatures=Smart async shaders\n");
+        Directory.CreateDirectory(Path.Combine(folder, "licenses"));
+        File.WriteAllText(Path.Combine(folder, "licenses", "AMD-FidelityFX-FSR1-LICENSE.txt"), "AMD license fixture");
         return folder;
     }
 
@@ -41,6 +43,7 @@ internal static class EngineTests
 
             string message = EngineManager.Install(exe, package, null, CancellationToken.None);
             Check(message.Contains("Installed") && EngineManager.IsInstalled(exe, package), "Installing puts the PortForge Engine under the game and checks that it starts");
+            Check(File.ReadAllText(Path.Combine(games,"PortForge-engine-licenses","AMD-FidelityFX-FSR1-LICENSE.txt")) == "AMD license fixture", "The engine carries its upscaler license into the player's game folder");
             Check(File.ReadAllText(Path.Combine(games, "zlib1.dll")) == "new zlib" && File.Exists(Path.Combine(games, "libengine-test.dll")), "The engine's libraries are installed beside it");
             string backup = Path.Combine(games, EngineManager.BackupFolderName);
             Check(File.ReadAllBytes(Path.Combine(backup, "My Game.exe")).SequenceEqual(originalBytes) && File.ReadAllText(Path.Combine(backup, "zlib1.dll")) == "original zlib", "The original engine and the libraries it replaced are kept");

@@ -112,6 +112,7 @@ namespace PortForge
                     compiledGame = game;
                     string exe = Path.Combine(game, r.Name + ".exe");
                     string module = Path.Combine(game, r.Name + "_code.dll");
+                    EngineManager.CopyLicenses(Path.GetDirectoryName(Path.GetFullPath(r.Backend)), game, token);
                     RequireNativeX64(exe);
                     RequireNativeX64(module);
                     if (!File.Exists(Path.Combine(game, r.Name + ".abi"))) throw new IOException("The backend did not publish a completed compilation checkpoint.");

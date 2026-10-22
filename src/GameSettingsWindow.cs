@@ -15,6 +15,7 @@ namespace PortForge
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183), Muted = Color.FromArgb(173, 185, 203);
         private readonly TextBox game = new TextBox { AccessibleName = "Windows game executable", Dock = DockStyle.Fill };
         private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (recommended)", "Custom limit", "Unlimited"), filtering = Filtering();
+        private readonly ComboBox upscaler = Choice("Upscaler", "Linear", "AMD FSR 1 (automatic)");
         private readonly NumericUpDown fps = Number("Custom FPS limit", 10, 1000, 120, 10), scale = Number("Render scale percent", 25, 400, 100, 25);
         private readonly CheckBox vsync = Toggle("VSync (reduce tearing)", true), shadows = Toggle("Draw shadows", true), docked = Toggle("TV mode (off = handheld)", true), fullscreen = Toggle("Start fullscreen", false);
         private readonly Label badge = Label("READY", 9, Mint), status = Label("Choose a Windows game", 16, Color.White), message = Label("Browse to a generated game .exe, then load its settings.", 10, Muted);
@@ -128,6 +129,8 @@ namespace PortForge
             AddHint("Click an FPS button to set a custom cap and turn VSync off. Play game saves and verifies these settings automatically. Game speed uses the game's own timing; the hidden custom number is not active in that mode.");
             AddHint("Speed lock: with PortForge Engine 1.6 or newer, a game always runs at its own speed, whatever the cap. A higher cap can't speed up a 30 or 60 FPS game, and a lower cap shows fewer frames instead of slowing the game down. Your PC's power goes into sharper graphics instead. VSync may also limit FPS to your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
+            AddOption("Upscaler", upscaler, delegate { upscaler.SelectedIndex = 1; });
+            AddHint("AMD FSR 1 upscales and sharpens when the rendered image is smaller than the game window. Try 75% render scale to reduce GPU work. Requires Engine 1.8. FSR 4, DLSS and frame generation are not included; CPU and loading stalls can remain.");
             AddHint("100% = the game's original resolution. Lower values reduce 3D GPU work; Vulkan scales the final image to your window. Higher values sharpen it and cost performance. Scaling cannot remove CPU, game-loading or shader-compilation stalls.");
             AddOption("Texture detail at angles", filtering, delegate { filtering.SelectedIndex = 0; });
             var checks = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
@@ -153,6 +156,7 @@ namespace PortForge
             game.Text = (initialGame != null && File.Exists(initialGame)) ? initialGame : (RememberedGame() ?? "");
             ShowProfile(new GraphicsProfile());
             scale.ValueChanged+=delegate{Changed();};filtering.SelectedIndexChanged+=delegate{Changed();};foreach(var check in new[]{vsync,shadows,docked,fullscreen})check.CheckedChanged+=delegate{Changed();};
+            upscaler.SelectedIndexChanged+=delegate{Changed();};
             Shown += async delegate { if (File.Exists(game.Text)) await LoadGame(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (cancellation != null) { e.Cancel = true; cancellation.Cancel(); } };
             healthTimer.Tick+=async delegate{if(Visible&&watch.Checked)await RefreshHealthInBackground();};healthTimer.Start();
@@ -267,47 +271,48 @@ namespace PortForge
             starting=true;launch.Enabled=false;
             try
             {
-                if(GameDiagnostics.Running(exe)&&!PlayFirst.Busy(exe)){SetStatus("PLAYING","The game is already running","Switch to its window to keep playing.",Mint);return;}
+                if(GameDiagnostics.Running(exe)&&!PlayFirst.Busy(exe)){GameOptimization.BringGameForward(exe);SetStatus("PLAYING","Returned to your game","Your current session is still running. Changed settings will apply after you close it.",Mint);return;}
                 SetStatus("STARTING","Starting the game","Pausing PortForge's checks for this game. Your save is kept exactly as it was.",Mint);
                 if(cancellation!=null)cancellation.Cancel();
                 var wait=Stopwatch.StartNew();
                 while(true)
                 {
                     PlayFirst.Yield(exe);
-                    if(cancellation==null&&!PlayFirst.Busy(exe)&&!GameDiagnostics.Running(exe))break;
+                    if(cancellation==null&&!PlayFirst.Busy(exe))break;
                     if(wait.Elapsed.TotalSeconds>90)throw new IOException("A background check is still putting your save back. Press Play again in a moment.");
                     await Task.Delay(200);
                 }
                 mine=cancellation=new CancellationTokenSource();Busy(true);var token=mine.Token;
                 string recovered=await Task.Run(()=>GameStateGuard.RecoverStale(exe));
                 if(recovered!=null)history.AppendText(recovered+Environment.NewLine);
-                if(CloudSaves.Service.Get(exe).Enabled)
-                {
-                    SetStatus("SYNCING","Checking cloud saves","Getting your latest progress before the game starts.",Mint);
-                    CloudResult cloudResult=null;
-                    try
-                    {
-                        for(var cloudWait=Stopwatch.StartNew();;await Task.Delay(500))
-                        {
-                            cloudResult=await Task.Run(()=>CloudSaves.Service.Sync(exe,token));
-                            if(cloudResult.State!="BUSY"||cloudWait.Elapsed.TotalSeconds>30)break;
-                        }
-                    }
-                    catch(OperationCanceledException){throw;}
-                    catch(Exception e){cloudResult=new CloudResult{State="ERROR",Message=e.Message};}
-                    if(cloudResult.Conflict)history.AppendText("Cloud saves: another PC has different progress. Playing with this PC's save; both copies are kept, so choose one in Cloud saves later."+Environment.NewLine);
-                    else if(cloudResult.State=="ERROR"||cloudResult.State=="BUSY"||cloudResult.State=="WAITING")history.AppendText("Cloud saves: "+cloudResult.Message+" Playing with this PC's save; cloud sync runs again after the game closes."+Environment.NewLine);
-                }
+                if(GameOptimization.BringGameForward(exe)){SetStatus("PLAYING","Returned to your game","Your current session is still running.",Mint);return;}
+                history.AppendText("Play uses this PC's save immediately. Cloud syncing resumes after the game closes. Use Cloud saves before Play if you need progress from another PC."+Environment.NewLine);
                 token.ThrowIfCancellationRequested();
                 try{await Task.Run(()=>GameOptimization.SaveAndVerify(exe,desired,capabilities));}
                 catch(Exception e){history.AppendText("Settings could not be saved ("+e.Message+"). Starting with the last saved settings."+Environment.NewLine);}
                 ShowProfile(GameOptimization.Load(exe));
-                using(var process=GameOptimization.SaveAndStart(exe,ReadProfile(),capabilities)){}
-                SetStatus("PLAYING","Game started",limiter.Text+" PortForge's checks wait until you close the game.",Mint);
+                // Settings were saved once above. Do not repeat a stopped-game check after starting.
+                using(var process=GameOptimization.StartForPlayer(exe))
+                {
+                    SetStatus("STARTING","Opening the game window","The engine is starting. PortForge's checks wait while you play.",Mint);
+                    for(var opening=Stopwatch.StartNew();opening.Elapsed.TotalSeconds<12;)
+                    {
+                        await Task.Delay(200);process.Refresh();
+                        if(process.HasExited)throw new IOException("The game closed during startup (exit "+process.ExitCode+"). "+StartupDetails(exe));
+                        if(process.MainWindowHandle!=IntPtr.Zero){GameOptimization.BringGameForward(exe);SetStatus("PLAYING","Game window opened",limiter.Text+" PortForge's checks wait until you close the game.",Mint);return;}
+                    }
+                }
+                SetStatus("STARTING","The engine is still starting","No game window has appeared yet. Press Play to check again; it will keep the same session.",Muted);
             }
             catch(OperationCanceledException){SetStatus("CANCELLED","Game start cancelled","Any verified settings changes are kept; the game was not launched.",Muted);}
             catch(Exception e){Error(e);}
             finally{if(mine!=null&&cancellation==mine){mine.Dispose();cancellation=null;}starting=false;Busy(cancellation!=null);}
+        }
+        private static string StartupDetails(string exe)
+        {
+            try { string path=Path.ChangeExtension(exe,".log");if(File.Exists(path)){var lines=File.ReadLines(path).Reverse().Take(12).Reverse();return String.Join(" ",lines).Trim();} }
+            catch(IOException){}catch(UnauthorizedAccessException){}
+            return "Open Automatic fixes to inspect the engine log.";
         }
         private async Task CheckHealth(bool forceAi,bool quiet=false)
         {
@@ -354,7 +359,7 @@ namespace PortForge
         }
         private GraphicsProfile ReadProfile()
         {
-            return new GraphicsProfile { FpsLimit = fpsMode.SelectedIndex == 0 ? "game" : fpsMode.SelectedIndex == 2 ? "0" : ((int)fps.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), Resolution = scale.Value / 100, Anisotropy = filtering.SelectedIndex, VSync = vsync.Checked, Shadows = shadows.Checked, Docked = docked.Checked, Fullscreen = fullscreen.Checked };
+            return new GraphicsProfile { FpsLimit = fpsMode.SelectedIndex == 0 ? "game" : fpsMode.SelectedIndex == 2 ? "0" : ((int)fps.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), Resolution = scale.Value / 100, Anisotropy = filtering.SelectedIndex, Upscaler = upscaler.SelectedIndex, VSync = vsync.Checked, Shadows = shadows.Checked, Docked = docked.Checked, Fullscreen = fullscreen.Checked };
         }
         private void ShowProfile(GraphicsProfile p)
         {
@@ -363,6 +368,7 @@ namespace PortForge
             if (fpsMode.SelectedIndex == 1) fps.Value = Int32.Parse(p.FpsLimit);
             fps.Visible=fps.Enabled = fpsMode.SelectedIndex == 1; scale.Value = p.Resolution * 100;
             filtering.SelectedIndex = p.Anisotropy;
+            upscaler.SelectedIndex = p.Upscaler;
             vsync.Checked = p.VSync; shadows.Checked = p.Shadows; docked.Checked = p.Docked; fullscreen.Checked = p.Fullscreen;
             showingProfile=false;dirty=false;UpdateLimiter();
         }

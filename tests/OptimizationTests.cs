@@ -69,6 +69,32 @@ internal static class OptimizationTests
             }
             Fails(() => GameOptimization.Tune(exe, profile, 60, new Updates(), CancellationToken.None, false), "An engine exiting before its requested duration is rejected");
             Check(File.ReadAllBytes(config).SequenceEqual(bytes), "Failed tuning also restores the exact original configuration");
+            var slowProbe = Task.Run(() => GameOptimization.Run(exe, "--settings --slow-probe", 10, CancellationToken.None));
+            var probeWatch = System.Diagnostics.Stopwatch.StartNew();
+            while (System.Diagnostics.Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exe)).Length == 0 && !slowProbe.IsCompleted && probeWatch.ElapsedMilliseconds < 3000) Thread.Sleep(20);
+            GameOptimization.EnsureStopped(exe);
+            Check(!GameDiagnostics.Running(exe) && !slowProbe.IsCompleted, "A live settings probe is not mistaken for a running game");
+            slowProbe.GetAwaiter().GetResult();
+            GameOptimization.SaveAndVerify(exe, profile, cap);
+            using (var firstPlay = GameOptimization.StartForPlayer(exe))
+            {
+                var startedWatch = System.Diagnostics.Stopwatch.StartNew();
+                while (!File.ReadAllText(config).Contains("runtime wrote") && startedWatch.ElapsedMilliseconds < 3000) Thread.Sleep(20);
+                byte[] runningSettings = File.ReadAllBytes(config);
+                using (var repeatedPlay = GameOptimization.SaveAndStart(exe, profile, cap))
+                    Check(firstPlay.Id == repeatedPlay.Id && File.ReadAllBytes(config).SequenceEqual(runningSettings), "Repeated Play returns the existing process without changing its live settings");
+                firstPlay.Kill(); firstPlay.WaitForExit();
+            }
+            Check(!GameDiagnostics.Running(exe), "An exited game does not prevent a new launch");
+            File.WriteAllBytes(config, bytes);
+            var fsr = profile.Copy();fsr.Upscaler = 0;GameOptimization.SaveAndVerify(exe,fsr,cap);
+            Check(GameOptimization.Load(exe).Upscaler == 0, "The upscaler off switch survives saving and verification");
+            fsr.Upscaler = 1;GameOptimization.SaveAndVerify(exe,fsr,cap);
+            Check(GameOptimization.Load(exe).Upscaler == 1, "AMD FSR 1 round-trips through the per-game configuration");
+            var legacy = new RuntimeCapabilities();foreach(string key in cap.Keys.Where(k=>k!="upscaler"))legacy.Keys.Add(key);
+            File.WriteAllBytes(config,bytes);GameOptimization.SaveAndVerify(exe,fsr,legacy);
+            Check(!GameOptimization.ReadValues(File.ReadAllText(config)).ContainsKey("upscaler"), "An older engine is not given an unsupported upscaler setting");
+            File.WriteAllBytes(config,bytes);
             // Gameplay workload: the scripted play-through must use the guarded save and report gameplay results.
             GameOptimization.GameplaySeconds = 2;
             string saveFolder = Path.Combine(root, "Tuning game_data", "save"); Directory.CreateDirectory(saveFolder); File.WriteAllText(Path.Combine(saveFolder, "slot.dat"), "my progress");

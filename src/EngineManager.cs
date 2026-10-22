@@ -70,7 +70,7 @@ namespace PortForge
             gameExe = Path.GetFullPath(gameExe); GameOptimization.ValidateGame(gameExe); GameOptimization.EnsureStopped(gameExe);
             string folder = Path.GetDirectoryName(gameExe), backup = Path.Combine(folder, BackupFolderName);
             if (!File.Exists(Path.Combine(folder, Path.GetFileNameWithoutExtension(gameExe) + "_code.dll"))) throw new IOException("This is not a converted game: its _code.dll is missing.");
-            if (IsInstalled(gameExe, package)) return "The " + package.Name + " is already installed for this game.";
+            if (IsInstalled(gameExe, package)) { CopyLicenses(package.Folder, folder, token); return "The " + package.Name + " is already installed for this game."; }
             using (PlayFirst.Begin(gameExe)) return InstallUnheld(gameExe, folder, backup, package, progress, token);
         }
         private static string InstallUnheld(string gameExe, string folder, string backup, EnginePackage package, IProgress<string> progress, CancellationToken token)
@@ -87,6 +87,7 @@ namespace PortForge
             try
             {
                 foreach (string lib in package.Libraries) CopyVerified(Path.Combine(package.Folder, lib), Path.Combine(folder, lib), token);
+                CopyLicenses(package.Folder, folder, token);
                 CopyVerified(package.Exe, gameExe, token);
                 if (progress != null) progress.Report("Checking that the game starts on the new engine (about 15 seconds). Your save and settings are protected.");
                 string output = TimedRun(gameExe, "-H --seconds=4 --log=1 --fullscreen=0", null, token);
@@ -99,6 +100,18 @@ namespace PortForge
         }
 
         public const string DeclinedFile = "keep-original-engine.txt";
+        public static void CopyLicenses(string engineFolder, string gameFolder, CancellationToken token)
+        {
+            string source = Path.Combine(engineFolder, "licenses");
+            if (!Directory.Exists(source)) return;
+            string target = Path.Combine(gameFolder, "PortForge-engine-licenses");
+            Directory.CreateDirectory(target);
+            foreach (string file in Directory.GetFiles(source, "*.txt"))
+            {
+                string destination = Path.Combine(target, Path.GetFileName(file));
+                if (!File.Exists(destination) || GameDownloads.HashFile(file, token) != GameDownloads.HashFile(destination, token)) CopyVerified(file, destination, token);
+            }
+        }
         /// <summary>Why the doctor should not put the PortForge Engine under this game again (the player chose the original, or it failed), or null.</summary>
         public static string Declined(string gameExe)
         {
