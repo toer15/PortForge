@@ -13,4 +13,5 @@ backend-location.txt
 engine/src/
 engine/package/
 engine/package-candidate/
+engine/package-*/
 engine/*.log

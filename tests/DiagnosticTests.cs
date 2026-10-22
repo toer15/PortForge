@@ -32,6 +32,12 @@ internal static class DiagnosticTests
             Check(GameDownloads.HashFile(exe,CancellationToken.None)==exeHash&&GameDownloads.HashFile(code,CancellationToken.None)==codeHash&&File.ReadAllText(Path.Combine(root,"save.dat"))=="saved game"&&File.ReadAllText(Path.ChangeExtension(exe,".jitcache"))=="keep cache","Repairs preserve executable code, game saves and caches");
             Check(GameDiagnostics.Scan(exe,cap,null).Issues.Any(i=>i.Id=="occlusion"&&i.Fix==null),"Changing settings does not falsely clear recorded engine-level problems");
             GameDiagnostics.RestoreLastRepair(exe);Check(File.ReadAllText(Path.ChangeExtension(exe,".ini"))==ini,"Undo restores the exact pre-repair settings");
+            var locked=new RuntimeCapabilities();locked.Keys.UnionWith(cap.Keys);locked.Keys.Add("speed_lock");
+            Check(GameDiagnostics.Inspect("fps_limit=120\r\nspeed_lock=0\r\n","",locked).Issues.Any(i=>i.Id=="speed_lock_off"&&i.Fix=="speed_lock")&&!GameDiagnostics.Inspect("fps_limit=120\r\n","",locked).Issues.Any(i=>i.Id=="timing"||i.Id=="speed_lock_off"),"A disabled speed lock is detected as repairable, and a high cap under the lock is not reported as a speed risk");
+            File.WriteAllText(Path.ChangeExtension(exe,".ini"),"fps_limit=240\r\nspeed_lock=0\r\n",new UTF8Encoding(false));GameDiagnostics.Repair(exe,locked,null,new[]{"speed_lock"});
+            var lockValues=GameOptimization.ReadValues(File.ReadAllText(Path.ChangeExtension(exe,".ini")));
+            Check(lockValues["speed_lock"]=="1"&&lockValues["fps_limit"]=="240","The doctor turns the speed lock back on and keeps the player's FPS cap");
+            File.WriteAllText(Path.ChangeExtension(exe,".ini"),ini,new UTF8Encoding(false));
             var profile=new GraphicsProfile {FpsLimit="144",Resolution=1,VSync=false,Anisotropy=8};GameOptimization.SaveAndVerify(exe,profile,cap);
             string saved=File.ReadAllText(Path.ChangeExtension(exe,".ini"));int backups=Directory.GetFiles(root,"*.before-portforge-*.bak").Length;
             GameOptimization.SaveAndVerify(exe,profile,cap);

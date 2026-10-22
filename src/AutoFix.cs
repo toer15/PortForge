@@ -62,13 +62,15 @@ namespace PortForge
                 var pc = HardwareProfile.Detect(); string path = GameOptimization.ConfigPath(game);
                 var values = File.Exists(path) ? GameOptimization.ReadValues(File.ReadAllText(path)) : new Dictionary<string, string>();
                 var changes = new Dictionary<string, string>(); int now;
-                if (cap != null && cap.Keys.Contains("pipeline_threads") && (!values.ContainsKey("pipeline_threads") || !Int32.TryParse(values["pipeline_threads"], out now) || now < pc.PipelineThreads))
+                if(cap!=null&&cap.Keys.Contains("frame_guard")&&cap.Keys.Contains("pipeline_threads"))
+                {if(!values.ContainsKey("pipeline_threads")||values["pipeline_threads"]!="0")changes["pipeline_threads"]="0";}
+                else if (cap != null && cap.Keys.Contains("pipeline_threads") && (!values.ContainsKey("pipeline_threads") || !Int32.TryParse(values["pipeline_threads"], out now) || now < pc.PipelineThreads))
                     changes["pipeline_threads"] = pc.PipelineThreads.ToString(CultureInfo.InvariantCulture);
                 if (changes.Count > 0)
                 {
                     string text = File.Exists(path) ? File.ReadAllText(path) : "";
                     GameOptimization.AtomicWrite(path, new UTF8Encoding(false).GetBytes(GameOptimization.Merge(text, changes)), File.Exists(path) ? path + ".before-autofix-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + ".bak" : null);
-                    fixedNow.Add("Set the engine's shader workers to " + changes["pipeline_threads"] + " for this PC (" + pc.LogicalCpus + " CPU threads). The previous settings are backed up.");
+                    fixedNow.Add(changes["pipeline_threads"]=="0"?"The engine now chooses shader workers on the PC running the game, on every launch. Previous settings are backed up.":"Set the engine's shader workers to " + changes["pipeline_threads"] + " for this PC (" + pc.LogicalCpus + " CPU threads). The previous settings are backed up.");
                 }
                 else fine.Add("The engine's shader workers already suit this PC.");
                 string async; if (EngineManager.IsInstalled(game, package) && values.TryGetValue("async_shaders", out async) && async == "0") limits.Add("Smart async shaders are switched off for this game. You turned them off; they are the main stutter fix, so turn them back on in this tab if you want it.");

@@ -126,7 +126,7 @@ namespace PortForge
             {int cap=value;var button=Button(value+" FPS",false);button.AutoSize=true;button.Height=30;button.Click+=delegate{fpsMode.SelectedIndex=1;fps.Value=cap;vsync.Checked=false;Changed();};framePresets.Controls.Add(button);}
             options.Controls.Add(framePresets);options.Controls.Add(limiter);
             AddHint("Click an FPS button to set a custom cap and turn VSync off. Play game saves and verifies these settings automatically. Game speed uses the game's own timing; the hidden custom number is not active in that mode.");
-            AddHint("A cap is a maximum. Higher FPS can change game speed or physics; some games need a game-specific patch. VSync may also limit FPS to your display's refresh rate.");
+            AddHint("Speed lock: with PortForge Engine 1.5 or newer, a game never runs faster than its own speed, whatever the cap. A higher cap can't speed up a 30 or 60 FPS game; your PC's power goes into sharper graphics instead. A lower cap still lowers FPS. VSync may also limit FPS to your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
             AddHint("100% = the game's original resolution. Lower values reduce GPU work; higher values sharpen the picture and cost performance.");
             AddOption("Texture detail at angles", filtering, delegate { filtering.SelectedIndex = 0; });

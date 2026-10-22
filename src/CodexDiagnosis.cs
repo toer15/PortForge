@@ -20,7 +20,7 @@ namespace PortForge
 public static class CodexDiagnosis
     {
         private static string LastChars(string text,int count){text=(text??"").Trim();return text.Length<=count?text:text.Substring(text.Length-count);}
-        private static readonly string[] Rules={"restore_runtime","disable_debug","restore_rendering","reduce_upscale","speed_pipelines"};
+        private static readonly string[] Rules={"restore_runtime","disable_debug","restore_rendering","reduce_upscale","speed_pipelines","speed_lock"};
         public static string Find()
         {
             string installed=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","OpenAI","Codex","bin","codex.exe");

@@ -1,4 +1,22 @@
-# PortForge 0.20
+# PortForge 0.21
+
+## Game speed lock
+
+PortForge Engine 1.5 has a **Speed lock**, on by default. Most games count their frames, so on earlier engines an FPS cap above the game's own pace (for example 120 on a 60 FPS game), Unlimited or F4 made the game itself run faster. With the speed lock on, the engine never shows frames sooner than the pace the game asks for. A 30 FPS game stays at its speed, and so does a 60 FPS game, whatever the cap. A lower cap still lowers FPS. A game that times itself (swap interval 0) is still limited only by the cap you set.
+
+Your PC's power goes into picture quality instead of speed. PC matching and automatic tuning pick the highest render scale and texture filtering that hold the game's pace on your hardware. New conversions, watched games that receive Engine 1.5, PC matching and **Auto fix everything** all keep the lock on. If it is ever switched off, the Doctor reports it and its automatic repair turns it back on. Advanced users can set `speed_lock=0` in the game's .ini to go back to the old behavior.
+
+## Automatic engine performance protection
+
+The bundled PortForge Engine 1.5 has **Frame guard** on by default. New conversions use it automatically, including conversions handed over from Downloads. The setting works inside the generated game's runtime when the game is launched directly.
+
+Frame guard shares one short optional shader-wait allowance across a frame, instead of waiting again for each new pipeline. It also keeps cached background compilation from taking every shader worker. Draws needed to preserve menus or game data still complete. In **Graphics and FPS > Engine**, **Automatic frame guard** can be turned off for a compatibility comparison; it applies at the next launch. Smart async shaders and threaded command recording must remain enabled for optional draw waits to be avoided.
+
+New games matched by this engine use automatic shader/JIT worker counts on every launch. Counts follow the CPUs available on the PC running the game. Explicit manual thread counts remain available. The engine also resets its pacing deadline when an FPS limit or native game interval changes, avoiding a pause from the previous pace. It preserves the selected game speed, FPS cap and VSync setting.
+
+The Doctor installs a newer bundled engine under watched converted games when they are closed, with the existing backup and startup check. **Auto fix everything** also selects the new engine's automatic shader workers. A game restored manually to its original engine remains an exception until you choose to install again.
+
+These changes address specific engine stalls. Game loading, new shader translation, driver waits, CPU/GPU limits and compatibility problems can still produce slow frames. See `Source/VALIDATION-0.21.md` in the source ZIP for measured results and limits.
 
 ## Cloud saves
 

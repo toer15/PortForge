@@ -87,6 +87,13 @@ internal static class OptimizationTests
             Check(strongPlan["fps_limit"]=="120"&&strongPlan["vsync"]=="0"&&strongPlan["fullscreen"]=="1"&&strongPlan["shadows"]=="0"&&!strongPlan.ContainsKey("async_translation"), "PC matching preserves timing, display choices and experimental shader preferences");
             var noWorkers=new RuntimeCapabilities();noWorkers.Keys.UnionWith(picked.Values().Keys);
             Check(!PcOptimization.SettingsFor(strong,picked,noWorkers).ContainsKey("pipeline_threads"),"Unsupported engine worker settings are not written");
+            var guarded=new RuntimeCapabilities();guarded.Keys.UnionWith(cap.Keys);guarded.Keys.Add("frame_guard");
+            var guardedPlan=PcOptimization.SettingsFor(strong,picked,guarded);
+            Check(guardedPlan["pipeline_threads"]=="0"&&guardedPlan["jit_threads"]=="0"&&!guardedPlan.ContainsKey("async_translation"),"Frame-guard engines adapt workers on each launch while preserving experimental shader choices");
+            Check(!guardedPlan.ContainsKey("speed_lock"),"Engines without a speed lock are not given the setting");
+            var lockedCap=new RuntimeCapabilities();lockedCap.Keys.UnionWith(guarded.Keys);lockedCap.Keys.Add("speed_lock");
+            var lockedPlan=PcOptimization.SettingsFor(strong,picked,lockedCap);
+            Check(lockedPlan["speed_lock"]=="1"&&lockedPlan["fps_limit"]=="120","PC matching keeps every game at its own speed while preserving the player's FPS cap");
             var steady=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=1,WorstFrameMs=70,Profile=new GraphicsProfile{Resolution=.75m}};
             var hitching=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=12,WorstFrameMs=500,Profile=new GraphicsProfile{Resolution=1m}};
             Check(GameOptimization.SelectSmooth(new[]{steady,hitching},60,1)==steady,"Automatic matching chooses fewer freezes when average FPS is equal");

@@ -110,7 +110,9 @@ namespace PortForge
             if(Regex.IsMatch(h.Log,@"(?i)unsupported (?:shader|opcode)|shader[^\r\n]*(?:translation failed|failed to translate)|[1-9]\d* draws[^\r\n]*[1-9]\d* skipped|draws, [1-9]\d* skipped|batches[^\r\n]*[1-9]\d* skipped"))
                 h.Issues.Add(new GameIssue("renderer_failure","Unsupported or skipped rendering was reported","Some rendering operations failed or were skipped. A supported engine/code fix is needed; the app will not mark this resolved by hiding the message."));
             if(Regex.IsMatch(h.Log,@"(?im)^.*\bFATAL:|No new frame for \d+ seconds")) h.Issues.Add(new GameIssue("runtime_failure","The runtime reported a failure or stall","The latest recorded session contains a fatal error or stalled-frame warning. Review the game log and AI diagnosis; no general binary repair is known."));
-            if(get("fps_limit","game")!="game") h.Issues.Add(new GameIssue("timing","Custom frame timing is selected","Higher FPS can change game speed, physics or world behavior in some games. If that happens, select Game speed. A limiter cannot create correct timing patches for every game."));
+            bool speedLock=cap!=null&&cap.Keys.Contains("speed_lock");
+            if(speedLock&&get("speed_lock","1")=="0") h.Issues.Add(new GameIssue("speed_lock_off","Game speed lock is off","With the speed lock off, an FPS limit above the game's own pace makes the game itself run faster than on the console. The repair turns the speed lock back on: the game keeps its own speed at any FPS limit.","speed_lock"));
+            else if(!speedLock&&get("fps_limit","game")!="game") h.Issues.Add(new GameIssue("timing","Custom frame timing is selected","Higher FPS can change game speed, physics or world behavior in some games. If that happens, select Game speed. A limiter cannot create correct timing patches for every game."));
             return h;
         }
         private static readonly object RepairLock=new object();
@@ -141,11 +143,13 @@ namespace PortForge
             if(allowed.Contains("disable_debug"))foreach(string key in new[]{"log","vk_validation","profile","nvn_trace","vk_gpu_profile","mme_verify","diag"}) if(cap!=null&&cap.Keys.Contains(key))changes[key]=key=="log"?"1":"0";
             if(allowed.Contains("restore_rendering"))foreach(string key in new[]{"compute","shadows"})if(cap!=null&&cap.Keys.Contains(key))changes[key]="1";
             if(allowed.Contains("reduce_upscale")&&cap!=null&&cap.Keys.Contains("resolution"))changes["resolution"]="1";
+            if(allowed.Contains("speed_lock")&&cap!=null&&cap.Keys.Contains("speed_lock"))changes["speed_lock"]="1";
             if(allowed.Contains("speed_pipelines")&&cap!=null&&cap.Keys.Contains("pipeline_threads")&&Environment.ProcessorCount>=6)
             {
                 int want=HardwareProfile.PipelineThreadsFor(Environment.ProcessorCount),now;string iniText=File.Exists(GameOptimization.ConfigPath(exe))?File.ReadAllText(GameOptimization.ConfigPath(exe)):"";
                 var current=GameOptimization.ReadValues(iniText);
-                if(!current.ContainsKey("pipeline_threads")||!Int32.TryParse(current["pipeline_threads"],out now)||now<want)changes["pipeline_threads"]=want.ToString(CultureInfo.InvariantCulture);
+                if(cap.Keys.Contains("frame_guard"))changes["pipeline_threads"]="0";
+                else if(!current.ContainsKey("pipeline_threads")||!Int32.TryParse(current["pipeline_threads"],out now)||now<want)changes["pipeline_threads"]=want.ToString(CultureInfo.InvariantCulture);
             }
             if(changes.Count>0)
             {

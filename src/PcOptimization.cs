@@ -26,9 +26,12 @@ namespace PortForge
             var settings = pc.AutomaticBaseline(current).Values();
             if (pc.LogicalCpus > 0)
             {
-                if (cap.Keys.Contains("pipeline_threads")) settings["pipeline_threads"] = (pc.LogicalCpus <= 4 ? 1 : pc.PipelineThreads).ToString(CultureInfo.InvariantCulture);
-                if (cap.Keys.Contains("jit_threads")) settings["jit_threads"] = Math.Max(1, Math.Min(4, (pc.LogicalCpus - 2) / 4)).ToString(CultureInfo.InvariantCulture);
+                bool nativeAuto=cap.Keys.Contains("frame_guard");
+                if (cap.Keys.Contains("pipeline_threads")) settings["pipeline_threads"] = nativeAuto?"0":(pc.LogicalCpus <= 4 ? 1 : pc.PipelineThreads).ToString(CultureInfo.InvariantCulture);
+                if (cap.Keys.Contains("jit_threads")) settings["jit_threads"] = nativeAuto?"0":Math.Max(1, Math.Min(4, (pc.LogicalCpus - 2) / 4)).ToString(CultureInfo.InvariantCulture);
             }
+            // The engine's speed lock keeps every game at its own speed whatever the FPS limit; the hardware decides quality.
+            if (cap.Keys.Contains("speed_lock")) settings["speed_lock"] = "1";
             return settings;
         }
 
@@ -77,6 +80,8 @@ namespace PortForge
                 report.AppendLine(result.Warning);
             }
             report.AppendLine("\r\n" + result.Summary);
+            report.AppendLine("Engine 1.4 and newer use frame_guard=1 by default and resolve automatic worker counts on the PC running the game. A copied game can therefore adapt its workers on each launch.");
+            report.AppendLine("Engine 1.5 and newer keep speed_lock=1: no FPS cap can make the game run faster than its own pace, so this PC's power goes into render scale and filtering instead.");
             report.AppendLine("Local hardware rules and measured samples; no AI account or hardware upload is needed. FPS, VSync, controllers and experimental shader preferences are preserved. The game selects its Vulkan device; the highest-rated Windows adapter is not proof of the active GPU. Later areas can behave differently; zero lag and universal compatibility are not guaranteed.");
             try { File.WriteAllText(result.ReportPath, report.ToString(), new UTF8Encoding(false)); }
             catch (IOException e) { result.Warning = (result.Warning ?? "") + " Could not save the PC settings report: " + e.Message; }

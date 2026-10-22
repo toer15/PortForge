@@ -1,5 +1,5 @@
 diff --git a/src/nx/gpu/shader/shader.c b/src/nx/gpu/shader/shader.c
-index 43d443b..5866e24 100644
+index 43d443b920317e2b7dda9054ab5d6b73bfb39c8e..5866e243e95621b7c53a4892687b7c4f62932dd9 100644
 --- a/src/nx/gpu/shader/shader.c
 +++ b/src/nx/gpu/shader/shader.c
 @@ -14,7 +14,7 @@
@@ -12,7 +12,7 @@ index 43d443b..5866e24 100644
  const u64* shader_words(const u8* code, u32 bytes, u64** copy) {
      u32 i, n = bytes / 8;
 diff --git a/src/nx/gpu/shader/shader.h b/src/nx/gpu/shader/shader.h
-index 4e94d17..7cdb310 100644
+index 4e94d17e8be868c63300a4ba8db25127c73d963f..7cdb3103d09b0700a3539a9924650dcb193ef0e5 100644
 --- a/src/nx/gpu/shader/shader.h
 +++ b/src/nx/gpu/shader/shader.h
 @@ -138,7 +138,8 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
@@ -25,11 +25,49 @@ index 4e94d17..7cdb310 100644
  /* the targets of the BRX at word index from its jump table, at most max_targets, or -1 */
  int shader_brx_targets(const u64* words, u32 index, u32 count, u32* targets, int max_targets);
  /* the program's hash, and its length in bytes in out_len */
+diff --git a/src/nx/gpu/vk/frame_policy.h b/src/nx/gpu/vk/frame_policy.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..147ff8e1ebff4b5c1ad8ff138a1fdb79cccadba2
+--- /dev/null
++++ b/src/nx/gpu/vk/frame_policy.h
+@@ -0,0 +1,24 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#ifndef PF_FRAME_POLICY_H
++#define PF_FRAME_POLICY_H
++#include <stdint.h>
++
++#define PF_FRAME_WAIT_NS UINT64_C(1500000)
++typedef struct { uint64_t spent; } PfFrameBudget;
++static inline uint64_t pf_frame_allowance(const PfFrameBudget* b) {
++    return b->spent < PF_FRAME_WAIT_NS ? PF_FRAME_WAIT_NS - b->spent : 0;
++}
++static inline void pf_frame_charge(PfFrameBudget* b, uint64_t elapsed) {
++    uint64_t left = pf_frame_allowance(b);
++    b->spent += elapsed < left ? elapsed : left;
++}
++static inline int pf_shader_workers(int setting, int cpus) {
++    if (setting > 0) return setting > 32 ? 32 : setting;
++    if (cpus > 0 && cpus <= 4) return 1;
++    int n = cpus / 4;
++    return n < 2 ? 2 : n > 6 ? 6 : n;
++}
++static inline int pf_background_workers(int workers, int guard) {
++    return guard && workers > 1 ? workers - 1 : workers;
++}
++#endif
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..edcf208 100644
+index 33f94b6758dd038cc13a41d41bca71f12d639278..66f0670bf57946aaafce9e3774f524cfdcb96095 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
-@@ -49,9 +49,9 @@ static int sh_cb_read(u32 idx, u32 off, u32* out) {
+@@ -16,6 +16,7 @@
+ #include "nx/gpu/vk/vk.h"
+ #include "nx/gpu/vk/pipeline_file.h"
+ #include "nx/gpu/vk/internal_spv.h"
++#include "nx/gpu/vk/frame_policy.h"
+ #include "common/utilities/build_info.h"
+ #include "common/utilities/common.h"
+ #include <sys/stat.h>
+@@ -49,9 +50,9 @@ static int sh_cb_read(u32 idx, u32 off, u32* out) {
      *out = gmem_r32(a + off);
      return 1;
  }
@@ -42,7 +80,7 @@ index 33f94b6..edcf208 100644
  static int rec_read(u32 idx, u32 off, u32* out) {
      int ok = g_rec_read(idx, off, out);
      VkCbReads* reads = g_rec;
-@@ -345,9 +345,38 @@ static u64 g_pipes_new, g_sh_new, g_sh_ns;
+@@ -345,9 +346,38 @@ static u64 g_pipes_new, g_sh_new, g_sh_ns;
  static u64 g_pipe_wait_ns; /* the GPU thread's and the recording thread's waits, added atomically */
  static u64 g_pipe_make_ns; /* the workers' time making pipelines, added atomically */
  static u64 g_pipe_hits;    /* pipelines the pipeline cache had */
@@ -83,7 +121,7 @@ index 33f94b6..edcf208 100644
      g_sh_ch = ch;
      g_sh_bind = stage <= ST_FS ? stage : 0;
      u32 mask[20] = {(u32)int_mask,
-@@ -389,6 +418,11 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+@@ -389,6 +419,11 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
              ca->wseen = vk_ww_now();
              ca->gw = gpu_mem_generation();
          }
@@ -95,7 +133,7 @@ index 33f94b6..edcf208 100644
          if (same && vk_cb_reads_hold(&s->cbr, sh_cb_read)) return s;
      } else /* the way used longest ago */
          ca = !set[0].s || (set[1].s && (i32)(set[0].epoch - set[1].epoch) <= 0) ? &set[0] : &set[1];
-@@ -439,8 +473,14 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+@@ -439,8 +474,14 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
         earlier runs (pf_merge) are found only so */
      for (VkSh* q = g_shh[h & 1023]; q && !s; q = q->next)
          if (q->hash == h && q->stage == stage && !memcmp(q->mask, mask, sizeof mask) && q->clen == len &&
@@ -111,7 +149,7 @@ index 33f94b6..edcf208 100644
      if (!s) {
          s = calloc(1, sizeof *s);
          if (!s) {
-@@ -471,6 +511,9 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+@@ -471,6 +512,9 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
              memcpy(s->si.gp_skip_mask, mask + 12, sizeof s->si.gp_skip_mask);
              if (xfb) s->si.xfb = *xfb;
          }
@@ -121,7 +159,7 @@ index 33f94b6..edcf208 100644
          if (vk_corpus_dir()) shader_corpus_save(vk_corpus_dir(), code, mlen, 0x10000, stage, &s->si, h ^ mix);
          u64 t0 = plat_ns();
          size_t nw = 0;
-@@ -505,6 +548,7 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+@@ -505,6 +549,7 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
          }
          g_sh_new++;
          g_sh_ns += plat_ns() - t0;
@@ -129,7 +167,7 @@ index 33f94b6..edcf208 100644
          s->next = g_shh[h & 1023];
          g_shh[h & 1023] = s;
      }
-@@ -520,6 +564,22 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+@@ -520,6 +565,22 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
      return s;
  }
  
@@ -152,10 +190,11 @@ index 33f94b6..edcf208 100644
  VkShaderModule vk_module_spv(const u32* spv, size_t nw) {
      VkShaderModuleCreateInfo mi = {
          .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
-@@ -791,13 +851,27 @@ static PCond g_pj_work, g_pj_done;
+@@ -791,13 +852,31 @@ static PCond g_pj_work, g_pj_done;
  static Pipe *g_pj_head, *g_pj_tail; /* a draw's */
  static Pipe *g_pw_head, *g_pw_tail; /* the file's */
  static int g_pj_started, g_pj_threads;
++static int g_pw_active;
 +static ShJob *g_tj_head, *g_tj_tail; /* shaders to translate, before any pipeline (a pipeline needs its shaders) */
 +static void sh_job_run(ShJob* j);
  static void pipe_worker(void* arg) {
@@ -165,7 +204,9 @@ index 33f94b6..edcf208 100644
          VkPipeline p;
          pm_lock(&g_pj_lock);
 -        while (!g_pj_head && !g_pw_head) pc_wait(&g_pj_work, &g_pj_lock, -1);
-+        while (!g_pj_head && !g_pw_head && !g_tj_head) pc_wait(&g_pj_work, &g_pj_lock, -1);
++        while (!g_pj_head && !g_tj_head &&
++               (!g_pw_head || g_pw_active >= pf_background_workers(g_pj_threads, g_settings.frame_guard)))
++            pc_wait(&g_pj_work, &g_pj_lock, -1);
 +        if (g_tj_head) {
 +            ShJob* j = g_tj_head;
 +            g_tj_head = j->next;
@@ -178,13 +219,56 @@ index 33f94b6..edcf208 100644
 +            pm_unlock(&g_pj_lock);
 +            continue;
 +        }
++        int background = !g_pj_head;
          if (g_pj_head) {
              e = g_pj_head;
              g_pj_head = e->job;
-@@ -850,6 +924,32 @@ static void pipe_queue(Pipe* e, int queue) {
-     e->queued = queue;
-     pc_signal(&g_pj_work);
+@@ -806,11 +885,13 @@ static void pipe_worker(void* arg) {
+             e = g_pw_head;
+             g_pw_head = e->job;
+             if (!g_pw_head) g_pw_tail = NULL;
++            g_pw_active++;
+         }
+         e->queued = 0;
+         pm_unlock(&g_pj_lock);
+         p = pipe_make(e, 0);
+         pm_lock(&g_pj_lock);
++        if (background) { g_pw_active--; pc_broadcast(&g_pj_work); }
+         e->p = p;
+         __atomic_store_n(&e->ready, 1, __ATOMIC_RELEASE);
+         pc_broadcast(&g_pj_done);
+@@ -818,13 +899,7 @@ static void pipe_worker(void* arg) {
+     }
  }
+ int vk_pipeline_worker_count(int setting, int cpus) {
+-    int n = cpus / 4;
+-    if (setting > 0) return setting;
+-    /* a quarter of the CPUs, two to six: the driver's compile is the CPU's work, which the game's threads need too,
+-       and a first run's bursts of new pipelines go to them side by side (vk_pipeline_get_deferred) */
+-    if (n < 2) n = 2;
+-    if (n > 6) n = 6;
+-    return n;
++    return pf_shader_workers(setting, cpus);
+ }
+ /* the workers, started the first time one is needed: how many there are (g_pj_lock) */
+ static int pipe_workers(void) {
+@@ -835,6 +910,9 @@ static int pipe_workers(void) {
+         pc_init(&g_pj_done);
+         for (int i = 0; i < n; i++)
+             if (!plat_thread(pipe_worker, NULL, (size_t)1 << 20)) g_pj_threads++;
++        LOG("vulkan: %d shader workers, at most %d warming cached pipelines; frame guard %s\n",
++            g_pj_threads, pf_background_workers(g_pj_threads, g_settings.frame_guard),
++            g_settings.frame_guard ? "on (1.5 ms shared optional wait budget)" : "off");
+     }
+     return g_pj_threads;
+ }
+@@ -848,7 +926,33 @@ static void pipe_queue(Pipe* e, int queue) {
+         *head = e;
+     *tail = e;
+     e->queued = queue;
+-    pc_signal(&g_pj_work);
++    pc_broadcast(&g_pj_work);
++}
 +/* PortForge: a draw's new pipeline goes to the front of the draws' queue, and one the draw may skip (vk_pipeline_skippable)
 +   moves to the back. A bind that must wait for its pipeline (a loading screen, an image drawn once) used to queue behind
 +   every pipeline of the 3D world, which are skipped while they are made: one game's loading screen waited 1.6 s for 13
@@ -194,7 +278,7 @@ index 33f94b6..edcf208 100644
 +    g_pj_head = e;
 +    if (!g_pj_tail) g_pj_tail = e;
 +    e->queued = 1;
-+    pc_signal(&g_pj_work);
++    pc_broadcast(&g_pj_work);
 +}
 +/* e out of the draws' queue (g_pj_lock held): 1 when it was in it */
 +static int pipe_dequeue_draw(Pipe* e) {
@@ -210,11 +294,10 @@ index 33f94b6..edcf208 100644
 +    e->job = NULL;
 +    e->queued = 0;
 +    return 1;
-+}
+ }
  /* a pipeline of the file that a draw asks for before a worker took it goes to the draws' queue: 1 when it did */
  static int pipe_promote(Pipe* e) {
-     int moved = 0;
-@@ -862,7 +962,7 @@ static int pipe_promote(Pipe* e) {
+@@ -862,7 +966,7 @@ static int pipe_promote(Pipe* e) {
          else
              g_pw_head = e->job;
          if (g_pw_tail == e) g_pw_tail = before;
@@ -223,7 +306,7 @@ index 33f94b6..edcf208 100644
          moved = 1;
      }
      pm_unlock(&g_pj_lock);
-@@ -880,11 +980,172 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+@@ -880,11 +984,174 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
      pm_unlock(&g_pj_lock);
      return __atomic_load_n(&e->ready, __ATOMIC_ACQUIRE) ? e->p : VK_NULL_HANDLE;
  }
@@ -380,7 +463,7 @@ index 33f94b6..edcf208 100644
 +    s->job = j;
 +    s->pending = 1;
 +    g_sh_jobs[slot] = j;
-+    pc_signal(&g_pj_work);
++    pc_broadcast(&g_pj_work);
 +    pm_unlock(&g_pj_lock);
 +    return 1;
 +}
@@ -392,11 +475,13 @@ index 33f94b6..edcf208 100644
  #define PIPE_STANDIN   0x5EC6000000000000ull
 +#define PIPE_SKIPPABLE 0x0000800000000000ull /* async shaders: the bind may drop its draws (vk_pipeline_skippable) */
 +#define ASYNC_WAIT_NS  1500000               /* how long a skippable bind waits for its pipeline before dropping */
++static _Thread_local PfFrameBudget g_frame_budget;
++void vk_pipeline_frame_boundary(void) { g_frame_budget.spent = 0; }
 +static u64 g_pipe_async_skips;
  #define PSTAND_PAGE    1024
  static Pipe** g_pstand[1024];
  static u32 g_npstand;
-@@ -964,7 +1225,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -964,7 +1231,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
          pf_pipe_record(&p->k);
          pm_lock(&g_pj_lock);
          if (pipe_workers()) {
@@ -405,7 +490,7 @@ index 33f94b6..edcf208 100644
              queued = 1;
          }
          pm_unlock(&g_pj_lock);
-@@ -981,17 +1242,42 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -981,17 +1248,45 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
  }
  /* on the recording thread: the pipeline a handle from vk_pipeline_get_deferred names, waited for while a worker makes
     it. VK_NULL_HANDLE when it couldn't be made */
@@ -424,8 +509,12 @@ index 33f94b6..edcf208 100644
      if (__atomic_load_n(&p->ready, __ATOMIC_ACQUIRE)) return p->p;
      u64 t0 = plat_ns();
 -    VkPipeline got = pipe_wait(p, -1);
-+    VkPipeline got = pipe_wait(p, skippable ? ASYNC_WAIT_NS : -1);
-     __atomic_add_fetch(&g_pipe_wait_ns, plat_ns() - t0, __ATOMIC_RELAXED);
+-    __atomic_add_fetch(&g_pipe_wait_ns, plat_ns() - t0, __ATOMIC_RELAXED);
++    i64 allowance = skippable ? (g_settings.frame_guard ? (i64)pf_frame_allowance(&g_frame_budget) : ASYNC_WAIT_NS) : -1;
++    VkPipeline got = pipe_wait(p, allowance);
++    u64 elapsed = plat_ns() - t0;
++    pf_frame_charge(&g_frame_budget, elapsed);
++    __atomic_add_fetch(&g_pipe_wait_ns, elapsed, __ATOMIC_RELAXED);
 +    if (!got && skippable) __atomic_add_fetch(&g_pipe_async_skips, 1, __ATOMIC_RELAXED);
      return got;
  }
@@ -452,7 +541,7 @@ index 33f94b6..edcf208 100644
      *pipes = g_pipes_new;
      *hits = __atomic_load_n(&g_pipe_hits, __ATOMIC_RELAXED);
 diff --git a/src/nx/gpu/vk/query.c b/src/nx/gpu/vk/query.c
-index 2b46a4c..7648ada 100644
+index 2b46a4cc44f5e8e7c4aef59d3d1d01cc090cdba3..7648adaa83d50e196d205e011afd10858006ab54 100644
 --- a/src/nx/gpu/vk/query.c
 +++ b/src/nx/gpu/vk/query.c
 @@ -131,6 +131,10 @@ static u32 msaa_samples(u32 mode) {
@@ -467,10 +556,22 @@ index 2b46a4c..7648ada 100644
      QCounter* c = counter(chan, 0);
      u32 mul = msaa_samples(msaa_mode);
 diff --git a/src/nx/gpu/vk/record.c b/src/nx/gpu/vk/record.c
-index b3b0e2c..696ea88 100644
+index b3b0e2cb416b8b8ba4fe16d1bfd76917391fe350..305079dffed92352e6cf0e05fdc42ccc22684238 100644
 --- a/src/nx/gpu/vk/record.c
 +++ b/src/nx/gpu/vk/record.c
-@@ -282,7 +282,7 @@ void rec_CmdBindPipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline
+@@ -155,6 +155,11 @@ void vk_rec_queue(VkQueue q) {
+ }
+ 
+ /* ------------------------------------------------------------ beginning and submitting */
++static void frame_boundary_run(const void* p) { (void)p; vk_pipeline_frame_boundary(); }
++void vk_rec_frame_boundary(void) {
++    if (!rec_enabled()) { frame_boundary_run(NULL); return; }
++    *(u8*)rec_push(frame_boundary_run, 1) = 0;
++}
+ static void begin_run(const void* p) {
+     VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+@@ -282,7 +287,7 @@ void rec_CmdBindPipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline
  }
  static int rec_drop_draw(void) {
      if (!g_rec_unbound) return 0;
@@ -480,7 +581,7 @@ index b3b0e2c..696ea88 100644
  }
  typedef struct {
 diff --git a/src/nx/gpu/vk/render.c b/src/nx/gpu/vk/render.c
-index b8247c0..f1fb7dc 100644
+index b8247c01dc3ee77c1c4e3334be9cdcb012bde5f5..f1fb7dc54cdba18484d071608674e10b29be2f77 100644
 --- a/src/nx/gpu/vk/render.c
 +++ b/src/nx/gpu/vk/render.c
 @@ -822,6 +822,45 @@ u32 vk_gbuf_desc(int stage, u32 off, const u32* v, u64* addr) {
@@ -602,7 +703,7 @@ index b8247c0..f1fb7dc 100644
          g_dyn.pipe = pipe;
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..b628a58 100644
+index f3ac2e2d42061dda155a3e396f9471ab321b7033..1f7eb025f8bd27e388f725e1b83e3fbcb6a23fa7 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -15,6 +15,7 @@
@@ -661,8 +762,16 @@ index f3ac2e2..b628a58 100644
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
+@@ -518,6 +530,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+     }
+     /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
+     vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
++    if (game) vk_rec_frame_boundary(); /* ordered with the draws, even when the GPU producer runs ahead */
+     if (game) vk_renderdoc_present(g_vk_present);
+     vk_frame_next(); /* every show used this frame's slot and acquire semaphore, the menu's own too */
+     if (signal) {
 diff --git a/src/nx/gpu/vk/surface.c b/src/nx/gpu/vk/surface.c
-index 355bd29..c8ec5b7 100644
+index 355bd292cf23698f5e8d27a929ee51c7c4d9e0c1..c8ec5b705b589bbd9ccbaed315a00610895ac39f 100644
 --- a/src/nx/gpu/vk/surface.c
 +++ b/src/nx/gpu/vk/surface.c
 @@ -157,9 +157,10 @@ u32 vk_sc(u32 v) {
@@ -716,7 +825,7 @@ index 355bd29..c8ec5b7 100644
      if (s->in_drawn) return;
      if (g_ndrawn == g_capdrawn) {
 diff --git a/src/nx/gpu/vk/texture.c b/src/nx/gpu/vk/texture.c
-index 6096f99..ed57f58 100644
+index 6096f99ac8b2a5db414a3f0e04109dd1c9b262b1..ed57f5809cc8788c259f807ddb508f8f2651d722 100644
 --- a/src/nx/gpu/vk/texture.c
 +++ b/src/nx/gpu/vk/texture.c
 @@ -10,6 +10,7 @@
@@ -751,7 +860,7 @@ index 6096f99..ed57f58 100644
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..252ca6b 100644
+index db13c2d52e5ecc728b36ffb53cff6505e093aff8..d2d19aa772bc22c117e702497e43ef527a432cd3 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -367,6 +367,7 @@ typedef struct Surf {
@@ -795,7 +904,12 @@ index db13c2d..252ca6b 100644
  typedef struct {
      VkShaderModule vs, fs;
      VkShaderModule tcs, tes, gs; /* tessellation control and evaluation, geometry: VK_NULL_HANDLE when off */
-@@ -846,12 +859,21 @@ int vk_pipeline_worker_count(int setting, int cpus);
+@@ -843,15 +856,26 @@ VkPipeline vk_pipeline_get(const PipeKey* k);
+ /* the threads making new pipelines: setting (pipeline_threads) when it is one or more, else a quarter of cpus, two
+    to six */
+ int vk_pipeline_worker_count(int setting, int cpus);
++void vk_pipeline_frame_boundary(void); /* recording thread, at an ordered frame marker */
++void vk_rec_frame_boundary(void); /* queues the marker after this frame's draws */
  /* a draw's pipeline: the pipeline, or a stand-in the recording thread waits for at its bind (vk_pipeline_resolve, the
     pipeline a stand-in names, or h itself) */
  VkPipeline vk_pipeline_get_deferred(const PipeKey* k);
@@ -818,7 +932,7 @@ index db13c2d..252ca6b 100644
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
 diff --git a/src/nx/hle/filesystem/fs.c b/src/nx/hle/filesystem/fs.c
-index 354a1fc..fc9b0b9 100644
+index 354a1fcea19d0f117a4cb61c7dacc41dfbc703d0..fc9b0b91eba960dc2fbb8192bdded3c5e61fdeaa 100644
 --- a/src/nx/hle/filesystem/fs.c
 +++ b/src/nx/hle/filesystem/fs.c
 @@ -957,7 +957,22 @@ static FILE* rf_open(FsNode* node) {
@@ -845,7 +959,7 @@ index 354a1fc..fc9b0b9 100644
      i64 got = (i64)size;
      if (!node) return image_read(rf->base + rel, dst, size, 0); /* the game's image's, under the mods' */
 diff --git a/src/nx/hle/filesystem/fs.h b/src/nx/hle/filesystem/fs.h
-index fd64ad4..2845a4a 100644
+index fd64ad451c660689656d1e7a947a1b0714ea21fb..2845a4aa5d28a90476a635d1181f578709117ff9 100644
 --- a/src/nx/hle/filesystem/fs.h
 +++ b/src/nx/hle/filesystem/fs.h
 @@ -115,4 +115,5 @@ typedef struct {
@@ -855,7 +969,7 @@ index fd64ad4..2845a4a 100644
 +void hle_fs_stats(u64* reads, u64* bytes, u64* ms); /* the game's file reads so far: how many, their bytes, the time they took */
  #endif
 diff --git a/src/nx/runtime/driver/hactool/nca.c b/src/nx/runtime/driver/hactool/nca.c
-index 2f956fa..23ac531 100644
+index 2f956fa8b2c467637e2a2c5a5cd70195334c5723..23ac531182acbb93d8c5e0cc84fd7a6dcaae6505 100644
 --- a/src/nx/runtime/driver/hactool/nca.c
 +++ b/src/nx/runtime/driver/hactool/nca.c
 @@ -1420,13 +1420,15 @@ void nca_save_section_file(nca_section_ctx_t *ctx, uint64_t ofs, uint64_t total_
@@ -877,13 +991,138 @@ index 2f956fa..23ac531 100644
      uint64_t end_ofs = ofs + total_size;
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
+diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
+index addf0820d8186c7ca58312d41f1b478ab3090332..bd83ab9b54b87b7cf56c3c0a23b08712e28905f3 100644
+--- a/src/nx/runtime/main.h
++++ b/src/nx/runtime/main.h
+@@ -38,5 +38,7 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+ /* the wait before vi hands the game a buffer for its next frame, as fps_limit says: with fps_limit=game until the
+    frame before has been on the display for interval refreshes (its swap interval) */
+ void present_pace(u32 interval);
++/* the wait between the display's frames for fps_limit fps, the game's swap interval and the speed lock; 0 = none */
++u64 present_period(int fps, u32 interval, int lock);
+ 
+ #endif
+diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
+index a0ef76b8cfd4aabb7f3f28c0f4eea0993dfc9844..ddbc003cdee94b23e5644172f06354d8d33c57ae 100644
+--- a/src/nx/runtime/options.c
++++ b/src/nx/runtime/options.c
+@@ -58,6 +58,11 @@ void options_fps_set(const IniOpt* o, const char* v) {
+         fps = d < 10 ? 10 : d > 1000 ? 1000 : (int)d;
+     __atomic_store_n(&g_opt_fps, fps, __ATOMIC_RELAXED);
+ }
++int g_opt_speed_lock = 1;
++void options_speed_lock_set(const IniOpt* o, const char* v) {
++    (void)o;
++    __atomic_store_n(&g_opt_speed_lock, atoi(v) ? 1 : 0, __ATOMIC_RELAXED);
++}
+ void fps_limit_text(int fps, char* out, size_t n) {
+     if (fps == SNX_FPS_GAME)
+         snprintf(out, n, "game");
+diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
+index 408db9ed22fdb03ebd0ef7f6fae62c0e6760b105..0439f393b00a7ca13eb81a666d25309727b229a1 100644
+--- a/src/nx/runtime/options.h
++++ b/src/nx/runtime/options.h
+@@ -34,6 +34,7 @@ void ini_poll(int final);
+ /* fps_limit: 0 = no limit, SNX_FPS_GAME = the game's own pace (its swap interval), else frames a second (10 to 1000) */
+ #define SNX_FPS_GAME (-1)
+ extern int g_opt_fps;                              /* atomic: the game's threads read it */
++extern int g_opt_speed_lock;                       /* atomic: speed_lock, 1 = no frame sooner than the game's pace */
+ void fps_limit_text(int fps, char* out, size_t n); /* g_opt_fps as fps_limit's value: "game", "0", "30"... */
+ /* ldn, read: local wireless over the LAN (ldn_mitm's protocol), through an Eden room, or off
+    (hle/services/network/ldn.c) */
+diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
+index 87dfdc6384b6d72ddcbf69785eb2735e43dcdd38..aae2f4c139b4b744a0b3d1aced899ef111971f3f 100644
+--- a/src/nx/runtime/platform/backend/sdl3.c
++++ b/src/nx/runtime/platform/backend/sdl3.c
+@@ -713,7 +713,8 @@ static void hotkey(SDL_Keycode k) {
+             else if (g_opt_fps)
+                 LOG("FPS limit: %d\n", g_opt_fps);
+             else
+-                LOG("FPS limit: off\n");
++                LOG(g_opt_speed_lock ? "FPS limit: off, the speed lock keeps the game's own speed\n"
++                                     : "FPS limit: off\n");
+             break;
+         }
+         case SDLK_F5: kernel_dump_threads(); break;
+diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
+index 2bd6181ee87f341deb05820e098bc289ae153694..bf5cec9d3d6ddb573ed7bdc6209a137f1bbe65c9 100644
+--- a/src/nx/runtime/present.c
++++ b/src/nx/runtime/present.c
+@@ -31,14 +31,41 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+    paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
+ static PMutex g_pace_lock = PMUTEX_INIT;
+ static u64 g_pace_last; /* when the frame before was due, 0 before the first */
++static int g_pace_fps;
++static u64 g_pace_period;
++
++/* PortForge speed lock: a game that asks for a swap interval counts its frames, so frames sooner than that interval
++   run the game itself faster. With the lock on, an FPS limit above the game's pace (or none) still waits for its pace;
++   a lower limit still lowers it. A game that asks for interval 0 times itself and is paced only by a set limit */
++u64 present_period(int fps, u32 interval, int lock) {
++    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
++    u64 cap = fps > 0 ? 1000000000u / (u64)fps : 0;
++    if (fps == SNX_FPS_GAME) return game;
++    if (lock && game > cap) return game;
++    return cap;
++}
+ 
+ void present_pace(u32 interval) {
+     int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
+     u64 refresh, period, now, next;
+-    if (!fps || (fps == SNX_FPS_GAME && !interval)) return;
+-    refresh = 1000000000u / (fps == SNX_FPS_GAME ? (u64)VI_REFRESH_HZ : (u64)fps);
+-    period = fps == SNX_FPS_GAME ? refresh * interval : refresh;
++    period = present_period(fps, interval, __atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED));
++    if (!period) {
++        pm_lock(&g_pace_lock);
++        g_pace_last = g_pace_period = 0;
++        g_pace_fps = fps;
++        pm_unlock(&g_pace_lock);
++        return;
++    }
++    refresh = 1000000000u / (fps > 0 ? (u64)fps : (u64)VI_REFRESH_HZ);
++    if (refresh > period) refresh = period;
++    if (fps != SNX_FPS_GAME && interval && (!fps || period != 1000000000u / (u64)fps) && fps != g_pace_fps)
++        LOG("speed lock: fps_limit %s held to the game's pace, %u frame(s) of %d Hz\n", fps ? "above it" : "off",
++            interval, VI_REFRESH_HZ);
+     pm_lock(&g_pace_lock);
++    /* Switching limits or the game's interval must not inherit a future deadline from the old pace. */
++    if (fps != g_pace_fps || period != g_pace_period) g_pace_last = 0;
++    g_pace_fps = fps;
++    g_pace_period = period;
+     now = plat_ns();
+     next = g_pace_last + period;
+     /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..0a9bcd7 100644
+index be57ac55cdc777adf66dd5c76b5a7c3ba506fde7..777316b1edd0a6fd97066c48f302b048a8988ec8 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -190,6 +190,24 @@ setting Pipeline threads
+@@ -166,7 +166,17 @@ setting FPS limit
+     default game
+     set options_fps_set
+     help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
+-    help 10 to 1000 = that many frames a second. F4 turns the limit off and on
++    help 10 to 1000 = that many frames a second. F4 turns the limit off and on. With Speed lock on, a limit above
++    help the game's pace (or none) can't make the game run faster
++setting Speed lock
++    key speed_lock
++    int 0 1
++    default 1
++    set options_speed_lock_set
++    words Off|On
++    help PortForge Engine. 1 = frames never come sooner than the pace the game asks for, so the game always runs at
++    help its own speed whatever the FPS limit; a lower limit still lowers it. 0 = an FPS limit above the game's pace
++    help shows frames sooner, which makes most games run faster than on the console
+ setting Memory (GB)
+     key memory_gb
+     int 0 8
+@@ -188,8 +198,35 @@ setting Pipeline threads
+     startup
+     words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
-     help threads, two to six; 1 to 32 = that many. More make a first run's new pipelines sooner, with less CPU left
+-    help threads, two to six; 1 to 32 = that many. More make a first run's new pipelines sooner, with less CPU left
++    help threads, two to six (one on a CPU with four or fewer threads); 1 to 32 = that many. More make a first run's new pipelines sooner, with less CPU left
      help for the game
 +setting Async shaders
 +    key async_shaders
@@ -894,6 +1133,15 @@ index be57ac5..0a9bcd7 100644
 +    help draws into images the game has drawn to in each of the last presents (its 3D world, redrawn every frame), so
 +    help a missing object comes back a frame later instead of the game stopping. Draws into anything else (menus,
 +    help loading screens, images drawn once) still wait. 0 = every draw waits for its pipeline
++setting Frame guard
++    key frame_guard
++    int 0 1
++    default 1
++    startup
++    words Off|On
++    help PortForge Engine. Shares one 1.5 ms optional pipeline-wait budget across the entire frame, instead of
++    help waiting again at each new pipeline. Required draws still wait. Reserves worker capacity for current draws
++    help while cached pipelines warm in the background. Automatic worker counts follow this PC on every launch
 +setting Async shader translation
 +    key async_translation
 +    int 0 1
@@ -906,3 +1154,156 @@ index be57ac5..0a9bcd7 100644
  setting JIT threads
      key jit_threads
      int 0 8
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 64bdd9b33c597b626f8e8a95729f20c50b412c6d..b07de67f4f27d542da809062c397c232bccf78eb 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -644,6 +644,9 @@ add_test(NAME vi_service COMMAND snx-test-vi-service)
+ add_executable(snx-test-runtime-present runtime_present.c)
+ snx_test_target(snx-test-runtime-present 11)
+ add_test(NAME runtime_present COMMAND snx-test-runtime-present)
++add_executable(snx-test-frame-policy frame_policy.c)
++snx_test_target(snx-test-frame-policy 11)
++add_test(NAME frame_policy COMMAND snx-test-frame-policy)
+ 
+ # nvdrv's IPC side (nvdrv.c), with the GPU and host1x stand-ins in the test
+ add_executable(snx-test-nvdrv-service nvdrv_service.c)
+diff --git a/tests/astc_vulkan.c b/tests/astc_vulkan.c
+index fda0deac43c3a1894b3112bc7512ad12edff53a8..488b8dd9705ab18edce8536330d79fcc8733be48 100644
+--- a/tests/astc_vulkan.c
++++ b/tests/astc_vulkan.c
+@@ -72,6 +72,7 @@ void vk_lock(void) {}
+ void vk_unlock(void) {}
+ /* record.c resolves stand-ins for pipelines still being made (pipeline.c, not here): the test binds real ones */
+ VkPipeline vk_pipeline_resolve(VkPipeline h) { return h; }
++void vk_pipeline_frame_boundary(void) { }
+ /* cmd.c reads the frame's GPU timestamps for gpuprof.c, which isn't here */
+ void vk_gpuprof_frame_done(u32 slot) { (void)slot; }
+ /* cmd.c's waits note themselves for gpu.c's stall report, which isn't here */
+diff --git a/tests/frame_policy.c b/tests/frame_policy.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..335b027815a14a88b1e486caca48f3f8154aeec8
+--- /dev/null
++++ b/tests/frame_policy.c
+@@ -0,0 +1,32 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#include "nx/gpu/vk/frame_policy.h"
++#include <assert.h>
++#include <stdio.h>
++
++int main(void) {
++    PfFrameBudget frame = {0};
++    uint64_t waited = 0;
++    /* A cold scene asks for 1000 pipelines. Each might have taken 1.5 ms independently before. */
++    for (int i = 0; i < 1000; i++) {
++        uint64_t delay = pf_frame_allowance(&frame);
++        if (delay > 500000) delay = 500000;
++        waited += delay;
++        pf_frame_charge(&frame, delay);
++    }
++    assert(waited == PF_FRAME_WAIT_NS && !pf_frame_allowance(&frame));
++    frame.spent = 0;
++    assert(pf_frame_allowance(&frame) == PF_FRAME_WAIT_NS);
++    pf_frame_charge(&frame, UINT64_MAX); /* a mandatory wait or an OS oversleep exhausts the optional budget */
++    assert(!pf_frame_allowance(&frame) && frame.spent == PF_FRAME_WAIT_NS);
++    pf_frame_charge(&frame, UINT64_MAX);
++    assert(frame.spent == PF_FRAME_WAIT_NS);
++    assert(pf_shader_workers(0, 2) == 1 && pf_shader_workers(0, 4) == 1);
++    assert(pf_shader_workers(0, 8) == 2 && pf_shader_workers(0, 16) == 4);
++    assert(pf_shader_workers(0, 64) == 6 && pf_shader_workers(0, 0) == 2);
++    assert(pf_shader_workers(1, 64) == 1 && pf_shader_workers(32, 2) == 32);
++    assert(pf_shader_workers(100, 8) == 32);
++    assert(pf_background_workers(1, 1) == 1 && pf_background_workers(2, 1) == 1);
++    assert(pf_background_workers(6, 1) == 5 && pf_background_workers(6, 0) == 6);
++    puts("frame policy: burst budget, reset, oversleep, CPU counts and demand reservation passed");
++    return 0;
++}
+diff --git a/tests/runtime_present.c b/tests/runtime_present.c
+index 53c5e45d1eb900062ff9afd53ee8cef8b2f1fd30..07a95b7623699ff26292de8caad4e6fd29c48fa7 100644
+--- a/tests/runtime_present.c
++++ b/tests/runtime_present.c
+@@ -10,6 +10,7 @@
+ #include <stdio.h>
+ 
+ int g_opt_fps = SNX_FPS_GAME;
++int g_opt_speed_lock = 0; /* pacing() checks the limits unlocked, speed_lock() with the lock */
+ static u64 now_ns, slept_ns;
+ static unsigned checks, failures;
+ #define CHECK(c, ...)                                                                                                  \
+@@ -84,12 +85,54 @@ static void pacing(void) {
+     before = slept_ns;
+     present_pace(0);
+     present_pace(4); /* a number ignores the interval */
+-    CHECK(slept_ns - before == 2 * (1000000000u / 30), "fps_limit=30 waited %llu ns over two frames",
++    CHECK(slept_ns - before == 1000000000u / 30, "fps_limit=30 waited %llu ns over two frames",
+           (unsigned long long)(slept_ns - before));
+     g_opt_fps = 0;
+     before = slept_ns;
+     present_pace(1);
+     CHECK(slept_ns == before, "fps_limit=0 waited");
++    g_opt_fps = 120;
++    present_pace(1);
++    CHECK(slept_ns == before, "switching from unlimited inherited an old pacing deadline");
++    present_pace(1);
++    CHECK(slept_ns - before == 1000000000u / 120, "new limit did not establish its own cadence");
++    g_opt_fps = SNX_FPS_GAME;
++    before = slept_ns;
++    present_pace(2);
++    CHECK(slept_ns == before, "switching to native game timing waited for the previous cap");
++    present_pace(0);
++    present_pace(1);
++    CHECK(slept_ns == before, "switching the game's interval inherited a future deadline");
++}
++
++static void speed_lock(void) {
++    const u64 refresh = 1000000000u / 60;
++    u64 before;
++    g_opt_speed_lock = 1;
++    CHECK(present_period(120, 1, 1) == refresh, "120 FPS sped up a 60 FPS game");
++    CHECK(present_period(120, 2, 1) == 2 * refresh, "120 FPS sped up a 30 FPS game");
++    CHECK(present_period(0, 1, 1) == refresh, "no limit sped up a 60 FPS game");
++    CHECK(present_period(1000, 1, 1) == refresh, "1000 FPS sped up a 60 FPS game");
++    CHECK(present_period(30, 1, 1) == 1000000000u / 30, "a lower limit no longer lowered the pace");
++    CHECK(present_period(120, 0, 1) == 1000000000u / 120, "a self-timed game lost its limit");
++    CHECK(present_period(0, 0, 1) == 0, "a self-timed game without a limit waited");
++    CHECK(present_period(SNX_FPS_GAME, 2, 1) == 2 * refresh, "the game's pace changed");
++    CHECK(present_period(120, 1, 0) == 1000000000u / 120, "speed_lock=0 didn't allow a higher limit");
++    g_opt_fps = 120;
++    now_ns += 100 * refresh;
++    present_pace(1);
++    before = slept_ns;
++    present_pace(1);
++    CHECK(slept_ns - before == refresh, "locked 120 FPS waited %llu ns, not the game's frame",
++          (unsigned long long)(slept_ns - before));
++    g_opt_fps = 0;
++    now_ns += 100 * refresh;
++    present_pace(1);
++    before = slept_ns;
++    present_pace(1);
++    present_pace(1);
++    CHECK(slept_ns - before == 2 * refresh, "locked unlimited waited %llu ns over two frames",
++          (unsigned long long)(slept_ns - before));
+     g_opt_fps = SNX_FPS_GAME;
+ }
+ 
+@@ -98,6 +141,7 @@ int main(void) {
+     clock_start();
+     ticks();
+     pacing();
++    speed_lock();
+     test_renderer.present_buffer = test_present;
+     vi_show_buffer(7, 0x40, 1, 1, 4, 1, 0, 1, crop, 0);
+     vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
+diff --git a/tests/vulkan_headless.c b/tests/vulkan_headless.c
+index 25f0af2c67e6668d89c518d8ce79f5e55e8533fd..b1fc032672c5c32c6f9149825c2eda3ac0155ce4 100644
+--- a/tests/vulkan_headless.c
++++ b/tests/vulkan_headless.c
+@@ -826,7 +826,7 @@ int main(int argc, char** argv) {
+     CHECK(!check_blit());
+     CHECK(!check_rt_overlap());
+     /* the pipeline workers: pipeline_threads when given, else a quarter of the CPUs, two to six */
+-    CHECK(vk_pipeline_worker_count(0, 12) == 3 && vk_pipeline_worker_count(0, 4) == 2 &&
++    CHECK(vk_pipeline_worker_count(0, 12) == 3 && vk_pipeline_worker_count(0, 4) == 1 &&
+           vk_pipeline_worker_count(0, 0) == 2 && vk_pipeline_worker_count(0, 64) == 6);
+     CHECK(vk_pipeline_worker_count(5, 12) == 5 && vk_pipeline_worker_count(32, 4) == 32 &&
+           vk_pipeline_worker_count(1, 64) == 1);

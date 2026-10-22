@@ -17,6 +17,7 @@ namespace PortForge
         private readonly Label status = Caption("Load a game above to see its engine.", 12, Color.White), detail = Caption("", 9, Muted);
         private readonly CheckBox asyncShaders = new CheckBox { Text = "Smart async shaders (reduce shader stalls; objects may briefly appear late)", Checked = true, AutoSize = true, AccessibleName = "Smart async shaders" };
         private readonly CheckBox asyncTranslation = new CheckBox { Text = "Background shader translation (experimental; may cause visual errors)", AutoSize = true, AccessibleName = "Background shader translation" };
+        private readonly CheckBox frameGuard = new CheckBox { Text = "Automatic frame guard (shared shader wait budget)", Checked = true, AutoSize = true, AccessibleName = "Automatic frame guard" };
         private readonly Button autoFix = Action("Auto fix everything", true), install = Action("Install PortForge Engine", false), restore = Action("Restore original engine", false), measure = Action("Measure the stutter fix", false),
             lab = Action("Let AI improve the engine", true), stop = Action("Stop", false);
         private readonly TextBox results = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 230, Dock = DockStyle.Top, BackColor = Surface, ForeColor = Color.WhiteSmoke, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "Engine results" };
@@ -36,7 +37,7 @@ namespace PortForge
             stack.Controls.Add(fixAbout);
             var row = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
             foreach (var b in new[] { autoFix, install, restore, measure }) row.Controls.Add(b);
-            stack.Controls.Add(row); stack.Controls.Add(asyncShaders); stack.Controls.Add(asyncTranslation);
+            stack.Controls.Add(row); stack.Controls.Add(frameGuard); stack.Controls.Add(asyncShaders); stack.Controls.Add(asyncTranslation);
             stack.Controls.Add(Caption("AI Engine Lab", 13, Mint));
             var labAbout = Caption("The AI (Codex on this PC) studies the game's recorded problems, writes a change to the engine's code, and PortForge builds it and measures it on the game with scripted play. A change is kept only when it measurably reduces stutter without new errors; otherwise it is thrown away. Needs the engine source and build tools on this PC.", 9, Muted);
             stack.Controls.Add(labAbout);
@@ -53,6 +54,7 @@ namespace PortForge
             stop.Click += delegate { if (cancellation != null) cancellation.Cancel(); };
             asyncShaders.CheckedChanged += delegate { if (!loading) SaveAsync(); };
             asyncTranslation.CheckedChanged += delegate { if (!loading) SaveTranslation(); };
+            frameGuard.CheckedChanged += delegate { if (!loading) SaveFrameGuard(); };
             SetGame(null);
         }
 
@@ -74,6 +76,7 @@ namespace PortForge
             measure.Enabled = idle && has && package != null;
             lab.Enabled = idle && has && EngineLab.Available();
             stop.Enabled = !idle; asyncShaders.Enabled = idle && installed; asyncTranslation.Enabled = idle && installed;
+            Version version;frameGuard.Enabled=idle&&installed&&Version.TryParse(package.Version,out version)&&version>=new Version(1,4);
             loading = true;
             try
             {
@@ -81,6 +84,7 @@ namespace PortForge
                 var values = has && File.Exists(GameOptimization.ConfigPath(game)) ? GameOptimization.ReadValues(File.ReadAllText(GameOptimization.ConfigPath(game))) : new Dictionary<string, string>();
                 asyncShaders.Checked = !(values.TryGetValue("async_shaders", out value) && value == "0");
                 asyncTranslation.Checked = values.TryGetValue("async_translation", out value) && value == "1";
+                frameGuard.Checked = !(values.TryGetValue("frame_guard", out value) && value == "0");
             }
             catch (IOException) { }
             finally { loading = false; }
@@ -108,6 +112,17 @@ namespace PortForge
                 Say("Background shader translation " + (asyncTranslation.Checked ? "on" : "off") + ". Applies on next start. If objects appear incorrectly, turn it off for this game.");
             }
             catch (Exception e) { Say("Could not change the setting: " + e.Message); loading = true; asyncTranslation.Checked = !asyncTranslation.Checked; loading = false; }
+        }
+
+        private void SaveFrameGuard()
+        {
+            try
+            {
+                GameOptimization.EnsureStopped(game);string path=GameOptimization.ConfigPath(game),text=File.Exists(path)?File.ReadAllText(path):"";
+                GameOptimization.AtomicWrite(path,new UTF8Encoding(false).GetBytes(GameOptimization.Merge(text,new Dictionary<string,string>{{"frame_guard",frameGuard.Checked?"1":"0"}})),path+".before-frame-guard-"+DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff")+".bak");
+                Say("Frame guard "+(frameGuard.Checked?"on":"off")+". Applies at the next game launch.");
+            }
+            catch(Exception e){Say("Could not change frame guard: "+e.Message);loading=true;frameGuard.Checked=!frameGuard.Checked;loading=false;}
         }
 
         private string Measure(IProgress<string> progress, CancellationToken token)

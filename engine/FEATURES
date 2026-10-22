@@ -1,1 +1,1 @@
-Smart async shaders, async shader translation, priority pipeline queue, faster extraction, stage timings in the log
+Game speed lock, per-frame shader wait budget, demand worker reservation, per-launch CPU adaptation, pacing reset, smart async shaders, optional async translation, faster extraction
