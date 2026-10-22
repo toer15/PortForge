@@ -88,7 +88,7 @@ namespace PortForge
             if(stalls&&Decimal.TryParse(get("resolution","1"),NumberStyles.Number,CultureInfo.InvariantCulture,out res)&&res>1)
                 h.Issues.Add(new GameIssue("upscale_stalls","Upscaling is enabled while slow frames are recorded","The log records slow frames and the render scale is above 100%. The supported repair returns to 100%; it cannot remove engine or shader-compilation stalls.",cap!=null&&cap.Keys.Contains("resolution")?"reduce_upscale":null));
             var frames=StallFrames(h.Log);
-            var compile=frames.Where(f=>f.Pipelines>0&&f.WaitedMs>=8||f.Shaders>0&&f.TranslateMs>=8).ToList();
+            var compile=frames.Where(f=>f.WaitedMs>=8||f.Shaders>0&&f.TranslateMs>=8).ToList();
             var loading=frames.Where(f=>!compile.Contains(f)&&(f.TextureKb>=1024||f.RenderTargets>=20||f.TextureUploads>=20)).ToList();
             if(compile.Count>0||Regex.IsMatch(h.Log,@"[1-9]\d* ms waited for\)|[1-9]\d* ms waiting.*pipelines"))
             {
@@ -97,6 +97,10 @@ namespace PortForge
                     (compile.Count>0?compile.Count+" slow frame(s) were spent making shaders or pipelines (worst "+compile.Max(f=>f.FrameMs)+" ms). ":"The engine waited for new GPU pipelines. ")+
                     "The supported repair gives the engine more pipeline threads and pre-builds the shader cache by playing the opening of the game from a backed-up save. It helps scenes the test reaches; areas you have not visited can still compile once.",fix));
             }
+            var unexplained=frames.Where(f=>!compile.Contains(f)&&!loading.Contains(f)&&f.FrameMs>=100).ToList();
+            if(unexplained.Count>=8)
+                h.Issues.Add(new GameIssue("system_slowdown","Slowdown with no new game work",
+                    unexplained.Count+" slow frame(s) of 100 ms or more (worst "+unexplained.Max(f=>f.FrameMs)+" ms) had no shader, texture or loading work. That points outside the game's rendering: another program using the CPU or GPU, the game window losing focus, or Windows power saving. The live doctor in the main window records what else was running at that moment (PortForge-doctor.log in the game folder)."));
             if(loading.Count>0)
                 h.Issues.Add(new GameIssue("loading_stalls","Short freezes while the game loads files and textures",
                     loading.Count+" slow frame(s) happened with no shader work, while "+loading.Max(f=>f.TextureUploads)+" textures ("+(loading.Max(f=>f.TextureKb)/1024)+" MB) or "+loading.Max(f=>f.RenderTargets)+" render targets were created at once (worst "+loading.Max(f=>f.FrameMs)+" ms). "+
@@ -109,7 +113,12 @@ namespace PortForge
             if(get("fps_limit","game")!="game") h.Issues.Add(new GameIssue("timing","Custom frame timing is selected","Higher FPS can change game speed, physics or world behavior in some games. If that happens, select Game speed. A limiter cannot create correct timing patches for every game."));
             return h;
         }
+        private static readonly object RepairLock=new object();
         public static string Repair(string exe,RuntimeCapabilities cap,string backend,IEnumerable<string> requested=null,bool warm=false,IProgress<string> progress=null,CancellationToken token=default(CancellationToken))
+        {
+            lock(RepairLock) return RepairLocked(exe,cap,backend,requested,warm,progress,token);
+        }
+        private static string RepairLocked(string exe,RuntimeCapabilities cap,string backend,IEnumerable<string> requested,bool warm,IProgress<string> progress,CancellationToken token)
         {
             GameOptimization.EnsureStopped(exe);var before=Scan(exe,cap,backend);
             var allowed=new HashSet<string>(before.Issues.Where(x=>x.Fix!=null).Select(x=>x.Fix));

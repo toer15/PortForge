@@ -39,6 +39,7 @@ internal static class NativeInterfaceTests
     {
         try
         {
+            PortForge.NativeWindow.StartDoctorOnShow = false;
             using (var form = new PortForge.NativeWindow())
             {
                 form.ShowInTaskbar = false;

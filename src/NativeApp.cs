@@ -33,7 +33,15 @@ namespace PortForge
         private readonly TableLayoutPanel fields = Stack(), extraFields = Stack();
         private readonly ProgressBar progress = new ProgressBar();
         private readonly ToolTip tips = new ToolTip();
-        private readonly Button downloads = Button("Downloads", false), updates = Button("Check for updates", false);
+        private readonly Button downloads = Button("Downloads", false), updates = Button("Check for updates", false), doctorButton = Button("AI Doctor", false);
+        private readonly Label doctorStatus = new Label();
+        private readonly CheckBox doctorAuto = new CheckBox { Text = "Fix automatically", Checked = true, AutoSize = true, AccessibleName = "AI Doctor fixes automatically" },
+            doctorAi = new CheckBox { Text = "Use AI (Codex)", Checked = true, AutoSize = true, AccessibleName = "AI Doctor uses Codex" };
+        private readonly System.Collections.Generic.List<DoctorEvent> doctorEvents = new System.Collections.Generic.List<DoctorEvent>();
+        private readonly NotifyIcon tray = new NotifyIcon();
+        private LiveDoctor doctor;
+        /// <summary>Tests turn this off so a test window never watches or repairs real games.</summary>
+        public static bool StartDoctorOnShow = true;
         private readonly CheckBox autoTune = new CheckBox { Text = "Automatically tune each new game (about 4 minutes)", Checked = true, AutoSize = true, AccessibleName = "Automatically tune new games", Margin = new Padding(0, 0, 0, 15) };
         private CancellationTokenSource cancellation;
         private string result, lastLogPath, actionField, recoveryFolder;
@@ -42,7 +50,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.8 | Switch to PC";
+            Text = "PortForge 0.9 | Switch to PC";
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -54,7 +62,7 @@ namespace PortForge
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(26, 20, 26, 16) };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
             var header = Stack();
             header.Controls.Add(Caption("PortForge", 26, Color.White, true));
             header.Controls.Add(Caption("Create Windows game files from your Switch game.", 11, Muted, false));
@@ -196,9 +204,19 @@ namespace PortForge
             clearLog.Click += delegate { log.Clear(); };
             detailActions.Controls.AddRange(new Control[] { openLog, copyLog, clearLog });
             activity.Controls.Add(detailActions, 0, 3);
-            var note = Caption("Experimental conversion: some games may not convert or run. Keep the entire output folder together.", 9, Muted, false);
-            note.Margin = new Padding(0, 14, 0, 0);
-            root.Controls.Add(note, 0, 2);
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1, Margin = new Padding(0, 8, 0, 0) };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            for (int i = 0; i < 3; i++) footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            doctorStatus.AutoSize = false; doctorStatus.Dock = DockStyle.Fill; doctorStatus.TextAlign = ContentAlignment.MiddleLeft; doctorStatus.AutoEllipsis = true;
+            doctorStatus.ForeColor = Muted; doctorStatus.Font = new Font("Segoe UI", 9); doctorStatus.AccessibleName = "AI Doctor status";
+            doctorStatus.Text = "AI Doctor: starting. Experimental conversion: some games may not convert or run.";
+            doctorAuto.Margin = new Padding(10, 7, 10, 0); doctorAi.Margin = new Padding(0, 7, 10, 0);
+            doctorButton.AccessibleName = "Open AI Doctor"; doctorButton.Size = new Size(130, 32);
+            doctorButton.Click += delegate { using (var window = new DoctorWindow(doctorEvents, doctor)) window.ShowDialog(this); };
+            doctorAuto.CheckedChanged += delegate { if (doctor != null) doctor.AutoFix = doctorAuto.Checked; };
+            doctorAi.CheckedChanged += delegate { if (doctor != null) doctor.UseAi = doctorAi.Checked; };
+            footer.Controls.Add(doctorStatus, 0, 0); footer.Controls.Add(doctorAuto, 1, 0); footer.Controls.Add(doctorAi, 2, 0); footer.Controls.Add(doctorButton, 3, 0);
+            root.Controls.Add(footer, 0, 2);
             Controls.Add(root);
 
             LocateBackend();
@@ -208,6 +226,32 @@ namespace PortForge
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             { if (cancellation != null) { e.Cancel = true; CancelConversion(); } };
             Shown += async delegate { await QuietUpdateCheck(); };
+            Shown += delegate { if (StartDoctorOnShow) StartDoctor(); };
+            FormClosed += delegate { if (doctor != null) doctor.Dispose(); tray.Visible = false; tray.Dispose(); };
+        }
+
+        private void StartDoctor()
+        {
+            tray.Icon = Icon ?? SystemIcons.Application; tray.Text = "PortForge AI Doctor"; tray.Visible = true;
+            tray.BalloonTipClicked += delegate { doctorButton.PerformClick(); };
+            doctor = new LiveDoctor(AppDomain.CurrentDomain.BaseDirectory) { AutoFix = doctorAuto.Checked, UseAi = doctorAi.Checked };
+            doctor.Reported += e =>
+            {
+                lock (doctorEvents) { doctorEvents.Add(e); if (doctorEvents.Count > 500) doctorEvents.RemoveAt(0); }
+                if (IsDisposed || !IsHandleCreated) return;
+                try
+                {
+                    BeginInvoke((Action)delegate
+                    {
+                        doctorStatus.Text = "AI Doctor: " + e;
+                        doctorStatus.ForeColor = e.Fixed ? Mint : e.Important ? Color.FromArgb(255, 199, 120) : Muted;
+                        if (e.Fixed || e.Important) tray.ShowBalloonTip(6000, "PortForge AI Doctor: " + e.Title, (e.Game.Length > 0 ? e.Game + ": " : "") + (e.Text.Length > 220 ? e.Text.Substring(0, 220) + "..." : e.Text), e.Kind == "crash" || e.Kind == "error" ? ToolTipIcon.Warning : ToolTipIcon.Info);
+                    });
+                }
+                catch (InvalidOperationException) { }
+            };
+            int count = doctor.Games.Length;
+            doctorStatus.Text = "AI Doctor: " + (count == 0 ? "ready. It starts watching a game once you convert one or open it in Graphics and FPS." : "watching " + count + " game(s). Problems are explained live and fixed when the game closes.");
         }
 
         private async Task QuietUpdateCheck()
@@ -341,6 +385,7 @@ namespace PortForge
                 });
                 result = await Task.Run(() => NativeConversion.Convert(request, updates, token, stages));
                 try { File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last-game.txt"), Path.Combine(result, request.Name + ".exe")); } catch { }
+                if (doctor != null) doctor.Watch(Path.Combine(result, request.Name + ".exe"));
                 ShowStatus("DONE", "Your files are ready", "The Windows game files were created successfully. Open the game folder to find " + request.Name + ".exe. Whether the game runs depends on game support.", Mint);
                 if (request.TuningWarning != null)
                     ShowStatus("DONE / TUNING SKIPPED", "Your files are ready", "The game files were created, but automatic tuning could not finish. See Open full log for the reason, or try Graphics and FPS for this game.", Blue);

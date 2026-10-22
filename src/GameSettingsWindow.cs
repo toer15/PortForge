@@ -145,6 +145,7 @@ namespace PortForge
                 capabilities = await Task.Run(() => RuntimeCapabilities.Read(exe, token));
                 ShowProfile(GameOptimization.Load(exe)); loadedGame = Path.GetFullPath(exe);
                 try{File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"last-game.txt"),loadedGame);}catch(IOException){}catch(UnauthorizedAccessException){}
+                if(LiveDoctor.Current!=null)LiveDoctor.Current.Watch(loadedGame);
                 SetStatus("READY", "Ready to tune", "Choose an FPS preset above. Play game saves and verifies your selected limit. Automatic fixes checks the recorded log.", Mint);
             }
             catch (OperationCanceledException) { SetStatus("CANCELLED", "Check cancelled", "No settings were changed.", Muted); }

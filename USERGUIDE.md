@@ -107,3 +107,14 @@ Updates cannot be installed while a conversion is running. If something goes wro
 - **Loading freezes** (the game creates many textures or render targets at a scene change). These are not a setting. The app reports them, with the size and worst frame, instead of pretending to fix them. Keep the game on an SSD and exclude its folder from antivirus scanning.
 
 On the test PC (Ryzen 7 9800X3D, RX 9070 XT), Super Mario Odyssey compiled shaders in a few milliseconds even with an empty cache, and gameplay at 150% render scale ran as fast as at 75%. Its only slow frames were four short loading freezes at scene changes. Settings did not change them.
+
+## AI Doctor
+
+The bar at the bottom of the main window is the **AI Doctor**. It watches every game you converted or opened in Graphics and FPS, as long as PortForge is open.
+
+- **While the game runs**, it reads the game's log and tells you (bottom bar and a Windows notification) about shader stutter, loading freezes, graphics memory running out, crashes, and slowdowns with no game work. For those slowdowns it also checks which other programs were using your CPU, and whether the game was the active window.
+- **It never changes a running game.** Changing the engine while it runs could break the game or your save.
+- **When the game closes**, with **Fix automatically** on, it applies the supported repairs: more pipeline threads and a shader-cache warm-up for stutter, and the settings fixes. Your save, log and settings are backed up first. With **Use AI (Codex)** on, it then asks the Codex AI installed on this PC to review a short summary of the session. Codex can only choose from the supported repairs, and every choice is checked again before it is applied.
+- Select **AI Doctor** to see everything it noticed and did. It also writes `PortForge-doctor.log` in the game's folder.
+
+Some problems need a change inside the game engine (for example, loading freezes). The doctor reports these instead of pretending to fix them.
