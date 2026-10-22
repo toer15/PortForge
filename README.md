@@ -1,6 +1,6 @@
-# PortForge 0.28 / Engine 1.11
+# PortForge 0.29 / Engine 1.12
 
-**Pixel smoothing** is a new per-game switch in the graphics window (off by default). On, Engine 1.11 softens contrast edges in the finished picture, after FSR when FSR is active; flat areas are left alone. It also softens text and fine detail, adds a little GPU work, and cannot restore missing detail or remove every kind of aliasing. Off keeps the original picture. Older engines ignore the setting and the game still starts.
+**Pixel smoothing** (per game, off by default) now really antialiases. Engine 1.12 replaces the weak neighbour blend of 1.11 with FXAA-style edge antialiasing on the game's own image before FSR, and FSR sharpens less while it is on, so staircase edges turn into smooth lines. In a GPU test the largest step of a jagged edge fell from a whole pixel to 0.44 (alone) and from 0.66 to 0.25 (with FSR, as smooth as that slope can be). In Mario, edge harshness on the tower and roller coaster fell by 22 to 25 percent with the sky unchanged. It cannot add detail the game did not render, and text softens a little.
 
 **Performance** now selects the game's handheld rendering mode with AMD FSR 1, while keeping intermediate images at their protected native scale. This lets the game choose a lower-resolution layout without blindly shrinking images used as game data. Balanced and Quality restore TV mode. Auto tune compares the two modes and prefers TV quality when handheld provides no measured benefit. Entry-level PC matching starts in handheld mode. New conversions and downloaded inputs use the bundled engine; watched games use the backed-up upgrade path.
 

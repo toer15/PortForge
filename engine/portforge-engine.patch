@@ -4817,7 +4817,7 @@ index 0000000..3f0bee2
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..4ab74d8 100644
+index f3ac2e2..51ba0b4 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -15,6 +15,7 @@
@@ -4852,7 +4852,7 @@ index f3ac2e2..4ab74d8 100644
      if (g_vk_scale != 1.0f) LOG("vulkan: render targets at %.2fx\n", g_vk_scale);
      vk_cmd_init();
      vk_pipeline_init();
-+    if (g_settings.upscaler) vk_upscale_init();
++    if (g_settings.upscaler || g_settings.pixel_smoothing) vk_upscale_init();
      vk_own_init(); /* GPU engines' results stay on the GPU where guest memory can be trapped (memory/own.c) */
      g_gpu_before_write = vkr_before_write;
      g_gpu_mapping_begin = vkr_mapping_begin;
@@ -4867,14 +4867,11 @@ index f3ac2e2..4ab74d8 100644
      backend_window_size(&ww, &wh);
      if (shown && (g_lost || backend_window_generation() != g_generation)) {
          vk_finish();
-@@ -392,8 +401,16 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -392,8 +401,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                                                     {(i32)(g_last_x + g_last_w), (i32)(g_last_y + g_last_h), 1}},
                                      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                                      .dstOffsets = {{dx, dy, 0}, {dx + (i32)dw, dy + (i32)dh, 1}}};
-+                Surf* scaled = g_settings.upscaler ? vk_upscale(cb, src, g_last_x, g_last_y, g_last_w, g_last_h, dw, dh) : NULL;
-+                Surf* softened = vk_pixel_smooth(cb, scaled ? scaled : src, scaled ? 0 : g_last_x,
-+                    scaled ? 0 : g_last_y, scaled ? dw : g_last_w, scaled ? dh : g_last_h);
-+                if (softened) scaled = softened;
++                Surf* scaled = vk_present_filters(cb, src, g_last_x, g_last_y, g_last_w, g_last_h, dw, dh);
 +                if (scaled) {
 +                    blit.srcOffsets[0] = (VkOffset3D){0, 0, 0};
 +                    blit.srcOffsets[1] = (VkOffset3D){(i32)scaled->sw, (i32)scaled->sh, 1};
@@ -4885,7 +4882,7 @@ index f3ac2e2..4ab74d8 100644
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
              }
              {
-@@ -411,24 +428,38 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -411,24 +425,38 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
@@ -4929,7 +4926,7 @@ index f3ac2e2..4ab74d8 100644
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -441,6 +472,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -441,6 +469,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          vk_buf_frame();
          vk_mem_trim(0, 0);
          if (g_vk_present % 600 == 0) {
@@ -4942,7 +4939,7 @@ index f3ac2e2..4ab74d8 100644
              char cs_why[256];
              u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
              LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
-@@ -467,6 +504,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +501,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -4956,7 +4953,7 @@ index f3ac2e2..4ab74d8 100644
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -518,6 +562,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -518,6 +559,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      }
      /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
      vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
@@ -5032,31 +5029,98 @@ index 0000000..88e1851
 +}
 diff --git a/src/nx/gpu/vk/shaders/smooth.comp b/src/nx/gpu/vk/shaders/smooth.comp
 new file mode 100644
-index 0000000..65f49f5
+index 0000000..af19111
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/smooth.comp
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,89 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
-+/* Optional presentation softening. Preserve flat areas; blend contrast edges with four neighbours.
-+   This is a spatial filter, not temporal antialiasing or detail reconstruction. */
++/* Pixel smoothing: edge-directed post-process antialiasing in the manner of FXAA's quality path (Timothy Lottes,
++   2011): find the local edge and its orientation, walk along it to both ends, and resample across it in proportion
++   to where the pixel sits on the edge's step, plus a subpixel blend for isolated jaggies. Runs on the guest image at
++   its own resolution, before FSR, where a jagged step is still one pixel. Flat areas below the contrast threshold are
++   copied unchanged. Spatial only: no history, no motion vectors, no detail is invented. */
 +#version 450
 +layout(local_size_x=8,local_size_y=8) in;
-+layout(set=0,binding=0) uniform sampler2D source;
++layout(set=0,binding=0) uniform sampler2D source; /* bilinear sampler, raw (not sRGB-decoded) view */
 +layout(set=0,binding=1,rgba16f) writeonly uniform image2D outputImage;
-+layout(push_constant) uniform Params { ivec4 crop; } pc;
-+vec3 tap(ivec2 p) { return texelFetch(source,clamp(p,pc.crop.xy,pc.crop.xy+pc.crop.zw-1),0).rgb; }
-+float luma(vec3 c) { return dot(c,vec3(0.2126,0.7152,0.0722)); }
++layout(push_constant) uniform Params {
++    ivec4 crop;
++    uint encoded; /* the source holds sRGB-encoded values */
++    uint keep;    /* leave them encoded for FSR, which decodes once after RCAS */
++} pc;
++
++/* Lower than FXAA's defaults (0.166, 0.0833, 0.75): games converted here often upscale their own image, which
++   leaves softer, lower-contrast steps; full subpixel blending also catches one-pixel specks. */
++const float EDGE_THRESHOLD = 0.0833, EDGE_THRESHOLD_MIN = 0.0312, SUBPIX = 1.0;
++const int STEPS = 12;
++const float STEP_SIZE[STEPS] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0);
++
++vec2 g_lo, g_hi, g_inv;
++/* p in texel units of the whole image; the crop's edge texels are repeated instead of reading outside it */
++vec3 tap(vec2 p) { return textureLod(source, clamp(p, g_lo, g_hi) * g_inv, 0.0).rgb; }
++float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); } /* on encoded values, as perceived */
++float lumaAt(vec2 p) { return luma(tap(p)); }
++vec3 toLinear(vec3 v) { return mix(v / 12.92, pow((v + 0.055) / 1.055, vec3(2.4)), greaterThan(v, vec3(0.04045))); }
++
++vec3 smoothPixel(vec2 pos) {
++    vec3 rgbM = tap(pos);
++    float M = luma(rgbM);
++    float N = lumaAt(pos + vec2(0, -1)), S = lumaAt(pos + vec2(0, 1));
++    float E = lumaAt(pos + vec2(1, 0)), W = lumaAt(pos + vec2(-1, 0));
++    float hi = max(max(max(N, S), max(E, W)), M), lo = min(min(min(N, S), min(E, W)), M);
++    float range = hi - lo;
++    if (range < max(EDGE_THRESHOLD_MIN, hi * EDGE_THRESHOLD)) return rgbM;
++
++    float NW = lumaAt(pos + vec2(-1, -1)), NE = lumaAt(pos + vec2(1, -1));
++    float SW = lumaAt(pos + vec2(-1, 1)), SE = lumaAt(pos + vec2(1, 1));
++    /* Orientation: second differences across rows against across columns, the centre row and column weighted twice. */
++    float horz = abs(NW - 2.0 * W + SW) + 2.0 * abs(N - 2.0 * M + S) + abs(NE - 2.0 * E + SE);
++    float vert = abs(NW - 2.0 * N + NE) + 2.0 * abs(W - 2.0 * M + E) + abs(SW - 2.0 * S + SE);
++    bool horzSpan = horz >= vert; /* the edge runs horizontally: step across it vertically */
++
++    /* Subpixel aliasing: how far the centre stands out from its 3x3 neighbourhood. */
++    float average = (2.0 * (N + S + E + W) + NW + NE + SW + SE) / 12.0;
++    float sub = clamp(abs(average - M) / range, 0.0, 1.0);
++    sub = sub * sub * (3.0 - 2.0 * sub);
++    float subBlend = sub * sub * SUBPIX;
++
++    float lumaNeg = horzSpan ? N : W, lumaPos = horzSpan ? S : E;
++    float gradNeg = abs(lumaNeg - M), gradPos = abs(lumaPos - M);
++    float stepLen = 1.0;
++    bool towardNeg = gradNeg >= gradPos;
++    if (towardNeg) stepLen = -1.0;
++    float lumaPair = (towardNeg ? lumaNeg : lumaPos) + M; /* the two sides of the step at this pixel */
++    float gradScaled = max(gradNeg, gradPos) * 0.25;
++
++    vec2 normal = horzSpan ? vec2(0, 1) : vec2(1, 0), along = horzSpan ? vec2(1, 0) : vec2(0, 1);
++    vec2 base = pos + normal * (stepLen * 0.5); /* on the boundary between the pixel and its stronger neighbour */
++    vec2 posN = base - along, posP = base + along;
++    float endN = lumaAt(posN) - lumaPair * 0.5, endP = lumaAt(posP) - lumaPair * 0.5;
++    bool doneN = abs(endN) >= gradScaled, doneP = abs(endP) >= gradScaled;
++    for (int i = 1; i < STEPS && !(doneN && doneP); i++) {
++        if (!doneN) { posN -= along * STEP_SIZE[i]; endN = lumaAt(posN) - lumaPair * 0.5; doneN = abs(endN) >= gradScaled; }
++        if (!doneP) { posP += along * STEP_SIZE[i]; endP = lumaAt(posP) - lumaPair * 0.5; doneP = abs(endP) >= gradScaled; }
++    }
++    float dstN = dot(pos - posN, along), dstP = dot(posP - pos, along);
++    bool nearN = dstN < dstP;
++    float dst = min(dstN, dstP), span = dstN + dstP;
++    /* Blend only from the end whose step goes the same way as this pixel's, else the edge would be moved. */
++    bool centreBelow = M - lumaPair * 0.5 < 0.0;
++    bool good = ((nearN ? endN : endP) < 0.0) != centreBelow;
++    float offset = good ? 0.5 - dst / span : 0.0;
++    offset = max(offset, subBlend);
++    return tap(pos + normal * (offset * stepLen));
++}
++
 +void main() {
-+    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
-+    if(any(greaterThanEqual(p,pc.crop.zw)))return;
-+    ivec2 q=p+pc.crop.xy;
-+    vec3 c=tap(q), n=tap(q+ivec2(0,-1)), s=tap(q+ivec2(0,1));
-+    vec3 e=tap(q+ivec2(1,0)), w=tap(q+ivec2(-1,0));
-+    float lo=min(luma(c),min(min(luma(n),luma(s)),min(luma(e),luma(w))));
-+    float hi=max(luma(c),max(max(luma(n),luma(s)),max(luma(e),luma(w))));
-+    float amount=0.65*smoothstep(0.05,0.20,hi-lo);
-+    vec3 softened=mix(c,(4.0*c+n+s+e+w)/8.0,amount);
-+    imageStore(outputImage,p,vec4(softened,1.0));
++    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
++    if (any(greaterThanEqual(p, pc.crop.zw))) return;
++    g_inv = 1.0 / vec2(textureSize(source, 0));
++    g_lo = vec2(pc.crop.xy) + 0.5;
++    g_hi = vec2(pc.crop.xy + pc.crop.zw) - 0.5;
++    vec3 color = clamp(smoothPixel(vec2(pc.crop.xy + p) + 0.5), 0.0, 1.0);
++    if (pc.encoded != 0 && pc.keep == 0) color = toLinear(color); /* match a blit from the sRGB image */
++    imageStore(outputImage, p, vec4(color, 1.0));
 +}
 diff --git a/src/nx/gpu/vk/surface.c b/src/nx/gpu/vk/surface.c
 index 355bd29..c8ec5b7 100644
@@ -5149,13 +5213,14 @@ index 6096f99..ed57f58 100644
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/upscale.c b/src/nx/gpu/vk/upscale.c
 new file mode 100644
-index 0000000..254ec58
+index 0000000..d6d8f13
 --- /dev/null
 +++ b/src/nx/gpu/vk/upscale.c
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,270 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
-+/* Presentation-only FSR 1. Guest targets, timing, saves and game data are untouched. Two reusable images, no CPU
-+   readback or queue idle wait; allocation/format failures use the existing linear blit. Under vk_lock. */
++/* Presentation-only filters: pixel smoothing (edge antialiasing, smooth.comp) on the guest image, then FSR 1 to the
++   window size. Guest targets, timing, saves and game data are untouched. Three reusable images, no CPU readback or
++   queue idle wait; allocation/format failures use the existing linear blit. Under vk_lock. */
 +#include <string.h>
 +#include "nx/gpu/vk/vk.h"
 +#include "nx/gpu/vk/fsr1_spv.h"
@@ -5165,7 +5230,7 @@ index 0000000..254ec58
 +    VkDescriptorSetLayout ds;
 +    VkPipelineLayout layout;
 +    VkPipeline pipes[2];
-+    VkSampler sampler;
++    VkSampler sampler, bilinear; /* FSR fetches texels itself; smoothing samples between them */
 +    Surf easu, rcas;
 +    Surf smooth;
 +    VkPipeline smooth_pipe;
@@ -5210,6 +5275,8 @@ index 0000000..254ec58
 +        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST, .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
 +        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE};
 +    if (!VK_OK(vkCreateSampler(g_vk.dev, &si, NULL, &g_upscale.sampler))) return 0;
++    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
++    if (!VK_OK(vkCreateSampler(g_vk.dev, &si, NULL, &g_upscale.bilinear))) return 0;
 +    const u32* spv[2] = {fsr_easu_spv, fsr_rcas_spv};
 +    u64 sizes[2] = {fsr_easu_spv_size, fsr_rcas_spv_size};
 +    for (int i = 0; i < 2; i++) {
@@ -5250,33 +5317,17 @@ index 0000000..254ec58
 +    return 1;
 +}
 +
-+Surf* vk_upscale(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh) {
-+    if (!src || !w || !h || !dw || !dh ||
-+        x > src->sw || w > src->sw - x || y > src->sh || h > src->sh - y ||
-+        dw > g_vk.props.limits.maxImageDimension2D || dh > g_vk.props.limits.maxImageDimension2D ||
-+        src->layers != 1 || src->f.depth || src->f.is_int || src->f.bw != 1 || src->f.bh != 1) {
-+        report(2, "inactive: unsupported image or crop; standard scaling", w, h, dw, dh);
-+        return NULL;
-+    }
-+    if (dw < w || dh < h || (dw == w && dh == h)) {
-+        report(3, "inactive: no enlargement needed; maximize the window to upscale", w, h, dw, dh);
-+        return NULL;
-+    }
-+    VkFormat linear = vk_srgb_as(src->f.vk, 0);
-+    /* SDR only: preserve float/HDR and unusual formats through the normal path. */
-+    if (linear != VK_FORMAT_R8G8B8A8_UNORM && linear != VK_FORMAT_B8G8R8A8_UNORM &&
-+        linear != VK_FORMAT_A8B8G8R8_UNORM_PACK32) {
-+        report(4, "inactive: unsupported color format; standard scaling", w, h, dw, dh);
-+        return NULL;
-+    }
-+    if (!vk_upscale_init()) {
-+        report(5, "inactive: GPU setup unavailable; standard scaling", w, h, dw, dh);
-+        return NULL;
-+    }
-+    vk_surf_touch(src); /* scratch allocations may trim the cache; keep this frame's source alive */
-+    const VkComponentMapping identity = {0, 0, 0, 0};
-+    VkImageView input = vk_tex_view(src, VK_IMAGE_VIEW_TYPE_2D, 0, &identity, 0);
-+    if (!input) { report(6, "inactive: input view unavailable; standard scaling", w, h, dw, dh); return NULL; }
++/* An 8-bit color image the filters can read through a raw view, cropped inside it. */
++static int presentable(const Surf* src, u32 x, u32 y, u32 w, u32 h) {
++    if (!src || !w || !h || x > src->sw || w > src->sw - x || y > src->sh || h > src->sh - y ||
++        src->layers != 1 || src->f.depth || src->f.is_int || src->f.bw != 1 || src->f.bh != 1) return 0;
++    VkFormat raw = vk_srgb_as(src->f.vk, 0);
++    return raw == VK_FORMAT_R8G8B8A8_UNORM || raw == VK_FORMAT_B8G8R8A8_UNORM || raw == VK_FORMAT_A8B8G8R8_UNORM_PACK32;
++}
++
++/* EASU then RCAS from input (a raw view of src) into rcas. srgb: the values are sRGB-encoded. */
++static Surf* fsr_run(VkCommandBuffer cb, Surf* src, VkImageView input, int srgb, u32 x, u32 y, u32 w, u32 h,
++                     u32 dw, u32 dh, float sharpness) {
 +    if (!image_make(&g_upscale.easu, dw, dh) || !image_make(&g_upscale.rcas, dw, dh)) {
 +        drop(&g_upscale.easu); drop(&g_upscale.rcas); g_upscale.failed = 1;
 +        LOG("vulkan: FSR 1 unavailable: no scratch image memory; using linear scaling\n");
@@ -5286,7 +5337,7 @@ index 0000000..254ec58
 +    VkDescriptorSet sets[2] = {vk_desc_alloc(g_upscale.ds), vk_desc_alloc(g_upscale.ds)};
 +    if (!sets[0] || !sets[1]) { report(8, "inactive: descriptors unavailable; standard scaling", w, h, dw, dh); return NULL; }
 +    struct { i32 crop[4]; u32 size[2], srgb; float sharpness; } pc =
-+        {{(i32)x, (i32)y, (i32)w, (i32)h}, {dw, dh}, linear != src->f.vk, 0.5f};
++        {{(i32)x, (i32)y, (i32)w, (i32)h}, {dw, dh}, (u32)srgb, sharpness};
 +    vk_render_end();
 +    Surf* inputs[2] = {src, &g_upscale.easu};
 +    Surf* outputs[2] = {&g_upscale.easu, &g_upscale.rcas};
@@ -5319,16 +5370,43 @@ index 0000000..254ec58
 +    return &g_upscale.rcas;
 +}
 +
-+/* Same dimensions as the input crop: works at native resolution, with linear scaling and after FSR.
-+   sRGB views decode once, matching the already-linear FSR output before the final presentation blit. */
-+Surf* vk_pixel_smooth(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h) {
-+    if (!g_settings.pixel_smoothing) return NULL;
-+    if (!src || !w || !h || x > src->sw || w > src->sw-x || y > src->sh || h > src->sh-y ||
-+        src->layers != 1 || src->f.depth || src->f.is_int) goto unavailable;
-+    VkFormat linear = vk_srgb_as(src->f.vk, 0);
-+    if (src != &g_upscale.rcas && linear != VK_FORMAT_R8G8B8A8_UNORM &&
-+        linear != VK_FORMAT_B8G8R8A8_UNORM && linear != VK_FORMAT_A8B8G8R8_UNORM_PACK32) goto unavailable;
-+    if (!vk_upscale_init()) goto unavailable;
++/* The reason FSR would not enlarge this crop, as a report status, or 0 when it can. */
++static int fsr_blocked(const Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh) {
++    if (!src || !w || !h || !dw || !dh || x > src->sw || w > src->sw - x || y > src->sh || h > src->sh - y ||
++        dw > g_vk.props.limits.maxImageDimension2D || dh > g_vk.props.limits.maxImageDimension2D ||
++        src->layers != 1 || src->f.depth || src->f.is_int || src->f.bw != 1 || src->f.bh != 1) {
++        report(2, "inactive: unsupported image or crop; standard scaling", w, h, dw, dh);
++        return 2;
++    }
++    if (dw < w || dh < h || (dw == w && dh == h)) {
++        report(3, "inactive: no enlargement needed; maximize the window to upscale", w, h, dw, dh);
++        return 3;
++    }
++    /* SDR only: preserve float/HDR and unusual formats through the normal path. */
++    if (!presentable(src, x, y, w, h)) {
++        report(4, "inactive: unsupported color format; standard scaling", w, h, dw, dh);
++        return 4;
++    }
++    if (!vk_upscale_init()) {
++        report(5, "inactive: GPU setup unavailable; standard scaling", w, h, dw, dh);
++        return 5;
++    }
++    return 0;
++}
++
++Surf* vk_upscale(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh) {
++    if (fsr_blocked(src, x, y, w, h, dw, dh)) return NULL;
++    vk_surf_touch(src); /* scratch allocations may trim the cache; keep this frame's source alive */
++    const VkComponentMapping identity = {0, 0, 0, 0};
++    VkImageView input = vk_tex_view(src, VK_IMAGE_VIEW_TYPE_2D, 0, &identity, 0);
++    if (!input) { report(6, "inactive: input view unavailable; standard scaling", w, h, dw, dh); return NULL; }
++    return fsr_run(cb, src, input, vk_srgb_as(src->f.vk, 0) != src->f.vk, x, y, w, h, dw, dh, 0.5f);
++}
++
++/* Edge antialiasing of the crop into smooth (w x h). keep: leave sRGB values encoded for FSR to read, else store
++   what a blit of the sRGB image would (linear), so either way one encode happens at the swapchain. */
++static Surf* smooth_run(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, int keep) {
++    if (!presentable(src, x, y, w, h) || !vk_upscale_init()) goto unavailable;
 +    if (!g_upscale.smooth_pipe) {
 +        VkShaderModule module = vk_module_spv(smooth_spv, smooth_spv_size / 4);
 +        if (!module) goto unavailable;
@@ -5341,8 +5419,7 @@ index 0000000..254ec58
 +    }
 +    vk_surf_touch(src);
 +    const VkComponentMapping identity = {0, 0, 0, 0};
-+    VkImageView input = src == &g_upscale.rcas ? src->att :
-+        vk_tex_view(src, VK_IMAGE_VIEW_TYPE_2D, linear != src->f.vk, &identity, 0);
++    VkImageView input = vk_tex_view(src, VK_IMAGE_VIEW_TYPE_2D, 0, &identity, 0); /* raw: smooth on encoded values */
 +    if (!input || !image_make(&g_upscale.smooth, w, h)) goto unavailable;
 +    VkDescriptorSet set = vk_desc_alloc(g_upscale.ds);
 +    if (!set) goto unavailable;
@@ -5352,7 +5429,7 @@ index 0000000..254ec58
 +    vk_surf_use(cb, &g_upscale.smooth, VK_IMAGE_LAYOUT_GENERAL,
 +        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 +    VkDescriptorImageInfo images[2] = {
-+        {g_upscale.sampler, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
++        {g_upscale.bilinear, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
 +        {VK_NULL_HANDLE, g_upscale.smooth.att, VK_IMAGE_LAYOUT_GENERAL}};
 +    VkWriteDescriptorSet writes[2];
 +    for (u32 j = 0; j < 2; j++) writes[j] = (VkWriteDescriptorSet){
@@ -5360,21 +5437,40 @@ index 0000000..254ec58
 +        .descriptorCount = 1, .descriptorType = j ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 +        .pImageInfo = &images[j]};
 +    vkUpdateDescriptorSets(g_vk.dev, 2, writes, 0, NULL);
-+    i32 crop[4] = {(i32)x, (i32)y, (i32)w, (i32)h};
++    struct { i32 crop[4]; u32 encoded, keep; } pc =
++        {{(i32)x, (i32)y, (i32)w, (i32)h}, vk_srgb_as(src->f.vk, 0) != src->f.vk, (u32)keep};
 +    rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_upscale.smooth_pipe);
 +    rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_upscale.layout, 0, 1, &set, 0, NULL);
-+    rec_CmdPushConstants(cb, g_upscale.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof crop, crop);
-+    rec_CmdDispatch(cb, (w+7)/8, (h+7)/8, 1);
-+    vk_surf_use(cb, &g_upscale.smooth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-+        VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
++    rec_CmdPushConstants(cb, g_upscale.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
++    rec_CmdDispatch(cb, (w + 7) / 8, (h + 7) / 8, 1);
++    if (!keep) /* FSR's own barriers take the image from here when it follows */
++        vk_surf_use(cb, &g_upscale.smooth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 +    vk_render_forget_state();
-+    if (g_upscale.smooth_status != 1) LOG("vulkan: Pixel smoothing active: %ux%u presentation filter dispatched\n", w, h);
++    if (g_upscale.smooth_status != 1)
++        LOG("vulkan: Pixel smoothing active: edge antialiasing on the %ux%u game image%s\n", w, h,
++            keep ? " before FSR 1" : "");
 +    g_upscale.smooth_status = 1;
 +    return &g_upscale.smooth;
 +unavailable:
 +    if (g_upscale.smooth_status != 2) LOG("vulkan: Pixel smoothing unavailable: original presentation retained\n");
 +    g_upscale.smooth_status = 2;
 +    return NULL;
++}
++
++Surf* vk_pixel_smooth(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h) {
++    return g_settings.pixel_smoothing ? smooth_run(cb, src, x, y, w, h, 0) : NULL;
++}
++
++/* Jagged steps are one pixel wide in the game's image and several after enlarging, so smoothing goes first. RCAS
++   then sharpens less, or it would put back the steps smoothing removed. */
++Surf* vk_present_filters(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh) {
++    if (!g_settings.pixel_smoothing) return g_settings.upscaler ? vk_upscale(cb, src, x, y, w, h, dw, dh) : NULL;
++    if (!g_settings.upscaler || fsr_blocked(src, x, y, w, h, dw, dh)) return smooth_run(cb, src, x, y, w, h, 0);
++    Surf* smoothed = smooth_run(cb, src, x, y, w, h, 1);
++    if (!smoothed) return vk_upscale(cb, src, x, y, w, h, dw, dh);
++    Surf* scaled = fsr_run(cb, smoothed, smoothed->att, vk_srgb_as(src->f.vk, 0) != src->f.vk, 0, 0, w, h, dw, dh, 2.0f);
++    return scaled ? scaled : smooth_run(cb, src, x, y, w, h, 0); /* no FSR scratch: smoothing alone */
 +}
 +
 +void vk_upscale_destroy(void) {
@@ -5384,14 +5480,15 @@ index 0000000..254ec58
 +    drop(&g_upscale.easu); drop(&g_upscale.rcas);
 +    for (int i = 0; i < 2; i++) if (g_upscale.pipes[i]) vkDestroyPipeline(g_vk.dev, g_upscale.pipes[i], NULL);
 +    if (g_upscale.sampler) vkDestroySampler(g_vk.dev, g_upscale.sampler, NULL);
++    if (g_upscale.bilinear) vkDestroySampler(g_vk.dev, g_upscale.bilinear, NULL);
 +    if (g_upscale.layout) vkDestroyPipelineLayout(g_vk.dev, g_upscale.layout, NULL);
 +    if (g_upscale.ds) vkDestroyDescriptorSetLayout(g_vk.dev, g_upscale.ds, NULL);
-+    g_upscale.pipes[0] = g_upscale.pipes[1] = VK_NULL_HANDLE; g_upscale.sampler = VK_NULL_HANDLE;
++    g_upscale.pipes[0] = g_upscale.pipes[1] = VK_NULL_HANDLE; g_upscale.sampler = g_upscale.bilinear = VK_NULL_HANDLE;
 +    g_upscale.layout = VK_NULL_HANDLE; g_upscale.ds = VK_NULL_HANDLE; g_upscale.failed = 0;
 +    g_upscale.frames = 0; g_upscale.status = 0;
 +}
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..4141b7f 100644
+index db13c2d..f9c5cd5 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -74,6 +74,7 @@ typedef struct {
@@ -5479,14 +5576,16 @@ index db13c2d..4141b7f 100644
  VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
-@@ -888,6 +915,10 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
+@@ -888,6 +915,12 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
     safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
  void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
  void vk_ui_swapchain_gone(void); /* its images' views go before the swapchain does */
 +int vk_upscale_init(void);
 +Surf* vk_upscale(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh);
 +void vk_upscale_destroy(void); /* GPU idle before this; deferred images drained afterwards */
-+Surf* vk_pixel_smooth(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h);
++Surf* vk_pixel_smooth(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h); /* edge AA alone, same size */
++/* Pixel smoothing then FSR 1 to dw x dh, as the settings ask; NULL: present src's crop as it is. */
++Surf* vk_present_filters(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh);
  void vk_render_clear(GpuChannel* ch, u32 v);
  VkViewport vk_render_viewport(const u32* r);
  int vk_render_depth_clamp(const u32* r);
@@ -5885,10 +5984,10 @@ index 2bd6181..b587bf4 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..27777a3 100644
+index be57ac5..0a6af92 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -80,13 +80,43 @@ setting Game mods off
+@@ -80,13 +80,44 @@ setting Game mods off
      help order. The launcher's list of updates, DLCs and mods writes it. A mod's exefs/ is recompiled into the game
  
  table g_display_ini
@@ -5917,8 +6016,9 @@ index be57ac5..27777a3 100644
 +    default 0
 +    startup
 +    words Off|On
-+    help Soften visible pixel edges in the finished picture, with or without FSR. Applies after FSR when active.
-+    help May soften text and fine detail; adds GPU work. Does not restore missing detail or remove all aliasing.
++    help Edge antialiasing (FXAA-style) on the game's image before FSR: it follows each jagged edge and blends
++    help along it, so staircase edges become smooth lines. FSR then sharpens less. Text and fine detail soften a
++    help little and the GPU does a little more work. It cannot add detail the game did not render.
 +    help Off preserves the original presentation. Unsupported image formats use the original presentation.
  setting TV mode
      key docked
@@ -5933,7 +6033,7 @@ index be57ac5..27777a3 100644
  setting Fullscreen
      key fullscreen
      int 0 1
-@@ -166,7 +196,17 @@ setting FPS limit
+@@ -166,7 +197,17 @@ setting FPS limit
      default game
      set options_fps_set
      help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
@@ -5952,7 +6052,7 @@ index be57ac5..27777a3 100644
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -188,8 +228,35 @@ setting Pipeline threads
+@@ -188,8 +229,35 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -6211,10 +6311,18 @@ index 53c5e45..3c043fc 100644
      vi_show_buffer(7, 0x40, 1, 1, 4, 1, 0, 1, crop, 0);
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
 diff --git a/tests/vulkan_headless.c b/tests/vulkan_headless.c
-index 25f0af2..e3fae02 100644
+index 25f0af2..e079e58 100644
 --- a/tests/vulkan_headless.c
 +++ b/tests/vulkan_headless.c
-@@ -795,6 +795,170 @@ static int check_rt_overlap(void) {
+@@ -14,6 +14,7 @@
+ #include "spirv_emitter_fixture.h"
+ #include <libavutil/buffer.h>
+ #include <stdio.h>
++#include <math.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -795,6 +796,221 @@ static int check_rt_overlap(void) {
      return 0;
  }
  
@@ -6314,15 +6422,63 @@ index 25f0af2..e3fae02 100644
 +    return 0;
 +}
 +
-+/* Pixel smoothing: off keeps the original image, on softens only contrast edges, flat areas stay put. */
++/* Present src's crop through the filters into an image of src's format, read back as RGBA8 (NULL: not filtered). */
++static u8* present_through(Surf* src, u32 w, u32 h, u32 dw, u32 dh, VkBuffer* readback, VkImage* output,
++                           VmaAllocation* output_mem, int* filtered) {
++    VkCommandBuffer cb = vk_cmd();
++    u64 finishes = g_vk_finishes;
++    Surf* out = vk_present_filters(cb, src, 0, 0, w, h, dw, dh);
++    if (!out || out->sw != dw || out->sh != dh || g_vk_finishes != finishes) { *filtered = 0; return NULL; }
++    *filtered = 1;
++    VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
++        .format = src->f.vk, .extent = {dw, dh, 1}, .mipLevels = 1, .arrayLayers = 1,
++        .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
++        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
++    if (!vk_image_create(&ii, output, output_mem)) return NULL;
++    vk_barrier(cb, *output, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
++        VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++    VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++        .srcOffsets = {{0, 0, 0}, {(i32)dw, (i32)dh, 1}}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++        .dstOffsets = {{0, 0, 0}, {(i32)dw, (i32)dh, 1}}};
++    rec_CmdBlitImage(cb, out->img, out->layout, *output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
++    vk_barrier(cb, *output, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
++        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++    u8* result = vk_readback_buffer((u64)dw * dh * 4, readback);
++    if (!result) return NULL;
++    VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {dw, dh, 1}};
++    rec_CmdCopyImageToBuffer(cb, *output, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, *readback, 1, &copy);
++    vk_finish(); vk_readback_ready();
++    return result;
++}
++
++/* The largest change of the dark-to-light edge's height between neighbouring columns, in source rows (64 dark, 192
++   light). Columns at the image's sides are left out: the crop ends the edge there. */
++static float max_edge_jump(const u8* img, u32 dw, u32 dh, u32 scale) {
++    float worst = 0.0f, last = 0.0f;
++    for (u32 x = 2 * scale; x + 2 * scale < dw; x++) {
++        float light = 0.0f;
++        for (u32 y = 0; y < dh; y++) light += ((float)img[(y * dw + x) * 4] - 64.0f) / 128.0f;
++        light /= (float)scale;
++        if (x > 2 * scale && fabsf(light - last) > worst) worst = fabsf(light - last);
++        last = light;
++    }
++    return worst;
++}
++
++/* Pixel smoothing on a shallow staircase (the jagged edge of an aliased line, 4-pixel steps): every column crossing
++   the edge gets in-between shades, so the steps become a slope; areas away from the edge keep their color; off,
++   an invalid crop and a failed format keep the original. Alone and before FSR, UNORM and sRGB. */
 +static int check_pixel_smoothing(void) {
++    enum { W = 32, H = 16 };
++    int upscaler = g_settings.upscaler;
 +    CHECK(vk_upscale_init());
-+    for (int srgb = 0; srgb < 2; srgb++) {
-+        Surf src = {.w = 8, .h = 6, .sw = 8, .sh = 6, .layers = 1, .levels = 1,
++    for (int pass = 0; pass < 4; pass++) {
++        int srgb = pass & 1, fsr = pass >= 2;
++        Surf src = {.w = W, .h = H, .sw = W, .sh = H, .layers = 1, .levels = 1,
 +            .type = VK_IMAGE_VIEW_TYPE_2D,
 +            .f = {.vk = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, .bpp = 4, .bw = 1, .bh = 1}};
 +        VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
-+            .format = src.f.vk, .extent = {8, 6, 1}, .mipLevels = 1, .arrayLayers = 1,
++            .format = src.f.vk, .extent = {W, H, 1}, .mipLevels = 1, .arrayLayers = 1,
 +            .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
 +            .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
 +        VkViewFormats formats;
@@ -6330,62 +6486,65 @@ index 25f0af2..e3fae02 100644
 +        CHECK(vk_image_create(&ii, &src.img, &src.mem));
 +        VkBuffer staged, readback;
 +        u64 offset;
-+        u8* pixels = vk_stage(8 * 6 * 4, 4, &staged, &offset);
++        u8* pixels = vk_stage(W * H * 4, 4, &staged, &offset);
 +        CHECK(pixels);
-+        for (u32 y = 0; y < 6; y++) for (u32 x = 0; x < 8; x++) {
-+            u8* p = pixels + (y * 8 + x) * 4;
-+            p[0] = p[1] = p[2] = x < 4 ? 64 : 192; p[3] = 255; /* one hard vertical edge between x=3 and x=4 */
++        /* dark above, light from row first(x) down: the boundary drops one row every 4 columns */
++#define FIRST_LIGHT(x) ((u32)(x) / 4 + 4)
++        for (u32 y = 0; y < H; y++) for (u32 x = 0; x < W; x++) {
++            u8* p = pixels + (y * W + x) * 4;
++            p[0] = p[1] = p[2] = y >= FIRST_LIGHT(x) ? 192 : 64; p[3] = 255;
 +        }
 +        VkCommandBuffer cb = vk_cmd();
 +        vk_surf_use(cb, &src, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 +        VkBufferImageCopy upload = {.bufferOffset = offset,
-+            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {8, 6, 1}};
++            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {W, H, 1}};
 +        rec_CmdCopyBufferToImage(cb, staged, src.img, src.layout, 1, &upload);
-+        g_settings.pixel_smoothing = 0;
-+        CHECK(!vk_pixel_smooth(cb, &src, 0, 0, 8, 6)); /* off: the original presentation */
++        g_settings.upscaler = 0; g_settings.pixel_smoothing = 0;
++        CHECK(!vk_present_filters(cb, &src, 0, 0, W, H, W, H)); /* both off: the original presentation */
 +        g_settings.pixel_smoothing = 1;
-+        CHECK(!vk_pixel_smooth(cb, &src, 5, 0, 8, 6)); /* an invalid crop is never read */
-+        u64 finishes = g_vk_finishes;
-+        Surf* out = vk_pixel_smooth(cb, &src, 0, 0, 8, 6);
-+        CHECK(out && out->sw == 8 && out->sh == 6 && g_vk_finishes == finishes);
++        CHECK(!vk_pixel_smooth(cb, &src, 5, 0, W, H)); /* an invalid crop is never read */
++        g_settings.upscaler = fsr;
++        u32 scale = fsr ? 2 : 1, dw = W * scale, dh = H * scale;
 +        VkImage output;
 +        VmaAllocation output_mem;
-+        ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-+        CHECK(vk_image_create(&ii, &output, &output_mem));
-+        vk_barrier(cb, output, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-+            VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-+        VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-+            .srcOffsets = {{0, 0, 0}, {8, 6, 1}}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-+            .dstOffsets = {{0, 0, 0}, {8, 6, 1}}};
-+        rec_CmdBlitImage(cb, out->img, out->layout, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
-+        vk_barrier(cb, output, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-+        u8* result = vk_readback_buffer(8 * 6 * 4, &readback);
-+        CHECK(result);
-+        VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {8, 6, 1}};
-+        rec_CmdCopyImageToBuffer(cb, output, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &copy);
-+        vk_finish(); vk_readback_ready();
-+        for (u32 y = 0; y < 6; y++) for (u32 x = 0; x < 8; x++) {
-+            u8* p = result + (y * 8 + x) * 4;
-+            int want = x < 4 ? 64 : 192;
++        int filtered;
++        u8* result = present_through(&src, W, H, dw, dh, &readback, &output, &output_mem, &filtered);
++        CHECK(filtered && result);
++        for (u32 y = 0; y < dh; y++) for (u32 x = 0; x < dw; x++) {
++            u8* p = result + (y * dw + x) * 4;
 +            CHECK(p[3] == 255 && abs(p[0] - p[1]) <= 2 && abs(p[0] - p[2]) <= 2);
-+            if (x == 3) CHECK(p[0] > want + 2 && p[0] < 192); /* the dark side of the edge is lifted, not flipped */
-+            else if (x == 4) CHECK(p[0] < want - 2 && p[0] > 64);
-+            else CHECK(abs(p[0] - want) <= 2); /* flat areas keep their color */
++            int edge = (int)FIRST_LIGHT(x / scale) * (int)scale, want = (int)y >= edge ? 192 : 64;
++            /* FSR's sharpening may overshoot right at the edge; two source rows away nothing changes */
++            if ((int)y < edge - 2 * (int)scale || (int)y >= edge + 2 * (int)scale) CHECK(abs(p[0] - want) <= 2);
 +        }
++        /* Jaggedness: the edge's height in each column, from how much of the column is light, in source rows. A
++           staircase jumps a whole row every 4 columns; an antialiased slope climbs a quarter row per column. */
++        float smoothed = max_edge_jump(result, dw, dh, scale);
++        vk_image_destroy(output, output_mem);
++        float plain = 1.0f; /* the source staircase */
++        if (fsr) { /* FSR alone keeps the steps (EASU is edge-preserving), only rounding their corners */
++            g_settings.pixel_smoothing = 0;
++            u8* fsr_only = present_through(&src, W, H, dw, dh, &readback, &output, &output_mem, &filtered);
++            CHECK(filtered && fsr_only);
++            plain = max_edge_jump(fsr_only, dw, dh, scale);
++            vk_image_destroy(output, output_mem);
++        }
++        printf("pixel smoothing pass %d: largest edge step %.2f rows (without smoothing %.2f)\n", pass, smoothed, plain);
++        CHECK(smoothed <= 0.6f && smoothed < plain * 0.7f);
++#undef FIRST_LIGHT
 +        for (int i = 0; i < src.nsv; i++) vkDestroyImageView(g_vk.dev, src.sv[i].v, NULL);
-+        vk_image_destroy(src.img, src.mem); vk_image_destroy(output, output_mem);
++        vk_image_destroy(src.img, src.mem);
 +    }
-+    g_settings.pixel_smoothing = 0;
++    g_settings.pixel_smoothing = 0; g_settings.upscaler = upscaler;
 +    vk_upscale_destroy(); vk_finish();
-+    puts("PASS Pixel smoothing: off keeps the image, on softens only the edge, flat areas and sRGB round-trip unchanged, invalid crop refused, no host wait");
++    puts("PASS Pixel smoothing: staircase edges become slopes alone and before FSR, flat areas and sRGB unchanged, off and invalid crops keep the original, no host wait");
 +    return 0;
 +}
 +
  int main(int argc, char** argv) {
      const u32 w = 32, h = 16;
      const u64 address = HEAP_BASE;
-@@ -811,9 +975,14 @@ int main(int argc, char** argv) {
+@@ -811,9 +1027,14 @@ int main(int argc, char** argv) {
      CHECK(mem_map(HEAP_BASE, 0x800000, MS_NORMAL, PERM_RW) == 0);
      nv_init(); /* color targets may import guest memory through the GPU page table */
      g_settings.vulkan_video_decode = 1; /* a Vulkan Video decode queue where the device has one (lavapipe has none) */
@@ -6400,7 +6559,7 @@ index 25f0af2..e3fae02 100644
      CHECK(!check_packed_depth());
      CHECK(!check_depth_array());
      CHECK(!check_srgb_write());
-@@ -826,7 +995,7 @@ int main(int argc, char** argv) {
+@@ -826,7 +1047,7 @@ int main(int argc, char** argv) {
      CHECK(!check_blit());
      CHECK(!check_rt_overlap());
      /* the pipeline workers: pipeline_threads when given, else a quarter of the CPUs, two to six */

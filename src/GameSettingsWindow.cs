@@ -16,7 +16,7 @@ namespace PortForge
         private readonly TextBox game = new TextBox { AccessibleName = "Windows game executable", Dock = DockStyle.Fill };
         private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (recommended)", "Custom limit", "Unlimited"), filtering = Filtering();
         private readonly ComboBox upscaler = Choice("Upscaler", "Linear", "AMD FSR 1 (automatic)");
-        private readonly ComboBox pixelSmoothing = Choice("Pixel smoothing", "Off", "On - soften pixel edges");
+        private readonly ComboBox pixelSmoothing = Choice("Pixel smoothing", "Off", "On - smooth jagged edges");
         private readonly Label upscaleActivity = Label("FSR: no game session checked yet.", 9, Muted);
         private readonly NumericUpDown fps = Number("Custom FPS limit", 10, 1000, 120, 10), scale = Number("Render scale percent", 25, 400, 100, 25);
         private readonly CheckBox vsync = Toggle("VSync (reduce tearing)", true), shadows = Toggle("Draw shadows", true), docked = Toggle("TV mode (off = handheld)", true), fullscreen = Toggle("Start fullscreen", false);
@@ -133,7 +133,7 @@ namespace PortForge
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
             AddOption("Upscaler", upscaler, delegate { upscaler.SelectedIndex = 1; });
             AddOption("Pixel smoothing", pixelSmoothing, delegate { pixelSmoothing.SelectedIndex = 0; });
-            AddHint("On softens pixel edges in the finished picture, with or without FSR. It also softens text and fine detail and adds GPU work. Off keeps the original picture. Save and restart the game to apply. Requires Engine 1.11 or newer.");
+            AddHint("On removes jagged, staircase edges: the engine follows each edge in the game's picture and blends along it before FSR enlarges it, and FSR sharpens less. Text and fine detail soften a little, and it cannot add detail the game did not render. Off keeps the original picture. Save and restart the game to apply. Engine 1.12 or newer.");
             upscaleActivity.AccessibleName = "Recorded upscaling status"; options.Controls.Add(upscaleActivity);
             options.SizeChanged += delegate { upscaleActivity.MaximumSize = new Size(Math.Max(200, options.ClientSize.Width - 24), 0); };
             AddHint("FSR 1 improves scaling to a larger window; it adds GPU work and cannot boost FPS by itself. Performance selects handheld mode so the game can render a lighter scene before FSR upscales it. Some games use the same resolution in both modes. Maximize the game or use fullscreen to upscale to your display.");

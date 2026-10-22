@@ -1,6 +1,6 @@
-# PortForge 0.28
+# PortForge 0.29
 
-**Pixel smoothing:** choose On to soften pixel edges in the finished picture, with or without FSR. It also softens text and fine detail and adds some GPU work. Off keeps the original image. Save and restart the game to apply. Needs Engine 1.11 or newer (the AI Doctor installs it under watched games).
+**Pixel smoothing:** choose On to remove jagged, staircase edges. The engine follows each edge in the game's image and blends along it before FSR enlarges the picture, and FSR sharpens less so the steps do not return. Text and fine detail soften a little, and it cannot add detail the game did not render. Save and restart the game to apply. Engine 1.12 or newer gives the full effect (the AI Doctor installs it under watched games).
 
 **Performance + FSR:** on a protected engine, Performance selects handheld mode and AMD FSR 1. The game chooses its own rendering layout; FSR then reconstructs and sharpens it to a larger window. This can reduce rendering work in games that use a lighter handheld layout. Some games use identical layouts in both modes. FSR itself adds GPU work; it cannot double FPS or remove loading stalls. Balanced and Quality restore TV mode. The graphics window shows the latest recorded FSR status, not a promise that a selected option is active. Maximize the game window or use fullscreen for upscaling to the display.
 
