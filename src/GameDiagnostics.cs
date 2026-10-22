@@ -118,7 +118,7 @@ namespace PortForge
         private static readonly object RepairLock=new object();
         public static string Repair(string exe,RuntimeCapabilities cap,string backend,IEnumerable<string> requested=null,bool warm=false,IProgress<string> progress=null,CancellationToken token=default(CancellationToken))
         {
-            lock(RepairLock) return RepairLocked(exe,cap,backend,requested,warm,progress,token);
+            using(PlayFirst.Begin(exe)) lock(RepairLock) return RepairLocked(exe,cap,backend,requested,warm,progress,token);
         }
         private static string RepairLocked(string exe,RuntimeCapabilities cap,string backend,IEnumerable<string> requested,bool warm,IProgress<string> progress,CancellationToken token)
         {

@@ -71,6 +71,10 @@ namespace PortForge
             string folder = Path.GetDirectoryName(gameExe), backup = Path.Combine(folder, BackupFolderName);
             if (!File.Exists(Path.Combine(folder, Path.GetFileNameWithoutExtension(gameExe) + "_code.dll"))) throw new IOException("This is not a converted game: its _code.dll is missing.");
             if (IsInstalled(gameExe, package)) return "The " + package.Name + " is already installed for this game.";
+            using (PlayFirst.Begin(gameExe)) return InstallUnheld(gameExe, folder, backup, package, progress, token);
+        }
+        private static string InstallUnheld(string gameExe, string folder, string backup, EnginePackage package, IProgress<string> progress, CancellationToken token)
+        {
             // The first install keeps the original engine; later installs never overwrite that copy.
             if (!File.Exists(Path.Combine(backup, Path.GetFileName(gameExe))))
             {

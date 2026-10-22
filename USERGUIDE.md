@@ -1,4 +1,17 @@
-# PortForge 0.22
+# PortForge 0.23
+
+## Play any time
+
+**Play game** always starts the game, even while PortForge is busy. It stops the app's own background work for that game first: Auto tune, Doctor checks, shader warm-up and engine checks. Each of these puts your save, settings and engine back exactly as they were. Nothing new starts for that game for two minutes, and nothing at all while the game is running.
+
+Cloud saves never block Play. PortForge fetches your latest cloud progress when it can. If the cloud is busy, offline or has different progress from another PC, the game starts with this PC's save. Sync runs again after you close the game, and both copies are kept when they differ.
+
+If PortForge was closed or crashed during a test, a `PortForge-test-backup-...` folder could be left in the game folder. Earlier versions then kept cloud saves and Play waiting forever. PortForge now resolves it by itself, and it never deletes a save that differs from yours:
+- A backup identical to your save is removed.
+- If your save changed only during the test, your save from before the test is put back.
+- If you played after the test, your current save stays.
+
+Any copy that differs is moved to `PortForge-save-backups` in the game folder.
 
 ## Game speed lock
 

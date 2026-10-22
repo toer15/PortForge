@@ -220,10 +220,16 @@ namespace PortForge
             token.ThrowIfCancellationRequested();
             exe = Path.GetFullPath(exe);
             var info = new ProcessStartInfo(exe, arguments) { WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(exe)), UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            // a timed run plays the game, so Play can stop it; a runtime run for another game's folder (--game=) is that game's test
+            var owner = Regex.Match(arguments, "--game=(\"[^\"]+\"|\\S+)");
+            string tested = owner.Success ? owner.Groups[1].Value.Trim('"') : exe;
+            bool gameplay = Regex.IsMatch(arguments, @"(^|\s)--seconds=");
+            if (gameplay && PlayFirst.Holding(tested)) throw new OperationCanceledException("The player started this game. PortForge's test will run another time.");
             using (var process = Process.Start(info))
             {
                 var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
                 var watch = Stopwatch.StartNew();
+                object played = gameplay ? PlayFirst.Track(tested, process) : null;
                 try
                 {
                     while (!process.WaitForExit(100))
@@ -231,6 +237,7 @@ namespace PortForge
                         token.ThrowIfCancellationRequested();
                         if (watch.Elapsed.TotalSeconds > timeoutSeconds) throw new TimeoutException("The game did not finish its test in time. No tuning result was applied.");
                     }
+                    if (played != null && PlayFirst.Release(played)) throw new OperationCanceledException("Stopped so the player can play. The test will run another time.");
                     token.ThrowIfCancellationRequested();
                     string text = stdout.Result + "\n" + stderr.Result;
                     if (process.ExitCode != 0) throw new IOException("The game engine stopped (exit " + process.ExitCode + "). " + text.Substring(Math.Max(0, text.Length - 1800)));
@@ -242,6 +249,7 @@ namespace PortForge
                 finally
                 {
                     if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); }
+                    if (played != null) PlayFirst.Release(played);
                 }
             }
         }

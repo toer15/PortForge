@@ -59,6 +59,8 @@ internal static class CloudSaveTests
     private static string Game(string root,string name,string fixture){string dir=Path.Combine(root,name);Directory.CreateDirectory(dir);string exe=Path.Combine(dir,"Game.exe");File.Copy(fixture,exe);File.Copy(fixture,Path.Combine(dir,"Game_code.dll"));return exe;}
     private static void Save(string exe,string progress){string save=CloudSaveService.SaveFolder(exe);Directory.CreateDirectory(Path.Combine(save,"profile"));File.WriteAllText(Path.Combine(save,"profile","progress.bin"),progress);}
     private static string Read(string exe){return File.ReadAllText(Path.Combine(CloudSaveService.SaveFolder(exe),"profile","progress.bin"));}
+    private static string Backup(string exe,string name,string progress){string dir=Path.Combine(Path.GetDirectoryName(exe),"PortForge-test-backup-"+name);Directory.CreateDirectory(Path.Combine(dir,"save","profile"));File.WriteAllText(Path.Combine(dir,"save","profile","progress.bin"),progress);return dir;}
+    private static string Archived(string exe,string prefix){string archive=Path.Combine(Path.GetDirectoryName(exe),GameStateGuard.SaveArchiveName);if(!Directory.Exists(archive))return null;string dir=Directory.GetDirectories(archive,prefix+"*").FirstOrDefault();if(dir==null)return null;string file=Directory.GetFiles(dir,"progress.bin",SearchOption.AllDirectories).FirstOrDefault();return file==null?null:File.ReadAllText(file);}
     private static CloudGame Config(string exe,string url){return new CloudGame{Exe=exe,Key="0100000000000001",Provider="WebDAV",Location=url,User="player",Secret=CloudSaves.ProtectPassword("app-password")};}
     private static IEnumerable<Control> All(Control root){foreach(Control child in root.Controls){yield return child;foreach(var nested in All(child))yield return nested;}}
     private static void Wait(Func<bool> condition){var watch=Stopwatch.StartNew();while(!condition()){if(watch.ElapsedMilliseconds>15000)throw new Exception("Cloud operation timed out");Application.DoEvents();Thread.Sleep(10);}Application.DoEvents();}
@@ -119,6 +121,8 @@ internal static class CloudSaveTests
                 Check(Read(a)=="Concurrent B","Protected gameplay restores the original progress");
                 using(var running=Process.Start(new ProcessStartInfo(a,"-H --seconds=20"){UseShellExecute=false,CreateNoWindow=true}))
                 {try{Check(first.Sync(a,Token).State=="WAITING","Automatic sync waits while the actual game process is running");}finally{if(!running.HasExited)running.Kill();running.WaitForExit();}}
+                string leftover=Backup(a,"left-by-a-crash",Read(a));
+                Check(first.Sync(a,Token).State!="WAITING"&&!Directory.Exists(leftover)&&Read(a)=="Concurrent B","A backup left by an interrupted test no longer keeps cloud sync waiting forever");
                 Save(b,"New cloud progress");second.Sync(b,Token);server.Corrupt=true;
                 Check(first.Sync(a,Token).State=="ERROR"&&Read(a)=="Concurrent B","A corrupt cloud archive cannot replace local progress");server.Corrupt=false;first.Sync(a,Token);
                 var settings=first.Get(a);first.Configure(settings,false);int before=server.Uploads;Save(a,"Offline progress");
@@ -197,6 +201,26 @@ internal static class CloudSaveTests
                 }
             }
             PortForge.NativeWindow.StartDoctorOnShow=false;using(var ui=new PortForge.NativeWindow())Check(All(ui).OfType<Button>().Any(x=>x.Text=="Cloud saves"&&x.Enabled),"The main app has an enabled Cloud saves button");
+            // Play comes first: leftover test backups are resolved without losing progress, and Play stops background tests.
+            string stale=Game(root,"Stale-Backup",args[0]);Save(stale,"Player progress");string same=Backup(stale,"same","Player progress");
+            Check(GameStateGuard.RecoverStale(stale)!=null&&!Directory.Exists(same)&&Read(stale)=="Player progress","A leftover backup equal to the save is removed");
+            string older=Backup(stale,"older","Progress before the test");Directory.SetCreationTimeUtc(older,DateTime.UtcNow.AddHours(-2));Save(stale,"Progress played later");
+            Check(GameStateGuard.RecoverStale(stale)!=null&&!Directory.Exists(older)&&Read(stale)=="Progress played later"&&Archived(stale,"before-test-")=="Progress before the test","A save played after an interrupted test is kept, with the pre-test copy archived");
+            string interrupted=Backup(stale,"interrupted","Real progress");Save(stale,"Temporary benchmark save");
+            Check(GameStateGuard.RecoverStale(stale)!=null&&!Directory.Exists(interrupted)&&Read(stale)=="Real progress"&&Archived(stale,"test-progress-")=="Temporary benchmark save","An interrupted test's temporary progress is replaced by the player's save and kept aside");
+            Check(GameStateGuard.RecoverStale(stale)==null,"Recovery does nothing when no leftover backup exists");
+            using(new GameStateGuard(stale)) Check(GameStateGuard.RecoverStale(stale)==null&&Directory.GetDirectories(Path.GetDirectoryName(stale),"PortForge-test-backup-*").Length==1,"A running test's own backup is never touched");
+            var watchTest=Stopwatch.StartNew();
+            var test=Task.Run(()=>GameOptimization.Run(stale,"-H --seconds=20",60,Token));
+            while(!PlayFirst.Busy(stale)&&watchTest.ElapsedMilliseconds<10000)Thread.Sleep(20);
+            Check(PlayFirst.Busy(stale),"A background game test is visible to Play");
+            Check(PlayFirst.Yield(stale)==1,"Play stops the running background test");
+            bool testStopped=false;try{test.Wait();}catch(AggregateException e){testStopped=e.InnerException is OperationCanceledException;}
+            Check(testStopped&&watchTest.Elapsed.TotalSeconds<15&&!PlayFirst.Busy(stale),"A stopped test reports a cancellation, not an engine failure, and lets the game start at once");
+            bool held=false;try{GameOptimization.Run(stale,"-H --seconds=1",30,Token);}catch(OperationCanceledException){held=true;}
+            bool guardHeld=false;try{using(new GameStateGuard(stale)){}}catch(OperationCanceledException){guardHeld=true;}
+            bool workHeld=false;try{using(PlayFirst.Begin(stale)){}}catch(OperationCanceledException){workHeld=true;}
+            Check(held&&guardHeld&&workHeld&&Read(stale)=="Real progress","After Play, no background test, protected save or engine work starts for that game");
             Console.WriteLine(checks+" cloud-save checks passed.");return 0;
         }catch(Exception e){Console.Error.WriteLine(e);return 1;}
         finally{string build=Path.GetFullPath(Path.GetDirectoryName(args[0]));if(Directory.Exists(root)&&Paths.IsInside(root,build)){Paths.CheckLinks(root);Directory.Delete(root,true);}}

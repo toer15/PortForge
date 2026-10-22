@@ -208,7 +208,8 @@ namespace PortForge
         {
             if (busy && inputLock == null) inputLock = UiLock.Lock(this);
             if (!busy && inputLock != null) { inputLock.Unlock(); inputLock = null; }
-            save.Enabled = tune.Enabled = launch.Enabled = !busy && loadedGame != null && capabilities != null;
+            save.Enabled = tune.Enabled = !busy && loadedGame != null && capabilities != null;
+            launch.Enabled = !starting && loadedGame != null && capabilities != null; // Play stays available: it stops background work itself
             scan.Enabled=undo.Enabled=!busy&&loadedGame!=null;askAi.Enabled=!busy&&loadedGame!=null&&CodexDiagnosis.Find()!=null;
             stop.Enabled = busy;
         }
@@ -255,30 +256,58 @@ namespace PortForge
             limiter.Text=(dirty?"Selected limit: ":"Saved limit: ")+value+"; VSync "+(vsync.Checked?"on":"off")+". "+(dirty?"Play saves this automatically.":"Verified settings are used on next start.");
             limiter.MaximumSize=new Size(Math.Max(200,options.ClientSize.Width-24),0);
         }
+        private bool starting;
+        // Play always wins: it stops this window's test and PortForge's background tests for the game (they put the save back
+        // as they unwind), never waits on cloud sync, and launches with this PC's save when the cloud can't be checked.
         private async Task Play()
         {
-            if(cancellation!=null||loadedGame==null||capabilities==null)return;
-            GraphicsProfile desired=ReadProfile();cancellation=new CancellationTokenSource();Busy(true);
+            if(starting||loadedGame==null||capabilities==null)return;
+            string exe=loadedGame;GraphicsProfile desired;CancellationTokenSource mine=null;
+            try{desired=ReadProfile();}catch(Exception e){Error(e);return;}
+            starting=true;launch.Enabled=false;
             try
             {
-                GameOptimization.EnsureStopped(loadedGame);
-                if(CloudSaves.Service.Get(loadedGame).Enabled)
+                if(GameDiagnostics.Running(exe)&&!PlayFirst.Busy(exe)){SetStatus("PLAYING","The game is already running","Switch to its window to keep playing.",Mint);return;}
+                SetStatus("STARTING","Starting the game","Pausing PortForge's checks for this game. Your save is kept exactly as it was.",Mint);
+                if(cancellation!=null)cancellation.Cancel();
+                var wait=Stopwatch.StartNew();
+                while(true)
                 {
-                    SetStatus("SYNCING","Checking cloud saves","Checking saved progress before starting the game.",Mint);
-                    var cloudResult=await Task.Run(()=>CloudSaves.Service.Sync(loadedGame,cancellation.Token));
-                    if(cloudResult.Conflict||cloudResult.State=="BUSY"||cloudResult.State=="WAITING")throw new IOException(cloudResult.Message+" Open Cloud saves before playing.");
-                    if(cloudResult.State=="ERROR")history.AppendText("Cloud saves: "+cloudResult.Message+" Playing with this PC's save; cloud sync will retry."+Environment.NewLine);
+                    PlayFirst.Yield(exe);
+                    if(cancellation==null&&!PlayFirst.Busy(exe)&&!GameDiagnostics.Running(exe))break;
+                    if(wait.Elapsed.TotalSeconds>90)throw new IOException("A background check is still putting your save back. Press Play again in a moment.");
+                    await Task.Delay(200);
                 }
-                await Task.Run(()=>GameOptimization.SaveAndVerify(loadedGame,desired,capabilities));
-                if(autoRepair.Checked)history.AppendText(await Task.Run(()=>GameDiagnostics.Repair(loadedGame,capabilities,backendPath))+Environment.NewLine);
-                ShowProfile(GameOptimization.Load(loadedGame));
-                cancellation.Token.ThrowIfCancellationRequested();
-                using(var process=GameOptimization.SaveAndStart(loadedGame,ReadProfile(),capabilities)){}
-                SetStatus("PLAYING","Game started",limiter.Text+" Automatic checks continue while this window is open.",Mint);
+                mine=cancellation=new CancellationTokenSource();Busy(true);var token=mine.Token;
+                string recovered=await Task.Run(()=>GameStateGuard.RecoverStale(exe));
+                if(recovered!=null)history.AppendText(recovered+Environment.NewLine);
+                if(CloudSaves.Service.Get(exe).Enabled)
+                {
+                    SetStatus("SYNCING","Checking cloud saves","Getting your latest progress before the game starts.",Mint);
+                    CloudResult cloudResult=null;
+                    try
+                    {
+                        for(var cloudWait=Stopwatch.StartNew();;await Task.Delay(500))
+                        {
+                            cloudResult=await Task.Run(()=>CloudSaves.Service.Sync(exe,token));
+                            if(cloudResult.State!="BUSY"||cloudWait.Elapsed.TotalSeconds>30)break;
+                        }
+                    }
+                    catch(OperationCanceledException){throw;}
+                    catch(Exception e){cloudResult=new CloudResult{State="ERROR",Message=e.Message};}
+                    if(cloudResult.Conflict)history.AppendText("Cloud saves: another PC has different progress. Playing with this PC's save; both copies are kept, so choose one in Cloud saves later."+Environment.NewLine);
+                    else if(cloudResult.State=="ERROR"||cloudResult.State=="BUSY"||cloudResult.State=="WAITING")history.AppendText("Cloud saves: "+cloudResult.Message+" Playing with this PC's save; cloud sync runs again after the game closes."+Environment.NewLine);
+                }
+                token.ThrowIfCancellationRequested();
+                try{await Task.Run(()=>GameOptimization.SaveAndVerify(exe,desired,capabilities));}
+                catch(Exception e){history.AppendText("Settings could not be saved ("+e.Message+"). Starting with the last saved settings."+Environment.NewLine);}
+                ShowProfile(GameOptimization.Load(exe));
+                using(var process=GameOptimization.SaveAndStart(exe,ReadProfile(),capabilities)){}
+                SetStatus("PLAYING","Game started",limiter.Text+" PortForge's checks wait until you close the game.",Mint);
             }
             catch(OperationCanceledException){SetStatus("CANCELLED","Game start cancelled","Any verified settings changes are kept; the game was not launched.",Muted);}
             catch(Exception e){Error(e);}
-            finally{cancellation.Dispose();cancellation=null;Busy(false);}
+            finally{if(mine!=null&&cancellation==mine){mine.Dispose();cancellation=null;}starting=false;Busy(cancellation!=null);}
         }
         private async Task CheckHealth(bool forceAi,bool quiet=false)
         {

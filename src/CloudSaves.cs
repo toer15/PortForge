@@ -183,6 +183,7 @@ namespace PortForge
                     try{held=mutex.WaitOne(0);}catch(AbandonedMutexException){held=true;}
                     if(!held)return new CloudResult{State="BUSY",Message="Cloud saves are already being checked for this game."};
                     var config=Get(exe);if(!config.Enabled)return SetStatus(exe,new CloudResult{State="OFF",Message="Cloud saves are off."});
+                    try{GameStateGuard.RecoverStale(exe);}catch(IOException){}catch(UnauthorizedAccessException){}
                     if(GameDiagnostics.Running(exe)||GameStateGuard.IsProtected(exe)||Directory.GetDirectories(Path.GetDirectoryName(exe),"PortForge-test-backup-*").Length>0)
                         return SetStatus(exe,new CloudResult{State="WAITING",Message="Waiting for the game or protected test to close. No save files were changed."});
                     token.ThrowIfCancellationRequested();EnsureEnabled(config);ValidateKey(config.Key);
