@@ -50,7 +50,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.11 | Switch to PC";
+            Text = "PortForge 0.12 | Switch to PC";
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -384,6 +384,7 @@ namespace PortForge
                         ShowStatus("WORKING", stage.Title, stage.Message, Blue);
                 });
                 result = await Task.Run(() => NativeConversion.Convert(request, updates, token, stages));
+                try { if (result != null && Directory.Exists(result)) { string built = Path.Combine(result, Path.GetFileName(result) + ".exe"); if (File.Exists(built)) GameSettingsWindow.RememberGame(built); } } catch (IOException) { } catch (UnauthorizedAccessException) { }
                 try { File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last-game.txt"), Path.Combine(result, request.Name + ".exe")); } catch { }
                 if (doctor != null) doctor.Watch(Path.Combine(result, request.Name + ".exe"));
                 ShowStatus("DONE", "Your files are ready", "The Windows game files were created successfully. Open the game folder to find " + request.Name + ".exe. Whether the game runs depends on game support.", Mint);
@@ -500,6 +501,7 @@ namespace PortForge
         private static Button Button(string text, bool primary)
         {
             var button = new Button { Text = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Background : Color.WhiteSmoke, Cursor = Cursors.Hand, Font = new Font("Segoe UI", 10, primary ? FontStyle.Bold : FontStyle.Regular) };
+            button.EnabledChanged += delegate { button.BackColor = button.Enabled ? (primary ? Mint : Surface) : Color.FromArgb(34, 38, 48); button.ForeColor = button.Enabled ? (primary ? Background : Color.WhiteSmoke) : Color.FromArgb(120, 126, 140); };
             button.FlatAppearance.BorderSize = 0;
             return button;
         }

@@ -84,6 +84,7 @@ internal static class NativeInterfaceTests
                 form.Size = form.MinimumSize;
                 Application.DoEvents();
                 Check(form.ClientRectangle.Contains(form.PointToClient(button("Start conversion").PointToScreen(Point.Empty))), "Start button stays visible at the minimum window size");
+            GameSettingsWindow.IgnoreRemembered = true;
             using (var settingsForm = new GameSettingsWindow(null))
             {
                 settingsForm.ShowInTaskbar = false; settingsForm.Opacity = 0; settingsForm.StartPosition = FormStartPosition.Manual; settingsForm.Location = new Point(-10000, -10000); settingsForm.Show(); Application.DoEvents();

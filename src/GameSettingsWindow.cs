@@ -38,6 +38,26 @@ namespace PortForge
         private DateTime lastAiTime;
         private string displayedAi;
 
+        private static string MemoryFile(){return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"PortForge","last-game.txt");}
+        public static void RememberGame(string exe)
+        {
+            foreach(string file in new[]{MemoryFile(),Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"last-game.txt")})
+            { try{Directory.CreateDirectory(Path.GetDirectoryName(file));File.WriteAllText(file,exe);}catch(IOException){}catch(UnauthorizedAccessException){} }
+        }
+        // The last game the player used, so the window is never empty after an update or restart.
+        public static bool IgnoreRemembered;
+        public static string RememberedGame()
+        {
+            if(IgnoreRemembered)return null;
+            foreach(string file in new[]{MemoryFile(),Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"last-game.txt")})
+            { try{if(File.Exists(file)){string path=File.ReadAllText(file).Trim();if(File.Exists(path))return path;}}catch(IOException){}catch(UnauthorizedAccessException){} }
+            try
+            {
+                string list=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"watched-games.txt");
+                if(File.Exists(list))foreach(string line in File.ReadAllLines(list).Reverse()){string path=line.Trim();if(path.Length>0&&File.Exists(path))return path;}
+            }catch(IOException){}catch(UnauthorizedAccessException){}
+            return null;
+        }
         public GameSettingsWindow(string initialGame,string backendFile=null)
         {
             backendPath=backendFile;
@@ -124,7 +144,7 @@ namespace PortForge
             stop.Click += delegate { if (cancellation != null) { cancellation.Cancel(); stop.Enabled = false; SetStatus("STOPPING", "Cancelling test", "Stopping the test process and restoring your original settings.", Muted); } };
             root.Controls.Add(actions, 0, 4); Controls.Add(root);
             game.TextChanged += delegate { capabilities = null; loadedGame = null;dirty=false;lastHealth=displayedAi=null;findings.Clear();history.Clear();save.Enabled = tune.Enabled = launch.Enabled = scan.Enabled=askAi.Enabled=undo.Enabled=false; SetStatus("READY", "Load the game settings", "Select Load or Browse to check this game's engine.", Muted); };
-            game.Text = initialGame ?? "";
+            game.Text = (initialGame != null && File.Exists(initialGame)) ? initialGame : (RememberedGame() ?? "");
             ShowProfile(new GraphicsProfile());
             scale.ValueChanged+=delegate{Changed();};filtering.SelectedIndexChanged+=delegate{Changed();};foreach(var check in new[]{vsync,shadows,docked,fullscreen})check.CheckedChanged+=delegate{Changed();};
             Shown += async delegate { if (File.Exists(game.Text)) await LoadGame(); };
@@ -147,7 +167,7 @@ namespace PortForge
                 if(autoRepair.Checked&&!initial.Running&&initial.Issues.Any(i=>i.Fix=="restore_runtime"))history.AppendText(await Task.Run(()=>GameDiagnostics.Repair(exe,null,backendPath,new[]{"restore_runtime"}))+Environment.NewLine);
                 capabilities = await Task.Run(() => RuntimeCapabilities.Read(exe, token));
                 ShowProfile(GameOptimization.Load(exe)); loadedGame = Path.GetFullPath(exe);
-                try{File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"last-game.txt"),loadedGame);}catch(IOException){}catch(UnauthorizedAccessException){}
+                RememberGame(loadedGame);
                 if(LiveDoctor.Current!=null)LiveDoctor.Current.Watch(loadedGame);
                 enginePanel.SetGame(loadedGame);
                 SetStatus("READY", "Ready to tune", "Choose an FPS preset above. Play game saves and verifies your selected limit. Automatic fixes checks the recorded log.", Mint);
@@ -290,7 +310,7 @@ namespace PortForge
         private static CheckBox Toggle(string text, bool value) { return new CheckBox { Text = text, Checked = value, AutoSize = true, Margin = new Padding(0, 6, 22, 6) }; }
         private static Label Label(string text, float size, Color color) { return new Label { Text = text, Font = new Font("Segoe UI", size), ForeColor = color, AutoSize = true, Margin = new Padding(0, 0, 0, 5) }; }
         private static TableLayoutPanel Stack() { return new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Margin = new Padding(0) }; }
-        private static Button Button(string text, bool primary) { var b = new Button { Text = text, AccessibleName = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Cursor = Cursors.Hand }; b.FlatAppearance.BorderSize = 0; return b; }
+        private static Button Button(string text, bool primary) { var b = new Button { Text = text, AccessibleName = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Cursor = Cursors.Hand }; b.EnabledChanged += delegate { b.BackColor = b.Enabled ? (primary ? Mint : Surface) : Color.FromArgb(34, 38, 48); b.ForeColor = b.Enabled ? (primary ? Bg : Color.WhiteSmoke) : Color.FromArgb(120, 126, 140); }; b.FlatAppearance.BorderSize = 0; return b; }
         protected override void Dispose(bool disposing){if(disposing){healthTimer.Stop();healthTimer.Dispose();}base.Dispose(disposing);}
     }
 }

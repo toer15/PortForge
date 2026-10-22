@@ -61,7 +61,7 @@ namespace PortForge
         private void UpdateState()
         {
             bool idle = cancellation == null, has = game != null, installed = has && EngineManager.IsInstalled(game, package);
-            status.Text = !has ? "Load a game above to see its engine." : EngineManager.Describe(game, package);
+            status.Text = !has ? "No game is loaded yet. Click Browse at the top, choose your converted game's .exe, then click Load." : EngineManager.Describe(game, package);
             detail.Text = package == null ? "The PortForge Engine is not included in this copy of the app (Engine folder missing)." : package.Name + (package.Base.Length > 0 ? ", based on ScarletNX " + package.Base : "") + (package.Features.Length > 0 ? ". " + package.Features : "") + ". " + EngineLab.Availability();
             install.Enabled = idle && has && package != null && !installed;
             restore.Enabled = idle && has && File.Exists(Path.Combine(Path.GetDirectoryName(game ?? "C:\\"), EngineManager.BackupFolderName, Path.GetFileName(game ?? "x")));
@@ -121,7 +121,7 @@ namespace PortForge
         private static Button Action(string text, bool primary)
         {
             var b = new Button { Text = text, AccessibleName = text, AutoSize = true, MinimumSize = new Size(170, 34), FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Margin = new Padding(0, 4, 8, 4) };
-            b.FlatAppearance.BorderSize = 0; return b;
+            b.EnabledChanged += delegate { b.BackColor = b.Enabled ? (primary ? Mint : Surface) : Color.FromArgb(34, 38, 48); b.ForeColor = b.Enabled ? (primary ? Bg : Color.WhiteSmoke) : Color.FromArgb(120, 126, 140); }; b.FlatAppearance.BorderSize = 0; return b;
         }
     }
 }
