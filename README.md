@@ -1,4 +1,6 @@
-# PortForge 0.27 / Engine 1.10
+# PortForge 0.28 / Engine 1.11
+
+**Pixel smoothing** is a new per-game switch in the graphics window (off by default). On, Engine 1.11 softens contrast edges in the finished picture, after FSR when FSR is active; flat areas are left alone. It also softens text and fine detail, adds a little GPU work, and cannot restore missing detail or remove every kind of aliasing. Off keeps the original picture. Older engines ignore the setting and the game still starts.
 
 **Performance** now selects the game's handheld rendering mode with AMD FSR 1, while keeping intermediate images at their protected native scale. This lets the game choose a lower-resolution layout without blindly shrinking images used as game data. Balanced and Quality restore TV mode. Auto tune compares the two modes and prefers TV quality when handheld provides no measured benefit. Entry-level PC matching starts in handheld mode. New conversions and downloaded inputs use the bundled engine; watched games use the backed-up upgrade path.
 

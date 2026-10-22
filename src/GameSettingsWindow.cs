@@ -16,6 +16,7 @@ namespace PortForge
         private readonly TextBox game = new TextBox { AccessibleName = "Windows game executable", Dock = DockStyle.Fill };
         private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (recommended)", "Custom limit", "Unlimited"), filtering = Filtering();
         private readonly ComboBox upscaler = Choice("Upscaler", "Linear", "AMD FSR 1 (automatic)");
+        private readonly ComboBox pixelSmoothing = Choice("Pixel smoothing", "Off", "On - soften pixel edges");
         private readonly Label upscaleActivity = Label("FSR: no game session checked yet.", 9, Muted);
         private readonly NumericUpDown fps = Number("Custom FPS limit", 10, 1000, 120, 10), scale = Number("Render scale percent", 25, 400, 100, 25);
         private readonly CheckBox vsync = Toggle("VSync (reduce tearing)", true), shadows = Toggle("Draw shadows", true), docked = Toggle("TV mode (off = handheld)", true), fullscreen = Toggle("Start fullscreen", false);
@@ -131,6 +132,8 @@ namespace PortForge
             AddHint("Speed lock: with PortForge Engine 1.6 or newer, a game always runs at its own speed, whatever the cap. A higher cap can't speed up a 30 or 60 FPS game, and a lower cap shows fewer frames instead of slowing the game down. Your PC's power goes into sharper graphics instead. VSync may also limit FPS to your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
             AddOption("Upscaler", upscaler, delegate { upscaler.SelectedIndex = 1; });
+            AddOption("Pixel smoothing", pixelSmoothing, delegate { pixelSmoothing.SelectedIndex = 0; });
+            AddHint("On softens pixel edges in the finished picture, with or without FSR. It also softens text and fine detail and adds GPU work. Off keeps the original picture. Save and restart the game to apply. Requires Engine 1.11 or newer.");
             upscaleActivity.AccessibleName = "Recorded upscaling status"; options.Controls.Add(upscaleActivity);
             options.SizeChanged += delegate { upscaleActivity.MaximumSize = new Size(Math.Max(200, options.ClientSize.Width - 24), 0); };
             AddHint("FSR 1 improves scaling to a larger window; it adds GPU work and cannot boost FPS by itself. Performance selects handheld mode so the game can render a lighter scene before FSR upscales it. Some games use the same resolution in both modes. Maximize the game or use fullscreen to upscale to your display.");
@@ -160,6 +163,7 @@ namespace PortForge
             ShowProfile(new GraphicsProfile());
             scale.ValueChanged+=delegate{Changed();};filtering.SelectedIndexChanged+=delegate{Changed();};foreach(var check in new[]{vsync,shadows,docked,fullscreen})check.CheckedChanged+=delegate{Changed();};
             upscaler.SelectedIndexChanged+=delegate{Changed();};
+            pixelSmoothing.SelectedIndexChanged+=delegate{Changed();};
             Shown += async delegate { if (File.Exists(game.Text)) await LoadGame(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (cancellation != null) { e.Cancel = true; cancellation.Cancel(); } };
             healthTimer.Tick+=async delegate{if(Visible&&watch.Checked)await RefreshHealthInBackground();};healthTimer.Start();
@@ -364,7 +368,7 @@ namespace PortForge
         }
         private GraphicsProfile ReadProfile()
         {
-            return new GraphicsProfile { FpsLimit = fpsMode.SelectedIndex == 0 ? "game" : fpsMode.SelectedIndex == 2 ? "0" : ((int)fps.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), Resolution = capabilities!=null&&capabilities.ProtectsRenderScale?1:scale.Value / 100, Anisotropy = filtering.SelectedIndex, Upscaler = upscaler.SelectedIndex, VSync = vsync.Checked, Shadows = shadows.Checked, Docked = docked.Checked, Fullscreen = fullscreen.Checked };
+            return new GraphicsProfile { FpsLimit = fpsMode.SelectedIndex == 0 ? "game" : fpsMode.SelectedIndex == 2 ? "0" : ((int)fps.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), Resolution = capabilities!=null&&capabilities.ProtectsRenderScale?1:scale.Value / 100, Anisotropy = filtering.SelectedIndex, Upscaler = upscaler.SelectedIndex, PixelSmoothing = pixelSmoothing.SelectedIndex == 1, VSync = vsync.Checked, Shadows = shadows.Checked, Docked = docked.Checked, Fullscreen = fullscreen.Checked };
         }
         private void ShowProfile(GraphicsProfile p)
         {
@@ -376,6 +380,7 @@ namespace PortForge
             fps.Visible=fps.Enabled = fpsMode.SelectedIndex == 1; scale.Value = p.Resolution * 100;
             filtering.SelectedIndex = p.Anisotropy;
             upscaler.SelectedIndex = p.Upscaler;
+            pixelSmoothing.SelectedIndex = p.PixelSmoothing ? 1 : 0;
             vsync.Checked = p.VSync; shadows.Checked = p.Shadows; docked.Checked = p.Docked; fullscreen.Checked = p.Fullscreen;
             showingProfile=false;dirty=false;UpdateLimiter();
         }

@@ -17,6 +17,7 @@ namespace PortForge
         public decimal Resolution = 1;
         public int Anisotropy = 0;
         public int Upscaler = 1;
+        public bool PixelSmoothing;
         public bool Shadows = true, VSync = true, Docked = true, Fullscreen;
 
         public GraphicsProfile Copy() { return (GraphicsProfile)MemberwiseClone(); }
@@ -35,7 +36,7 @@ namespace PortForge
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
                 {"fps_limit", FpsLimit}, {"resolution", Resolution.ToString(CultureInfo.InvariantCulture)},
                 {"anisotropy", Anisotropy.ToString(CultureInfo.InvariantCulture)}, {"upscaler", Upscaler.ToString(CultureInfo.InvariantCulture)}, {"shadows", Shadows ? "1" : "0"},
-                {"vsync", VSync ? "1" : "0"}, {"docked", Docked ? "1" : "0"}, {"fullscreen", Fullscreen ? "1" : "0"} };
+                {"pixel_smoothing", PixelSmoothing ? "1" : "0"}, {"vsync", VSync ? "1" : "0"}, {"docked", Docked ? "1" : "0"}, {"fullscreen", Fullscreen ? "1" : "0"} };
         }
         public static GraphicsProfile Preset(string name, GraphicsProfile previous, bool protectGraphics = false)
         {
@@ -167,6 +168,7 @@ namespace PortForge
             if (values.TryGetValue("resolution", out v) && Decimal.TryParse(v, NumberStyles.Number, Invariant, out scale)) p.Resolution = scale;
             if (values.TryGetValue("anisotropy", out v) && Int32.TryParse(v, out n)) p.Anisotropy = n;
             if (values.TryGetValue("upscaler", out v) && Int32.TryParse(v, out n)) p.Upscaler = n;
+            if (values.TryGetValue("pixel_smoothing", out v)) p.PixelSmoothing = v == "1";
             if (values.TryGetValue("shadows", out v)) p.Shadows = v != "0";
             if (values.TryGetValue("vsync", out v)) p.VSync = v != "0";
             if (values.TryGetValue("docked", out v)) p.Docked = v != "0";
@@ -222,6 +224,7 @@ namespace PortForge
             var supported = profile.Values();
             if (capabilities.ProtectsRenderScale) { supported["resolution"] = "1"; supported["render_scale_safety"] = "1"; }
             if (!capabilities.Keys.Contains("upscaler")) supported.Remove("upscaler");
+            if (!capabilities.Keys.Contains("pixel_smoothing")) supported.Remove("pixel_smoothing"); // an older engine still starts the game
             if(supported.All(item=>existing.ContainsKey(item.Key)&&existing[item.Key]==item.Value))return null;
             string backup = File.Exists(path) ? path + ".before-portforge-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + ".bak" : null;
             AtomicWrite(path, new UTF8Encoding(false).GetBytes(Merge(text, supported)), backup);

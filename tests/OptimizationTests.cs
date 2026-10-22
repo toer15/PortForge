@@ -95,6 +95,15 @@ internal static class OptimizationTests
             File.WriteAllBytes(config,bytes);GameOptimization.SaveAndVerify(exe,fsr,legacy);
             Check(!GameOptimization.ReadValues(File.ReadAllText(config)).ContainsKey("upscaler"), "An older engine is not given an unsupported upscaler setting");
             File.WriteAllBytes(config,bytes);
+            var smooth = profile.Copy();smooth.PixelSmoothing = true;GameOptimization.SaveAndVerify(exe,smooth,cap);
+            Check(GameOptimization.Load(exe).PixelSmoothing && GameOptimization.ReadValues(File.ReadAllText(config))["pixel_smoothing"] == "1", "Pixel smoothing on round-trips through the per-game configuration");
+            smooth.PixelSmoothing = false;GameOptimization.SaveAndVerify(exe,smooth,cap);
+            Check(!GameOptimization.Load(exe).PixelSmoothing && GameOptimization.ReadValues(File.ReadAllText(config))["pixel_smoothing"] == "0", "Pixel smoothing off is saved explicitly and restores the original picture");
+            smooth.PixelSmoothing = true;
+            var noSmooth = new RuntimeCapabilities();foreach(string key in cap.Keys.Where(k=>k!="pixel_smoothing"))noSmooth.Keys.Add(key);
+            File.WriteAllBytes(config,bytes);GameOptimization.SaveAndVerify(exe,smooth,noSmooth);
+            Check(!GameOptimization.ReadValues(File.ReadAllText(config)).ContainsKey("pixel_smoothing"), "An older engine is not given an unsupported smoothing setting and still starts");
+            File.WriteAllBytes(config,bytes);
             // Gameplay workload: the scripted play-through must use the guarded save and report gameplay results.
             GameOptimization.GameplaySeconds = 2;
             string saveFolder = Path.Combine(root, "Tuning game_data", "save"); Directory.CreateDirectory(saveFolder); File.WriteAllText(Path.Combine(saveFolder, "slot.dat"), "my progress");

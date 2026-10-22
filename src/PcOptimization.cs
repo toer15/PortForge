@@ -29,6 +29,7 @@ namespace PortForge
                 if (pc.Tier == PcTier.Entry) { settings["docked"] = "0"; settings["upscaler"] = "1"; }
             }
             if (!cap.Keys.Contains("upscaler")) settings.Remove("upscaler");
+            if (!cap.Keys.Contains("pixel_smoothing")) settings.Remove("pixel_smoothing");
             if (pc.LogicalCpus > 0)
             {
                 bool nativeAuto=cap.Keys.Contains("frame_guard");
