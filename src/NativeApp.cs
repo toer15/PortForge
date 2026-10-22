@@ -59,7 +59,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.19 | Switch to PC"; AppIcon.Apply(this);
+            Text = "PortForge 0.20 | Switch to PC"; AppIcon.Apply(this);
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -249,7 +249,7 @@ namespace PortForge
 
         private void StartDoctor()
         {
-            cloudMonitor=new CloudSaveMonitor();
+            cloudMonitor=new CloudSaveMonitor(()=>doctor==null?new string[0]:doctor.Games);
             tray.Icon = AppIcon.Get() ?? Icon ?? SystemIcons.Application; tray.Text = "PortForge AI Doctor"; tray.Visible = true;
             tray.BalloonTipClicked += delegate { doctorButton.PerformClick(); };
             doctor = new LiveDoctor(AppDomain.CurrentDomain.BaseDirectory) { AutoFix = doctorAuto.Checked, UseAi = doctorAi.Checked };
@@ -435,6 +435,7 @@ namespace PortForge
                         ShowStatus("WORKING", stage.Title, stage.Message, Blue);
                 });
                 result = await Task.Run(() => NativeConversion.Convert(request, updates, token, stages));
+                try{await Task.Run(()=>CloudSaves.Service.RegisterGame(Path.Combine(result,request.Name+".exe")));}catch(Exception e){AppendLog("Cloud saves setup will retry: "+e.Message);}
                 try { if (result != null && Directory.Exists(result)) { string built = Path.Combine(result, Path.GetFileName(result) + ".exe"); if (File.Exists(built)) GameSettingsWindow.RememberGame(built); } } catch (IOException) { } catch (UnauthorizedAccessException) { }
                 try { File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last-game.txt"), Path.Combine(result, request.Name + ".exe")); } catch { }
                 if (doctor != null) doctor.Watch(Path.Combine(result, request.Name + ".exe"));

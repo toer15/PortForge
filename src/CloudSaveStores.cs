@@ -153,8 +153,10 @@ namespace PortForge
     {
         private readonly Timer timer;private readonly CancellationTokenSource stop=new CancellationTokenSource();private int busy;
         private readonly Dictionary<string,DateTime> retry=new Dictionary<string,DateTime>(StringComparer.OrdinalIgnoreCase);
-        public CloudSaveMonitor(){timer=new Timer(delegate{Tick();},null,5000,15000);}
-        private void Tick(){if(Interlocked.Exchange(ref busy,1)!=0)return;try{foreach(var game in CloudSaves.Service.EnabledGames()){if(stop.IsCancellationRequested)return;DateTime next;if(retry.TryGetValue(game.Exe,out next)&&DateTime.UtcNow<next)continue;var result=CloudSaves.Service.Sync(game.Exe,stop.Token);retry[game.Exe]=DateTime.UtcNow.AddSeconds(result.State=="ERROR"?120:result.Conflict?30:15);}}catch(OperationCanceledException){}catch(Exception){}finally{Interlocked.Exchange(ref busy,0);}}
+        private readonly Func<IEnumerable<string>> knownGames;
+        private readonly CloudSaveService service;
+        public CloudSaveMonitor(Func<IEnumerable<string>> games=null,CloudSaveService cloudService=null,int firstDelayMs=5000,int intervalMs=15000){service=cloudService??CloudSaves.Service;knownGames=games??(()=>new string[0]);timer=new Timer(delegate{Tick();},null,firstDelayMs,intervalMs);}
+        private void Tick(){if(Interlocked.Exchange(ref busy,1)!=0)return;try{service.RegisterGames(knownGames(),stop.Token);foreach(var game in service.EnabledGames()){if(stop.IsCancellationRequested)return;DateTime next;if(retry.TryGetValue(game.Exe,out next)&&DateTime.UtcNow<next)continue;var result=service.Sync(game.Exe,stop.Token);retry[game.Exe]=DateTime.UtcNow.AddSeconds(result.State=="ERROR"?120:result.Conflict?30:15);}}catch(OperationCanceledException){}catch(Exception){}finally{Interlocked.Exchange(ref busy,0);}}
         public void Dispose(){stop.Cancel();timer.Dispose();}
     }
 }

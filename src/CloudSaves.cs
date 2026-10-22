@@ -16,6 +16,7 @@ namespace PortForge
     {
         public string Exe, Key, Provider = "OneDrive", Location = "", User = "", Secret = "";
         public bool Enabled;
+        public bool Automatic, IsDefault;
         public string LastRevision = "", LastHash = "";
     }
     public sealed class CloudRevision
@@ -84,16 +85,79 @@ namespace PortForge
         public CloudGame Get(string exe)
         {
             exe=Path.GetFullPath(exe);
-            lock(gate)return Load().FirstOrDefault(g=>String.Equals(g.Exe,exe,StringComparison.OrdinalIgnoreCase))??new CloudGame{Exe=exe,Key=GameKey(exe)};
+            lock(gate)return Load().FirstOrDefault(g=>!g.IsDefault&&String.Equals(g.Exe,exe,StringComparison.OrdinalIgnoreCase))??new CloudGame{Exe=exe,Key=GameKey(exe)};
         }
-        public CloudGame[] EnabledGames(){lock(gate)return Load().Where(g=>g.Enabled&&File.Exists(g.Exe)).ToArray();}
+        public CloudGame[] EnabledGames(){lock(gate)return Load().Where(g=>!g.IsDefault&&g.Enabled&&File.Exists(g.Exe)).ToArray();}
+        public CloudGame AutomaticSettings()
+        {
+            lock(gate)
+            {
+                var games=Load();var defaults=games.FirstOrDefault(g=>g.IsDefault);if(defaults!=null)return defaults;
+                var existing=games.Where(g=>g.Enabled&&!String.IsNullOrWhiteSpace(g.Location)).ToArray();
+                // Reuse a player's already enabled 0.19 connection when there is only one account to choose from.
+                if(existing.Length>0&&existing.All(g=>SameConnection(g,existing[0])))
+                {try{ConfigureAutomatic(existing[0],true);return Load().First(g=>g.IsDefault);}catch(ArgumentException){}catch(IOException){}catch(System.Security.Cryptography.CryptographicException){}}
+                return new CloudGame{IsDefault=true,Enabled=true,Key="connection",Exe=""};
+            }
+        }
+        private static bool SameConnection(CloudGame a,CloudGame b)
+        {return a.Provider==b.Provider&&a.Location==b.Location&&a.User==b.User;}
+        private static void CopyConnection(CloudGame target,CloudGame source)
+        {target.Provider=source.Provider;target.Location=source.Location;target.User=source.User;target.Secret=source.Secret;}
+        public void ConfigureAutomatic(CloudGame connection,bool enabled)
+        {
+            var value=new CloudGame{IsDefault=true,Enabled=enabled,Key="connection",Exe=Path.Combine(root,"connection.exe")};CopyConnection(value,connection);
+            if(enabled&&!String.IsNullOrWhiteSpace(value.Location))factory(value);
+            lock(gate)
+            {
+                Change(games=>
+                {
+                    games.RemoveAll(g=>g.IsDefault);
+                    foreach(var game in games)
+                    {
+                        // An explicit per-game off switch remains an exception to the global default.
+                        if(!game.Automatic&&(!game.Enabled||!SameConnection(game,value)))continue;
+                        if(!SameConnection(game,value)){game.LastHash=game.LastRevision="";}
+                        game.Automatic=true;game.Enabled=enabled&&!String.IsNullOrWhiteSpace(value.Location);CopyConnection(game,value);
+                    }
+                    games.Add(value);
+                });
+                statuses.Clear();
+            }
+        }
+        public bool RegisterGame(string exe)
+        {
+            exe=Path.GetFullPath(exe);
+            lock(gate)
+            {
+                AutomaticSettings();
+                var known=Load();var defaults=known.FirstOrDefault(g=>g.IsDefault);
+                if(known.Any(g=>!g.IsDefault&&String.Equals(g.Exe,exe,StringComparison.OrdinalIgnoreCase))||defaults==null||!defaults.Enabled||String.IsNullOrWhiteSpace(defaults.Location))return false;
+                GameOptimization.ValidateGame(exe);string key=GameKey(exe);bool added=false;
+                Change(games=>
+                {
+                    var current=games.FirstOrDefault(g=>g.IsDefault);
+                    if(current==null||!current.Enabled||String.IsNullOrWhiteSpace(current.Location)||games.Any(g=>!g.IsDefault&&String.Equals(g.Exe,exe,StringComparison.OrdinalIgnoreCase)))return;
+                    var game=new CloudGame{Exe=exe,Key=key,Enabled=true,Automatic=true};CopyConnection(game,current);games.Add(game);added=true;
+                });return added;
+            }
+        }
+        public int RegisterGames(IEnumerable<string> games,CancellationToken token=default(CancellationToken))
+        {
+            var defaults=AutomaticSettings();if(!defaults.Enabled||String.IsNullOrWhiteSpace(defaults.Location))return 0;
+            int added=0;foreach(string exe in games.Where(p=>!String.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase)){token.ThrowIfCancellationRequested();try{if(RegisterGame(exe))added++;}catch(ArgumentException){}catch(IOException){}catch(UnauthorizedAccessException){}}
+            return added;
+        }
         public void Configure(CloudGame game, bool enabled)
         {
             game.Exe=Path.GetFullPath(game.Exe); ValidateKey(game.Key);
             if(enabled)factory(game); // validate the destination without creating or uploading anything
             lock(gate)Change(games=>
             {
-                var old=games.FirstOrDefault(g=>String.Equals(g.Exe,game.Exe,StringComparison.OrdinalIgnoreCase));
+                game.IsDefault=false;game.Automatic=false;
+                var defaults=games.FirstOrDefault(g=>g.IsDefault);
+                var old=games.FirstOrDefault(g=>!g.IsDefault&&String.Equals(g.Exe,game.Exe,StringComparison.OrdinalIgnoreCase));
+                if(enabled&&defaults!=null&&defaults.Enabled&&SameConnection(game,defaults))game.Automatic=true;
                 if(old!=null){games.Remove(old);if(old.Key==game.Key&&old.Provider==game.Provider&&old.Location==game.Location&&old.User==game.User){game.LastHash=old.LastHash;game.LastRevision=old.LastRevision;}else{game.LastHash=game.LastRevision="";}}
                 game.Enabled=enabled;games.Add(game);
             });

@@ -61,6 +61,7 @@ internal static class CloudSaveTests
     private static string Read(string exe){return File.ReadAllText(Path.Combine(CloudSaveService.SaveFolder(exe),"profile","progress.bin"));}
     private static CloudGame Config(string exe,string url){return new CloudGame{Exe=exe,Key="0100000000000001",Provider="WebDAV",Location=url,User="player",Secret=CloudSaves.ProtectPassword("app-password")};}
     private static IEnumerable<Control> All(Control root){foreach(Control child in root.Controls){yield return child;foreach(var nested in All(child))yield return nested;}}
+    private static void Wait(Func<bool> condition){var watch=Stopwatch.StartNew();while(!condition()){if(watch.ElapsedMilliseconds>15000)throw new Exception("Cloud operation timed out");Application.DoEvents();Thread.Sleep(10);}Application.DoEvents();}
     private sealed class FrozenList : ICloudSaveStore
     {
         private readonly ICloudSaveStore inner;private readonly Barrier barrier;
@@ -77,6 +78,12 @@ internal static class CloudSaveTests
     }
     [STAThread]
     private static int Main(string[] args)
+    {
+        Application.EnableVisualStyles();int result=1;
+        using(var host=new Form{ShowInTaskbar=false,Opacity=0,StartPosition=FormStartPosition.Manual,Location=new System.Drawing.Point(-10000,-10000)})
+        {host.Shown+=delegate{host.BeginInvoke(new Action(delegate{try{result=RunChecks(args);}finally{host.Close();}}));};Application.Run(host);}return result;
+    }
+    private static int RunChecks(string[] args)
     {
         string root=Path.Combine(Path.GetDirectoryName(args[0]),"cloud-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
         try
@@ -122,7 +129,7 @@ internal static class CloudSaveTests
                 bool rejected=false;try{new WebDavSaveStore(Config(a,server.Url),false);}catch(IOException){rejected=true;}Check(rejected,"Production WebDAV requires HTTPS");
                 using(var ui=new CloudSaveWindow(a,first))
                 {
-                    var controls=All(ui).ToArray();var toggle=controls.OfType<CheckBox>().Single();Check(toggle.Checked&&controls.OfType<Button>().Any(x=>x.Text=="Sync now")&&controls.OfType<Button>().Count(x=>x.Text=="Clear")==5,"Cloud saves UI loads the game toggle, sync controls and Clear buttons");
+                    var controls=All(ui).ToArray();var toggle=controls.OfType<CheckBox>().Single(x=>x.AccessibleName=="Cloud saves on for this game");Check(toggle.Checked&&controls.OfType<Button>().Any(x=>x.Text=="Sync now")&&controls.OfType<Button>().Count(x=>x.Text=="Clear")==5,"Cloud saves UI loads the game toggle, sync controls and Clear buttons");
                     ui.ShowInTaskbar=false;ui.StartPosition=FormStartPosition.Manual;ui.Location=new System.Drawing.Point(-10000,-10000);ui.Show();Application.DoEvents();
                     toggle.Checked=false;Check(!first.Get(a).Enabled,"The real Cloud saves switch disables synchronization");
                     toggle.Checked=true;var watch=Stopwatch.StartNew();while(!controls.OfType<Button>().Single(x=>x.Text=="Sync now").Enabled){if(watch.ElapsedMilliseconds>10000)throw new Exception("Cloud UI sync timed out");Application.DoEvents();Thread.Sleep(10);}
@@ -147,6 +154,48 @@ internal static class CloudSaveTests
             Check(stopped&&!Directory.GetFiles(Path.Combine(folder,"PortForgeCloudSaves","interrupted"),"*.json").Any()&&Read(c)=="Safe progress","Turning off during an upload prevents publishing a committed cloud version");
             string npdm=Path.Combine(Path.GetDirectoryName(c),"Game_data","exefs","main.npdm");Directory.CreateDirectory(Path.GetDirectoryName(npdm));var npdmBytes=new byte[180];Encoding.ASCII.GetBytes("META").CopyTo(npdmBytes,0);BitConverter.GetBytes((uint)128).CopyTo(npdmBytes,0x70);Encoding.ASCII.GetBytes("ACI0").CopyTo(npdmBytes,128);BitConverter.GetBytes((ulong)0x0100000000000001).CopyTo(npdmBytes,144);File.WriteAllBytes(npdm,npdmBytes);
             Check(CloudSaveService.GameKey(c)=="0100000000000001","A game title ID provides a stable cloud name across PCs");
+            using(var automaticServer=new SaveDavServer())
+            {
+                string automaticRoot=Path.Combine(root,"automatic"),firstGame=Game(root,"Automatic-First",args[0]),nextGame=Game(root,"Automatic-Next",args[0]),excluded=Game(root,"Automatic-Excluded",args[0]);
+                var auto=new CloudSaveService(automaticRoot,factory);
+                Check(auto.AutomaticSettings().Enabled&&!auto.RegisterGame(firstGame)&&auto.EnabledGames().Length==0,"Automatic mode waits for a cloud account before enabling any game");
+                auto.Configure(new CloudGame{Exe=excluded,Key="excluded"},false);auto.ConfigureAutomatic(Config(firstGame,automaticServer.Url),true);
+                Check(auto.RegisterGames(new[]{firstGame,excluded})==1&&auto.Get(firstGame).Enabled&&auto.Get(firstGame).Automatic&&!auto.Get(excluded).Enabled,"Connect once enrolls existing games while respecting an explicit off switch");
+                Save(firstGame,"Automatic progress");Check(auto.Sync(firstGame,Token).State=="SAVED","An automatically enrolled game uploads without a per-game setup step");
+                var reopened=new CloudSaveService(automaticRoot,factory);Check(reopened.RegisterGame(nextGame)&&reopened.Get(nextGame).Enabled&&reopened.Get(nextGame).Location==automaticServer.Url,"The cloud connection survives restart and enrolls future games automatically");
+                Check(auto.Sync(nextGame,Token).State=="RESTORED"&&Read(nextGame)=="Automatic progress","A future copy of the same game restores its existing cloud progress automatically");
+                string baseline=auto.Get(firstGame).LastRevision;auto.ConfigureAutomatic(auto.AutomaticSettings(),false);
+                Check(auto.Sync(firstGame,Token).State=="OFF"&&!auto.Get(nextGame).Enabled&&auto.Get(firstGame).LastRevision==baseline,"The global switch pauses automatic games without losing sync history");
+                auto.ConfigureAutomatic(auto.AutomaticSettings(),true);Check(auto.Get(firstGame).Enabled&&auto.Get(nextGame).Enabled&&!auto.Get(excluded).Enabled,"Re-enabling automatic mode resumes games and retains individual exclusions");
+                auto.Configure(auto.Get(nextGame),false);Check(!auto.RegisterGame(nextGame)&&!auto.Get(nextGame).Enabled,"Repeated discovery cannot re-enable a game the player turned off");
+                string invalid=Path.Combine(root,"not-a-game.exe");File.WriteAllText(invalid,"not a game");Check(auto.RegisterGames(new[]{invalid,firstGame})==0,"Automatic enrollment rejects unsupported executables");
+                using(var freshServer=new SaveDavServer())
+                {
+                    string backgroundGame=Game(root,"Background-Upload",args[0]);Save(backgroundGame,"Background progress");var background=new CloudSaveService(Path.Combine(root,"background-upload-state"),factory);background.ConfigureAutomatic(Config(backgroundGame,freshServer.Url),true);
+                    using(var monitor=new CloudSaveMonitor(()=>new[]{backgroundGame},background,20,50)){Wait(()=>background.Status(backgroundGame).State=="SAVED");Check(background.Get(backgroundGame).Enabled&&freshServer.Uploads==2,"Background discovery uploads a game's save automatically without any per-game click");}
+                }
+                var migrated=new CloudSaveService(Path.Combine(root,"migrated"),factory);var legacy=Config(firstGame,automaticServer.Url);legacy.Key="my-existing-save";migrated.Configure(legacy,true);migrated.ConfigureAutomatic(Config(firstGame,automaticServer.Url),true);
+                Check(migrated.Get(firstGame).Automatic&&migrated.Get(firstGame).Key=="my-existing-save","Existing per-game cloud settings are adopted without changing their cloud save name");
+                var renamed=migrated.Get(firstGame);renamed.Key="custom-name";migrated.Configure(renamed,true);Check(migrated.Get(firstGame).Automatic,"A custom save name keeps the game attached to the automatic cloud connection");
+                var reused=new CloudSaveService(Path.Combine(root,"reuse-019-account"),factory);reused.Configure(Config(firstGame,automaticServer.Url),true);
+                Check(reused.AutomaticSettings().Location==automaticServer.Url&&reused.Get(firstGame).Automatic,"An existing single cloud connection is reused automatically after upgrading");
+                Check(reused.RegisterGame(nextGame)&&reused.Get(nextGame).Enabled,"An already connected player gets automatic cloud saving on later games without reconnecting");
+                var ambiguous=new CloudSaveService(Path.Combine(root,"ambiguous-accounts"),factory);ambiguous.Configure(Config(firstGame,automaticServer.Url),true);ambiguous.Configure(Config(nextGame,"http://127.0.0.1:1/other/"),true);
+                Check(ambiguous.AutomaticSettings().Location.Length==0&&!ambiguous.RegisterGame(excluded),"Multiple individual accounts require choosing the shared account instead of guessing");
+                string monitorGame=Game(root,"Monitor-Game",args[0]);Save(monitorGame,"Monitor progress");var monitorService=new CloudSaveService(Path.Combine(root,"monitor-state"),factory);monitorService.ConfigureAutomatic(Config(monitorGame,automaticServer.Url),true);
+                using(var monitor=new CloudSaveMonitor(()=>new[]{monitorGame},monitorService,20,50))
+                {Wait(()=>monitorService.Status(monitorGame).State=="CONFLICT");Check(monitorService.Get(monitorGame).Automatic&&Read(monitorGame)=="Monitor progress","The background monitor enrolls discovered games and preserves conflicts automatically");}
+                string uiGame=Game(root,"Connect-UI",args[0]);var uiService=new CloudSaveService(Path.Combine(root,"connect-ui-state"),factory);
+                using(var ui=new CloudSaveWindow(null,uiService,()=>new[]{uiGame}))
+                {
+                    ui.ShowInTaskbar=false;ui.StartPosition=FormStartPosition.Manual;ui.Location=new System.Drawing.Point(-10000,-10000);ui.Show();Application.DoEvents();var controls=All(ui).ToArray();
+                    controls.OfType<ComboBox>().Single(x=>x.AccessibleName=="Cloud provider").SelectedItem="WebDAV";controls.OfType<TextBox>().Single(x=>x.AccessibleName=="Cloud folder or WebDAV URL").Text=automaticServer.Url;controls.OfType<TextBox>().Single(x=>x.AccessibleName=="WebDAV username").Text="player";controls.OfType<TextBox>().Single(x=>x.AccessibleName=="WebDAV app password").Text="app-password";
+                    controls.OfType<Button>().Single(x=>x.Text=="Connect all games").PerformClick();Wait(()=>controls.OfType<Button>().Single(x=>x.Text=="Connect all games").Enabled);
+                    Check(uiService.Get(uiGame).Enabled&&uiService.Get(uiGame).Automatic&&Read(uiGame)=="Automatic progress","Connect all games works without selecting a game and automatically restores a discovered game's save");
+                    controls.OfType<CheckBox>().Single(x=>x.AccessibleName=="Automatic cloud saves for all games").Checked=false;
+                    Check(!uiService.AutomaticSettings().Enabled&&!uiService.Get(uiGame).Enabled,"The visible global switch pauses automatic cloud saving");ui.Close();
+                }
+            }
             PortForge.NativeWindow.StartDoctorOnShow=false;using(var ui=new PortForge.NativeWindow())Check(All(ui).OfType<Button>().Any(x=>x.Text=="Cloud saves"&&x.Enabled),"The main app has an enabled Cloud saves button");
             Console.WriteLine(checks+" cloud-save checks passed.");return 0;
         }catch(Exception e){Console.Error.WriteLine(e);return 1;}

@@ -1,12 +1,16 @@
-# PortForge 0.19
+# PortForge 0.20
 
 ## Cloud saves
 
-1. Open **Cloud saves** in the main window or beside the game selector in **Graphics and FPS**.
-2. Browse to the converted game's `.exe`. Cloud saves start **off** for every game.
-3. Choose **OneDrive** or **WebDAV** and enter the connection details below.
-4. Use the same **Cloud save name** and cloud account on every PC. A game's title ID is used automatically when available; otherwise check that the names match.
-5. Switch **Cloud saves on for this game** on. Close the game and keep PortForge open to synchronize. **Sync now** saves changed connection details and checks immediately.
+1. Open **Cloud saves** in the main window. You do not need to select a game first.
+2. Choose **OneDrive** or **WebDAV** and enter your account's connection details below.
+3. Select **Connect all games** once. Existing games the app knows about join automatically, including games found by background discovery. New conversions and games loaded later join using the same account.
+4. Keep **Automatic cloud saves for all games** on. Close the game and keep PortForge open to synchronize; no per-game setup is needed.
+5. On another PC, connect the same cloud account once. A game's title ID is used as its cloud save name automatically. When a title ID is unavailable, check that game names match on both PCs.
+
+Automatic mode is selected by default, but it uploads nothing until a cloud account is configured. Each player supplies and connects their own account on each PC. If you already enabled cloud saving in 0.19 with one connection, that account is reused automatically. If several accounts were used, select the shared one with Connect all games. Existing individually configured games on the same connection are adopted without changing their save names. Games using a different individual cloud connection retain that connection.
+
+To exclude a game, browse to its `.exe` in this window and turn **Cloud saves on for this game** off. Discovery respects that choice. Turning the global **Automatic cloud saves for all games** switch off pauses games using the shared connection; turning it on again resumes them without losing sync history. Individually configured connections remain separate. To change the account used automatically, enter the new connection and select **Connect all games** again. **Sync now** saves changes for the selected game and checks immediately.
 
 **OneDrive:** sign in to OneDrive in Windows first, then select its account root folder (for example `C:\Users\You\OneDrive`). PortForge puts versioned saves under `PortForgeCloudSaves`. Windows OneDrive uploads and downloads those files. A **QUEUED** status confirms the local OneDrive folder, not a completed internet upload. Before using another PC, confirm that OneDrive reports the files as synced on both PCs. If OneDrive is paused, offline or signed out, saves stay queued. See [Microsoft's OneDrive status guide](https://support.microsoft.com/en-us/onedrive/what-do-the-onedrive-icons-mean).
 
@@ -16,7 +20,7 @@ The app checks enabled games every 15 seconds while open and synchronizes before
 
 If both PCs changed progress, **CONFLICT** stops automatic replacement. **Keep this PC** publishes this PC's save as a new version. **Use cloud copy** restores the selected version; select a version first when multiple PCs uploaded simultaneously. A restore keeps the old local save in `PortForge-cloud-backups` beside the game. To recover it manually, close the game, turn cloud saves off, and copy the chosen backup's contents to `<game>_data\save` after backing up the current folder.
 
-Turning the switch **off** stops further synchronization and keeps both local and cloud copies. This is a per-game setting; enabling one game does not enable other games. Close PortForge to stop its background checks. OneDrive may finish already queued Windows uploads independently.
+Turning a game's switch **off** stops further synchronization for that game and keeps both local and cloud copies. New games continue joining the automatic connection until the global switch is turned off. Close PortForge to stop its background checks. OneDrive may finish already queued Windows uploads independently.
 
 Only `<game>_data\save` is synchronized. Game files, ROMs, keys, logs and hardware information are excluded. Sync requires a supported converted game, a real local save folder, and your own cloud account. PortForge does not provide cloud hosting. The save limit is 256 MB and 10,000 entries; linked files are rejected. Up to 512 revisions are retained before manual archive maintenance is required. Existing versions are kept to avoid automatic loss of older progress. Settings are stored under `%LOCALAPPDATA%\PortForge\CloudSaves` and survive app updates.
 

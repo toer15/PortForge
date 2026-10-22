@@ -174,6 +174,7 @@ namespace PortForge
                 capabilities = await Task.Run(() => RuntimeCapabilities.Read(exe, token));
                 ShowProfile(GameOptimization.Load(exe)); loadedGame = Path.GetFullPath(exe);
                 RememberGame(loadedGame);
+                try{await Task.Run(()=>CloudSaves.Service.RegisterGame(loadedGame));}catch(Exception e){history.AppendText("Automatic cloud setup will retry: "+e.Message+Environment.NewLine);}
                 if(LiveDoctor.Current!=null)LiveDoctor.Current.Watch(loadedGame);
                 enginePanel.SetGame(loadedGame);
                 SetStatus("READY", "Ready to tune", "Choose an FPS preset above. Play game saves and verifies your selected limit. Automatic fixes checks the recorded log.", Mint);

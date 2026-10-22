@@ -8,7 +8,7 @@ PortForge is a Windows app (.NET Framework 4.8, no install needed) built around 
 
 ## Features
 
-- **Cloud saves** - a per-game on/off switch, OneDrive through the player's Windows account, or direct HTTPS WebDAV for services such as Nextcloud. Syncs save files while the app is open and the game is closed, verifies archives, keeps restore backups, and asks which copy to keep when PCs have different progress. Off by default; no PortForge-hosted account is included.
+- **Automatic cloud saves** - connect OneDrive or HTTPS WebDAV once per PC. Existing known games, new conversions and discovered converted games join automatically. A global switch pauses automatic saving, and each game can be excluded. Syncs while the app is open and the game is closed, verifies archives, keeps restore backups and asks which copy to keep when PCs have different progress. Nothing uploads before an account is configured; no PortForge-hosted account is included.
 - **Simple conversion screen** – game file, game name, save folder. Clear buttons beside every input, and a status card for progress, done, errors and cancelled.
 - **Downloads** – paste a direct link: automatic connection count, retries, pause/resume, checksum checks, ZIP unpacking, hand-off to conversion.
 - **Automatic PC matching** – shows CPU, graphics adapters, dedicated graphics memory and usable RAM on startup. New conversions get supported settings for that PC, followed by optional measurements that favor FPS and fewer freezes. On by default, works for local and downloaded inputs, and needs no AI account. Each game gets a report separating hardware estimates from measured results.
