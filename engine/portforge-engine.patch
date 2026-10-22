@@ -1,0 +1,174 @@
+diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
+index 33f94b6..3b761d2 100644
+--- a/src/nx/gpu/vk/pipeline.c
++++ b/src/nx/gpu/vk/pipeline.c
+@@ -885,6 +885,9 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+    of descriptor sets), and the pipeline's index in this table, pages the GPU thread adds before a stand-in naming
+    them goes through the ring. Pipelines live as long as the run, so a stand-in does too */
+ #define PIPE_STANDIN   0x5EC6000000000000ull
++#define PIPE_SKIPPABLE 0x0000800000000000ull /* async shaders: the bind may drop its draws (vk_pipeline_skippable) */
++#define ASYNC_WAIT_NS  1500000               /* how long a skippable bind waits for its pipeline before dropping */
++static u64 g_pipe_async_skips;
+ #define PSTAND_PAGE    1024
+ static Pipe** g_pstand[1024];
+ static u32 g_npstand;
+@@ -981,17 +984,35 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+ }
+ /* on the recording thread: the pipeline a handle from vk_pipeline_get_deferred names, waited for while a worker makes
+    it. VK_NULL_HANDLE when it couldn't be made */
++static Pipe* standin_pipe(u64 v) {
++    u32 i = (u32)v - 1;
++    return g_pstand[i / PSTAND_PAGE][i % PSTAND_PAGE];
++}
+ VkPipeline vk_pipeline_resolve(VkPipeline h) {
+     u64 v = (u64)(uintptr_t)h;
++    int skippable = (v & ~(u64)0xFFFFFFFFull) == (PIPE_STANDIN | PIPE_SKIPPABLE);
++    if (skippable) v &= ~PIPE_SKIPPABLE;
+     if ((v & ~(u64)0xFFFFFFFFull) != PIPE_STANDIN) return h;
+-    u32 i = (u32)v - 1;
+-    Pipe* p = g_pstand[i / PSTAND_PAGE][i % PSTAND_PAGE];
++    Pipe* p = standin_pipe(v);
+     if (__atomic_load_n(&p->ready, __ATOMIC_ACQUIRE)) return p->p;
+     u64 t0 = plat_ns();
+-    VkPipeline got = pipe_wait(p, -1);
++    VkPipeline got = pipe_wait(p, skippable ? ASYNC_WAIT_NS : -1);
+     __atomic_add_fetch(&g_pipe_wait_ns, plat_ns() - t0, __ATOMIC_RELAXED);
++    if (!got && skippable) __atomic_add_fetch(&g_pipe_async_skips, 1, __ATOMIC_RELAXED);
+     return got;
+ }
++int vk_pipeline_pending(VkPipeline h) {
++    u64 v = (u64)(uintptr_t)h;
++    if ((v & ~(u64)0xFFFFFFFFull) != PIPE_STANDIN) return 0;
++    return !__atomic_load_n(&standin_pipe(v)->ready, __ATOMIC_ACQUIRE);
++}
++VkPipeline vk_pipeline_skippable(VkPipeline h) {
++    u64 v = (u64)(uintptr_t)h;
++    return (v & ~(u64)0xFFFFFFFFull) == PIPE_STANDIN ? (VkPipeline)(uintptr_t)(v | PIPE_SKIPPABLE) : h;
++}
++u64 vk_pipeline_async_skips(void) {
++    return __atomic_load_n(&g_pipe_async_skips, __ATOMIC_RELAXED);
++}
+ void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms) {
+     *pipes = g_pipes_new;
+     *hits = __atomic_load_n(&g_pipe_hits, __ATOMIC_RELAXED);
+diff --git a/src/nx/gpu/vk/record.c b/src/nx/gpu/vk/record.c
+index b3b0e2c..696ea88 100644
+--- a/src/nx/gpu/vk/record.c
++++ b/src/nx/gpu/vk/record.c
+@@ -282,7 +282,7 @@ void rec_CmdBindPipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline
+ }
+ static int rec_drop_draw(void) {
+     if (!g_rec_unbound) return 0;
+-    if (!g_rec_dropped++) WARN("vulkan: a pipeline couldn't be made: its draws are dropped\n");
++    if (!g_rec_dropped++) WARN("vulkan: a pipeline wasn't ready (async shaders) or couldn't be made: its draws are dropped\n");
+     return 1;
+ }
+ typedef struct {
+diff --git a/src/nx/gpu/vk/render.c b/src/nx/gpu/vk/render.c
+index b8247c0..331a5f8 100644
+--- a/src/nx/gpu/vk/render.c
++++ b/src/nx/gpu/vk/render.c
+@@ -2303,6 +2303,15 @@ retry:
+         memset(&g_dyn, 0, sizeof g_dyn);
+         g_dyn.cb = vk_cb_begun();
+     }
++    /* PortForge Engine's async shaders: a pipeline still being made doesn't stop the frame when every image the draw
++       writes is one the game redraws each present; the bind waits briefly, then its draws are dropped this frame */
++    if (g_settings.async_shaders && vk_pipeline_pending(pipe)) {
++        int redrawn = n || zt;
++        for (u32 i = 0; i < n && redrawn; i++)
++            if (rt[i] && !vk_rt_redrawn(rt[i])) redrawn = 0;
++        if (redrawn && zt && !vk_rt_redrawn(zt)) redrawn = 0;
++        if (redrawn) pipe = vk_pipeline_skippable(pipe);
++    }
+     if (fresh || g_dyn.pipe != pipe) {
+         g_dyn.pipe = pipe;
+         rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
+index f3ac2e2..935ea20 100644
+--- a/src/nx/gpu/vk/renderer.c
++++ b/src/nx/gpu/vk/renderer.c
+@@ -467,6 +467,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+                 slow_frames = slowest_ns = 0;
+                 u64 early_made, early_hits, early_left;
+                 vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
++                if (vk_pipeline_async_skips())
++                    LOG("vulkan: %llu binds dropped their draws for a frame while their pipelines were made (async "
++                        "shaders)\n",
++                        (unsigned long long)vk_pipeline_async_skips());
+                 if (early_made || early_left)
+                     LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
+                         "still to make\n",
+diff --git a/src/nx/gpu/vk/surface.c b/src/nx/gpu/vk/surface.c
+index 355bd29..c4b9f64 100644
+--- a/src/nx/gpu/vk/surface.c
++++ b/src/nx/gpu/vk/surface.c
+@@ -840,6 +840,14 @@ static u64 rt_mem_hash(const Surf* s) {
+     }
+     return h;
+ }
++/* whether s was drawn to in each of the last presents before this one (PortForge Engine's async shaders): an image the
++   game redraws every frame, where a draw skipped this frame is drawn again the next */
++int vk_rt_redrawn(const Surf* s) {
++    u32 before = s->drawn_at == g_vk_present ? s->drawn_streak - 1
++                 : s->drawn_at + 1 == g_vk_present ? s->drawn_streak
++                                                   : 0;
++    return s->is_rt && before >= 3;
++}
+ void vk_rt_drawn(Surf* s) {
+     /* A memory write after the first draw can leave untouched pixels stale even when later draws touch the target.
+        Keep that first baseline until the next present instead of scanning the whole target on every draw. */
+@@ -853,6 +861,7 @@ void vk_rt_drawn(Surf* s) {
+         s->draw_wseen = vk_ww_now();
+         s->draw_gw = gpu_mem_generation();
+     }
++    if (s->drawn_at != g_vk_present) s->drawn_streak = s->drawn_at + 1 == g_vk_present ? s->drawn_streak + 1 : 1;
+     s->drawn_at = g_vk_present;
+     if (s->in_drawn) return;
+     if (g_ndrawn == g_capdrawn) {
+diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
+index db13c2d..c03ef7c 100644
+--- a/src/nx/gpu/vk/vk.h
++++ b/src/nx/gpu/vk/vk.h
+@@ -367,6 +367,7 @@ typedef struct Surf {
+     u64 wseq;       /* when its image last changed, counted across surfaces: of two over the same bytes, the higher
+                        holds them (vk_surf_wrote) */
+     u32 drawn_at;   /* render targets: g_vk_present when last drawn to */
++    u32 drawn_streak; /* render targets: presents in a row, ending at drawn_at's, in which it was drawn to */
+     int in_drawn;   /* in surface.c's list of drawn targets, entered at drawn_from */
+     u64 drawn_from;
+     u64 draw_gw;    /* guest-memory generation at the first draw this present or since a full replacement */
+@@ -846,6 +847,13 @@ int vk_pipeline_worker_count(int setting, int cpus);
+ /* a draw's pipeline: the pipeline, or a stand-in the recording thread waits for at its bind (vk_pipeline_resolve, the
+    pipeline a stand-in names, or h itself) */
+ VkPipeline vk_pipeline_get_deferred(const PipeKey* k);
++/* PortForge Engine's async shaders: whether h is a stand-in whose pipeline isn't ready yet, h marked so that its bind
++   waits only briefly and drops its draws when it still isn't (vk_pipeline_resolve), and the draws dropped so */
++int vk_pipeline_pending(VkPipeline h);
++VkPipeline vk_pipeline_skippable(VkPipeline h);
++u64 vk_pipeline_async_skips(void);
++/* whether a render target was drawn to in each of the last presents (surface.c) */
++int vk_rt_redrawn(const Surf* s);
+ VkPipeline vk_pipeline_resolve(VkPipeline h);
+ /* so far: pipelines made, how many of them the pipeline cache had, ms the workers took making them, ms the GPU thread
+    waited for new ones, shaders translated, ms translating them */
+diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
+index be57ac5..9468bf5 100644
+--- a/src/nx/runtime/settings.txt
++++ b/src/nx/runtime/settings.txt
+@@ -190,6 +190,15 @@ setting Pipeline threads
+     help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
+     help threads, two to six; 1 to 32 = that many. More make a first run's new pipelines sooner, with less CPU left
+     help for the game
++setting Async shaders
++    key async_shaders
++    int 0 1
++    default 1
++    words Off|Smart
++    help PortForge Engine. 1 = a draw whose new pipeline is still being made is skipped, after a short wait, when it
++    help draws into images the game has drawn to in each of the last presents (its 3D world, redrawn every frame), so
++    help a missing object comes back a frame later instead of the game stopping. Draws into anything else (menus,
++    help loading screens, images drawn once) still wait. 0 = every draw waits for its pipeline
+ setting JIT threads
+     key jit_threads
+     int 0 8

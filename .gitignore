@@ -10,3 +10,7 @@ update.log
 *.bak
 last-game.txt
 backend-location.txt
+engine/src/
+engine/package/
+engine/package-candidate/
+engine/*.log

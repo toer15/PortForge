@@ -188,6 +188,7 @@ namespace PortForge
             code.AppendLine("    foreach ($f in $files) { $s = Join-Path $Source $f; if (-not (Test-Path -LiteralPath $s)) { continue }");
             code.AppendLine("      for ($i = 0; $i -lt 20; $i++) { try { Copy-Item -LiteralPath $s -Destination (Join-Path $Target $f) -Force; break } catch { if ($i -eq 19) { throw }; Start-Sleep -Milliseconds 500 } } }");
             code.AppendLine("    $nt = Join-Path $Source 'NativeTest'; if (Test-Path -LiteralPath $nt) { Copy-Item -LiteralPath $nt -Destination $Target -Recurse -Force }");
+            code.AppendLine("    $en = Join-Path $Source 'Engine'; if (Test-Path -LiteralPath $en) { $old = Join-Path $Target 'Engine'; if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force }; Copy-Item -LiteralPath $en -Destination $Target -Recurse -Force }");
             code.AppendLine("    Note 'Update installed.'");
             code.AppendLine("  } catch {");
             code.AppendLine("    foreach ($f in $files) { $b = Join-Path $backup $f; if (Test-Path -LiteralPath $b) { Copy-Item -LiteralPath $b -Destination (Join-Path $Target $f) -Force } }");

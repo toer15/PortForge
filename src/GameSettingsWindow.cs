@@ -32,6 +32,7 @@ namespace PortForge
         private readonly TableLayoutPanel fixes=Stack();
         private readonly System.Windows.Forms.Timer healthTimer=new System.Windows.Forms.Timer {Interval=5000};
         private readonly string backendPath,reportsRoot;
+        private readonly EnginePanel enginePanel=new EnginePanel();
         private string lastHealth;
         private string lastAiAttempt;
         private DateTime lastAiTime;
@@ -57,7 +58,7 @@ namespace PortForge
             {
                 var b = Button(text, false); b.Size = new Size(76, 30); b.AccessibleName = text + " Windows game executable";
                 if (text == "Browse") b.Click += async delegate { using (var picker = new OpenFileDialog { Filter = "Windows game|*.exe", CheckFileExists = true }) if (picker.ShowDialog(this) == DialogResult.OK) { game.Text = picker.FileName; await LoadGame(); } };
-                if (text == "Clear") b.Click += delegate { game.Clear(); };
+                if (text == "Clear") b.Click += delegate { game.Clear(); enginePanel.SetGame(null); };
                 if (text == "Load") b.Click += async delegate { await LoadGame(); };
                 fileButtons.Controls.Add(b);
             }
@@ -65,8 +66,9 @@ namespace PortForge
             var tabs=new TabControl {Dock=DockStyle.Fill,AccessibleName="Game settings tabs"};
             var graphicsTab=new TabPage("Graphics and FPS") {BackColor=Bg,ForeColor=Color.WhiteSmoke};
             var fixesTab=new TabPage("Automatic fixes") {BackColor=Bg,ForeColor=Color.WhiteSmoke};
+            var engineTab=new TabPage("Engine") {BackColor=Bg,ForeColor=Color.WhiteSmoke};engineTab.Controls.Add(enginePanel);
             var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = new Padding(0, 8, 0, 0) };
-            scroll.Controls.Add(options); graphicsTab.Controls.Add(scroll);tabs.TabPages.Add(graphicsTab);tabs.TabPages.Add(fixesTab);root.Controls.Add(tabs,0,2);
+            scroll.Controls.Add(options); graphicsTab.Controls.Add(scroll);tabs.TabPages.Add(graphicsTab);tabs.TabPages.Add(fixesTab);tabs.TabPages.Add(engineTab);root.Controls.Add(tabs,0,2);
             var fixesScroll=new Panel {Dock=DockStyle.Fill,AutoScroll=true};fixesScroll.Controls.Add(fixes);fixesTab.Controls.Add(fixesScroll);fixes.Padding=new Padding(10,12,22,8);
             fixes.Controls.Add(Label("Automatic checks and supported repairs",13,Mint));
             foreach(var check in new[]{watch,autoRepair,autoAi})fixes.Controls.Add(check);
@@ -146,6 +148,7 @@ namespace PortForge
                 ShowProfile(GameOptimization.Load(exe)); loadedGame = Path.GetFullPath(exe);
                 try{File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"last-game.txt"),loadedGame);}catch(IOException){}catch(UnauthorizedAccessException){}
                 if(LiveDoctor.Current!=null)LiveDoctor.Current.Watch(loadedGame);
+                enginePanel.SetGame(loadedGame);
                 SetStatus("READY", "Ready to tune", "Choose an FPS preset above. Play game saves and verifies your selected limit. Automatic fixes checks the recorded log.", Mint);
             }
             catch (OperationCanceledException) { SetStatus("CANCELLED", "Check cancelled", "No settings were changed.", Muted); }

@@ -50,7 +50,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.9 | Switch to PC";
+            Text = "PortForge 0.10 | Switch to PC";
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;

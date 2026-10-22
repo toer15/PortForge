@@ -132,11 +132,14 @@ internal static class UpdateTests
                 File.WriteAllText(Path.Combine(app, "PortForge.exe"), "old program"); File.WriteAllText(Path.Combine(app, "last-game.txt"), "keep me");
                 File.WriteAllText(Path.Combine(app, "NativeGames", "Mario", "save.dat"), "save");
                 string stage = Path.Combine(root, "stage"); Directory.CreateDirectory(stage); File.WriteAllText(Path.Combine(stage, "PortForge.exe"), "new program"); File.WriteAllText(Path.Combine(stage, "README.md"), "new readme");
+                Directory.CreateDirectory(Path.Combine(stage, "Engine")); File.WriteAllText(Path.Combine(stage, "Engine", "ENGINE.txt"), "version=2.0");
+                Directory.CreateDirectory(Path.Combine(app, "Engine")); File.WriteAllText(Path.Combine(app, "Engine", "old-library.dll"), "old");
                 string log = AppUpdates.StartInstall(stage, app, 0, false);
                 Wait(() => File.Exists(log) && File.ReadAllText(log).Contains("Update installed"), 40);
                 Check(File.ReadAllText(Path.Combine(app, "PortForge.exe")) == "new program" && File.ReadAllText(Path.Combine(app, "README.md")) == "new readme", "The helper replaces the program files, even in a folder with spaces and non-English letters");
                 Check(File.ReadAllText(Path.Combine(app, "update-backup", "PortForge.exe")) == "old program", "The previous program is kept as a backup");
                 Check(File.ReadAllText(Path.Combine(app, "last-game.txt")) == "keep me" && File.ReadAllText(Path.Combine(app, "NativeGames", "Mario", "save.dat")) == "save", "Settings, converted games and saves are untouched");
+                Check(File.ReadAllText(Path.Combine(app, "Engine", "ENGINE.txt")) == "version=2.0" && !File.Exists(Path.Combine(app, "Engine", "old-library.dll")), "An update replaces the whole PortForge Engine folder");
                 Wait(() => !Directory.Exists(stage), 15);
                 Check(!Directory.Exists(stage), "The unpacked update is cleaned up");
 

@@ -118,3 +118,19 @@ The bar at the bottom of the main window is the **AI Doctor**. It watches every 
 - Select **AI Doctor** to see everything it noticed and did. It also writes `PortForge-doctor.log` in the game's folder.
 
 Some problems need a change inside the game engine (for example, loading freezes). The doctor reports these instead of pretending to fix them.
+
+## Engine tab: the PortForge Engine
+
+Converted games run on an engine made for emulation. When a game needs a new shader, that engine freezes the game until the shader is built. On a first visit to an area, that can mean freezes of several seconds.
+
+The **PortForge Engine** is PortForge's own version of that engine, built to remove that stutter:
+
+1. Open **Graphics and FPS**, load your game, and open the **Engine** tab.
+2. Select **Install PortForge Engine**. The original engine is kept, and PortForge checks that the game still starts. If it doesn't, the original goes back automatically.
+3. **Smart async shaders** is on. Instead of freezing, the game skips a not-yet-ready object for one frame in the 3D world. Menus and loading screens still wait, so nothing goes missing for good. Turn it off if something looks wrong.
+4. **Measure the stutter fix** plays the same scene twice from an empty shader cache, once each way, and shows the difference. Your own cache, save and settings are put back.
+5. **Restore original engine** puts the original back at any time.
+
+**AI Engine Lab** (needs the engine source, MSYS2 and Codex on the PC): the AI writes a change to the engine's code for your game's recorded problems. PortForge builds it, measures it on your game, and keeps it only if stutter measurably drops with no new errors. Otherwise it is thrown away.
+
+Loading freezes (the game creating many textures at once) are not fixed yet.

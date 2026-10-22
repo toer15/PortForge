@@ -4,13 +4,19 @@ $projectRoot = $PSScriptRoot
 $nativeRoot = Join-Path $projectRoot 'build\PortForgeNative'
 New-Item -ItemType Directory -Force -Path $nativeRoot,(Join-Path $nativeRoot 'NativeTest') | Out-Null
 $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
-$conversionSources = @('AssemblyInfo.cs','Core.cs','ConversionFeedback.cs','ConversionFiles.cs','GameOptimization.cs','NativeConversion.cs','GameDownloads.cs','GameDiagnostics.cs','CodexDiagnosis.cs','AppUpdates.cs','GameStateGuard.cs','LiveDoctor.cs') | ForEach-Object { Join-Path $projectRoot ('src\' + $_) }
+$conversionSources = @('AssemblyInfo.cs','Core.cs','ConversionFeedback.cs','ConversionFiles.cs','GameOptimization.cs','NativeConversion.cs','GameDownloads.cs','GameDiagnostics.cs','CodexDiagnosis.cs','AppUpdates.cs','GameStateGuard.cs','LiveDoctor.cs','EngineManager.cs','EngineLab.cs') | ForEach-Object { Join-Path $projectRoot ('src\' + $_) }
 $downloadReferences = @('/r:System.IO.Compression.dll','/r:System.IO.Compression.FileSystem.dll','/r:System.Web.Extensions.dll')
-& $compiler /nologo /codepage:65001 /optimize+ /target:winexe /platform:x64 /r:System.Core.dll /r:System.Xml.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll @downloadReferences (('/win32manifest:' + (Join-Path $projectRoot 'app.manifest'))) (('/out:' + (Join-Path $nativeRoot 'PortForge.exe'))) @conversionSources (Join-Path $projectRoot 'src\NativeApp.cs') (Join-Path $projectRoot 'src\GameSettingsWindow.cs') (Join-Path $projectRoot 'src\DownloadWindow.cs') (Join-Path $projectRoot 'src\UpdateWindow.cs') (Join-Path $projectRoot 'src\DoctorWindow.cs')
+& $compiler /nologo /codepage:65001 /optimize+ /target:winexe /platform:x64 /r:System.Core.dll /r:System.Xml.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll @downloadReferences (('/win32manifest:' + (Join-Path $projectRoot 'app.manifest'))) (('/out:' + (Join-Path $nativeRoot 'PortForge.exe'))) @conversionSources (Join-Path $projectRoot 'src\NativeApp.cs') (Join-Path $projectRoot 'src\GameSettingsWindow.cs') (Join-Path $projectRoot 'src\DownloadWindow.cs') (Join-Path $projectRoot 'src\UpdateWindow.cs') (Join-Path $projectRoot 'src\DoctorWindow.cs') (Join-Path $projectRoot 'src\EnginePanel.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Native frontend compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'app.config') -Destination (Join-Path $nativeRoot 'PortForge.exe.config')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'USERGUIDE.md') -Destination (Join-Path $nativeRoot 'README.md')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'NATIVE.md') -Destination (Join-Path $nativeRoot 'DEVELOPING.md')
+$enginePackage = Join-Path $projectRoot 'engine\package'
+if (Test-Path -LiteralPath (Join-Path $enginePackage 'scarletnx.exe')) {
+    $engineTarget = Join-Path $nativeRoot 'Engine'
+    if (Test-Path -LiteralPath $engineTarget) { Remove-Item -LiteralPath $engineTarget -Recurse -Force }
+    Copy-Item -LiteralPath $enginePackage -Destination $engineTarget -Recurse
+}
 $localBackend = if ($BackendPath) { [IO.Path]::GetFullPath($BackendPath) } else { Join-Path $projectRoot 'research\ScarletNX-Windows\bin\scarletnx.exe' }
 if (Test-Path -LiteralPath $localBackend) { [IO.File]::WriteAllText((Join-Path $nativeRoot 'backend-location.txt'),$localBackend) }
 $testNro = Join-Path $nativeRoot 'NativeTest\original-test.nro'
@@ -59,5 +65,12 @@ if ($Test) {
     Copy-Item -LiteralPath (Join-Path $projectRoot 'app.config') -Destination (Join-Path $projectRoot 'build\DoctorTests.exe.config')
     & (Join-Path $projectRoot 'build\DoctorTests.exe') (Join-Path $projectRoot 'build\TuningFixture.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Doctor tests failed.' }
+
+    & $compiler /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /r:System.Core.dll /r:System.Xml.dll @downloadReferences (('/win32manifest:' + (Join-Path $projectRoot 'app.manifest'))) (('/out:' + (Join-Path $projectRoot 'build\EngineTests.exe'))) @conversionSources (Join-Path $projectRoot 'tests\EngineTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Engine tests compilation failed.' }
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'app.config') -Destination (Join-Path $projectRoot 'build\EngineTests.exe.config')
+    & (Join-Path $projectRoot 'build\EngineTests.exe') (Join-Path $projectRoot 'build\TuningFixture.exe') (Join-Path $errorBackendRoot 'scarletnx.exe') (Join-Path $projectRoot 'build\DiagnosisFixture.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Engine tests failed.' }
+
 }
 Write-Output ('Built native frontend: ' + (Join-Path $nativeRoot 'PortForge.exe'))
