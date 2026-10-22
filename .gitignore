@@ -1,0 +1,12 @@
+build/
+research/
+NativeGames/
+Exports/
+*.user
+verification/
+Downloads/
+update-backup/
+update.log
+*.bak
+last-game.txt
+backend-location.txt
