@@ -9,6 +9,7 @@ namespace PortForge
     /// <summary>The live doctor's report: what it saw while games ran and what it fixed.</summary>
     public sealed class DoctorWindow : Form
     {
+        protected override CreateParams CreateParams { get { return SmoothPaint.Composited(base.CreateParams); } }
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183), Muted = Color.FromArgb(173, 185, 203);
         private readonly TextBox events = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, BackColor = Surface, ForeColor = Color.WhiteSmoke, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "Doctor events", Font = new Font("Segoe UI", 10) };
         private readonly List<DoctorEvent> source;
@@ -45,7 +46,7 @@ namespace PortForge
 
         private static Button Button(string text, bool primary)
         {
-            var b = new Button { Text = text, AccessibleName = text, Size = new Size(130, 34), FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Margin = new Padding(0, 0, 8, 0) };
+            var b = new ReadableButton { Text = text, AccessibleName = text, Size = new Size(130, 34), FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Margin = new Padding(0, 0, 8, 0) };
             b.FlatAppearance.BorderSize = 0; return b;
         }
     }

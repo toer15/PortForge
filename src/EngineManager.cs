@@ -147,7 +147,7 @@ namespace PortForge
                 {
                     var duration = Regex.Match(arguments, @"--seconds=(\d+)");
                     int wait = (duration.Success ? Int32.Parse(duration.Groups[1].Value, CultureInfo.InvariantCulture) : seconds) + 60;
-                    return GameOptimization.Run(runtime, arguments + (gameExe != null ? " --game=" + GameManifest.Quote(Path.GetDirectoryName(Path.GetFullPath(gameExe))) : ""), wait, token);
+                    return GameOptimization.Run(runtime, arguments + (gameExe != null ? " --game=" + GameManifest.Quote(Path.GetFullPath(gameExe)) : ""), wait, token);
                 }
                 finally
                 {

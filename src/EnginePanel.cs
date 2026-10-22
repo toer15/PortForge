@@ -15,7 +15,8 @@ namespace PortForge
     {
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183), Muted = Color.FromArgb(173, 185, 203), Amber = Color.FromArgb(255, 199, 120), Red = Color.FromArgb(255, 157, 148);
         private readonly Label status = Caption("Load a game above to see its engine.", 12, Color.White), detail = Caption("", 9, Muted);
-        private readonly CheckBox asyncShaders = new CheckBox { Text = "Smart async shaders (no shader stutter; an object can be missing for a frame)", Checked = true, AutoSize = true, AccessibleName = "Smart async shaders" };
+        private readonly CheckBox asyncShaders = new CheckBox { Text = "Smart async shaders (reduce shader stalls; objects may briefly appear late)", Checked = true, AutoSize = true, AccessibleName = "Smart async shaders" };
+        private readonly CheckBox asyncTranslation = new CheckBox { Text = "Background shader translation (experimental; may cause visual errors)", AutoSize = true, AccessibleName = "Background shader translation" };
         private readonly Button autoFix = Action("Auto fix everything", true), install = Action("Install PortForge Engine", false), restore = Action("Restore original engine", false), measure = Action("Measure the stutter fix", false),
             lab = Action("Let AI improve the engine", true), stop = Action("Stop", false);
         private readonly TextBox results = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 230, Dock = DockStyle.Top, BackColor = Surface, ForeColor = Color.WhiteSmoke, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "Engine results" };
@@ -29,13 +30,13 @@ namespace PortForge
         {
             BackColor = Bg; ForeColor = Color.WhiteSmoke; Dock = DockStyle.Fill; AutoScroll = true;
             stack.Controls.Add(Caption("PortForge Engine", 13, Mint));
-            var about = Caption("Games converted from the Switch run on an engine made for emulation. The PortForge Engine is our own build of it, made to remove stutter: when a new shader isn't ready, it no longer stops the game. It skips that one draw for a frame in parts of the picture the game redraws every frame (the 3D world), and still waits in menus and loading screens so nothing goes missing. The original engine is kept and can be put back at any time.", 9, Muted);
+            var about = Caption("The PortForge Engine builds graphics pipelines in the background to reduce compilation stalls. Some objects may briefly appear late. It waits for work needed by menus, loading screens and game data. Loading and game-specific freezes can remain. The original engine is kept and can be put back at any time.", 9, Muted);
             stack.Controls.Add(about); stack.Controls.Add(status); stack.Controls.Add(detail);
             var fixAbout = Caption("Auto fix everything: puts the PortForge Engine under this game, applies every repair the app knows, matches the engine to this PC, then plays the game for 20 seconds to check it works. Everything keeps a backup, and an engine that breaks the game is taken out again. Close the game first.", 9, Muted);
             stack.Controls.Add(fixAbout);
             var row = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
             foreach (var b in new[] { autoFix, install, restore, measure }) row.Controls.Add(b);
-            stack.Controls.Add(row); stack.Controls.Add(asyncShaders);
+            stack.Controls.Add(row); stack.Controls.Add(asyncShaders); stack.Controls.Add(asyncTranslation);
             stack.Controls.Add(Caption("AI Engine Lab", 13, Mint));
             var labAbout = Caption("The AI (Codex on this PC) studies the game's recorded problems, writes a change to the engine's code, and PortForge builds it and measures it on the game with scripted play. A change is kept only when it measurably reduces stutter without new errors; otherwise it is thrown away. Needs the engine source and build tools on this PC.", 9, Muted);
             stack.Controls.Add(labAbout);
@@ -51,6 +52,7 @@ namespace PortForge
             lab.Click += async delegate { await Work("AI Engine Lab", (p, t) => EngineLab.Improve(game, p, t)); };
             stop.Click += delegate { if (cancellation != null) cancellation.Cancel(); };
             asyncShaders.CheckedChanged += delegate { if (!loading) SaveAsync(); };
+            asyncTranslation.CheckedChanged += delegate { if (!loading) SaveTranslation(); };
             SetGame(null);
         }
 
@@ -71,13 +73,14 @@ namespace PortForge
             restore.Enabled = idle && has && File.Exists(Path.Combine(Path.GetDirectoryName(game ?? "C:\\"), EngineManager.BackupFolderName, Path.GetFileName(game ?? "x")));
             measure.Enabled = idle && has && package != null;
             lab.Enabled = idle && has && EngineLab.Available();
-            stop.Enabled = !idle; asyncShaders.Enabled = idle && installed;
+            stop.Enabled = !idle; asyncShaders.Enabled = idle && installed; asyncTranslation.Enabled = idle && installed;
             loading = true;
             try
             {
                 string value;
                 var values = has && File.Exists(GameOptimization.ConfigPath(game)) ? GameOptimization.ReadValues(File.ReadAllText(GameOptimization.ConfigPath(game))) : new Dictionary<string, string>();
                 asyncShaders.Checked = !(values.TryGetValue("async_shaders", out value) && value == "0");
+                asyncTranslation.Checked = values.TryGetValue("async_translation", out value) && value == "1";
             }
             catch (IOException) { }
             finally { loading = false; }
@@ -93,6 +96,18 @@ namespace PortForge
                 Say("Smart async shaders " + (asyncShaders.Checked ? "on" : "off") + ". It applies the next time the game starts.");
             }
             catch (Exception e) { Say("Could not change the setting: " + e.Message); loading = true; asyncShaders.Checked = !asyncShaders.Checked; loading = false; }
+        }
+
+        private void SaveTranslation()
+        {
+            try
+            {
+                GameOptimization.EnsureStopped(game);
+                string path = GameOptimization.ConfigPath(game), text = File.Exists(path) ? File.ReadAllText(path) : "";
+                GameOptimization.AtomicWrite(path, new UTF8Encoding(false).GetBytes(GameOptimization.Merge(text, new Dictionary<string, string> { { "async_translation", asyncTranslation.Checked ? "1" : "0" } })), path + ".before-portforge-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + ".bak");
+                Say("Background shader translation " + (asyncTranslation.Checked ? "on" : "off") + ". Applies on next start. If objects appear incorrectly, turn it off for this game.");
+            }
+            catch (Exception e) { Say("Could not change the setting: " + e.Message); loading = true; asyncTranslation.Checked = !asyncTranslation.Checked; loading = false; }
         }
 
         private string Measure(IProgress<string> progress, CancellationToken token)
@@ -120,11 +135,12 @@ namespace PortForge
 
         private void Say(string text) { results.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + text + Environment.NewLine); }
         public string ResultsText { get { return results.Text; } }
+        public bool IsWorking { get { return cancellation != null; } }
 
         private static Label Caption(string text, float size, Color color) { return new Label { Text = text, AutoSize = true, ForeColor = color, Font = new Font("Segoe UI", size), Margin = new Padding(0, 4, 0, 8) }; }
         private static Button Action(string text, bool primary)
         {
-            var b = new Button { Text = text, AccessibleName = text, AutoSize = true, MinimumSize = new Size(170, 34), FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Margin = new Padding(0, 4, 8, 4) };
+            var b = new ReadableButton { Text = text, AccessibleName = text, AutoSize = true, MinimumSize = new Size(170, 34), FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Margin = new Padding(0, 4, 8, 4) };
             b.EnabledChanged += delegate { b.BackColor = b.Enabled ? (primary ? Mint : Surface) : Color.FromArgb(34, 38, 48); b.ForeColor = b.Enabled ? (primary ? Bg : Color.WhiteSmoke) : Color.FromArgb(120, 126, 140); }; b.FlatAppearance.BorderSize = 0; return b;
         }
     }

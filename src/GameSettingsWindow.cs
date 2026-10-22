@@ -11,6 +11,7 @@ namespace PortForge
 {
     public sealed class GameSettingsWindow : Form
     {
+        protected override CreateParams CreateParams { get { return SmoothPaint.Composited(base.CreateParams); } }
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183), Muted = Color.FromArgb(173, 185, 203);
         private readonly TextBox game = new TextBox { AccessibleName = "Windows game executable", Dock = DockStyle.Fill };
         private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (recommended)", "Custom limit", "Unlimited"), filtering = Filtering();
@@ -37,6 +38,9 @@ namespace PortForge
         private string lastAiAttempt;
         private DateTime lastAiTime;
         private string displayedAi;
+        private bool checkingInBackground;
+        private UiLock inputLock;
+        private readonly Label backgroundStatus = Label("Background checks run without interrupting your work.", 9, Muted);
 
         private static string MemoryFile(){return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"PortForge","last-game.txt");}
         public static void RememberGame(string exe)
@@ -92,6 +96,7 @@ namespace PortForge
             scroll.Controls.Add(options); graphicsTab.Controls.Add(scroll);tabs.TabPages.Add(graphicsTab);tabs.TabPages.Add(fixesTab);tabs.TabPages.Add(engineTab);root.Controls.Add(tabs,0,2);
             var fixesScroll=new Panel {Dock=DockStyle.Fill,AutoScroll=true};fixesScroll.Controls.Add(fixes);fixesTab.Controls.Add(fixesScroll);fixes.Padding=new Padding(10,12,22,8);
             fixes.Controls.Add(Label("Automatic checks and supported repairs",13,Mint));
+            backgroundStatus.AccessibleName = "Background check status"; fixes.Controls.Add(backgroundStatus);
             foreach(var check in new[]{watch,autoRepair,autoAi})fixes.Controls.Add(check);
             var explanation=Label("Checks settings, missing runtime files and known renderer warnings, and tells shader-compile stalls from loading freezes. The stutter repair gives the engine more pipeline threads and pre-builds the shader cache by playing the opening of the game from a backed-up save. Repairs are backed up and verified. AI uses the installed Codex coding assistant and sends a small diagnostic summary; it cannot guarantee fixes for every world bug. Game files, saves and caches are kept.",9,Muted);
             fixes.SizeChanged+=delegate{explanation.MaximumSize=new Size(Math.Max(200,fixes.ClientSize.Width-34),0);};fixes.Controls.Add(explanation);
@@ -149,7 +154,7 @@ namespace PortForge
             scale.ValueChanged+=delegate{Changed();};filtering.SelectedIndexChanged+=delegate{Changed();};foreach(var check in new[]{vsync,shadows,docked,fullscreen})check.CheckedChanged+=delegate{Changed();};
             Shown += async delegate { if (File.Exists(game.Text)) await LoadGame(); };
             FormClosing += delegate(object sender, FormClosingEventArgs e) { if (cancellation != null) { e.Cancel = true; cancellation.Cancel(); } };
-            healthTimer.Tick+=async delegate{if(Visible&&watch.Checked&&loadedGame!=null&&cancellation==null&&!dirty)await CheckHealth(false,true);};healthTimer.Start();
+            healthTimer.Tick+=async delegate{if(Visible&&watch.Checked)await RefreshHealthInBackground();};healthTimer.Start();
         }
         private async Task LoadGame()
         {
@@ -175,7 +180,7 @@ namespace PortForge
             catch (OperationCanceledException) { SetStatus("CANCELLED", "Check cancelled", "No settings were changed.", Muted); }
             catch (Exception e) { capabilities = null; Error(e); }
             finally { cancellation.Dispose(); cancellation = null; Busy(false); }
-            if(loadedGame!=null&&capabilities!=null)await CheckHealth(false);
+            if(loadedGame!=null&&capabilities!=null)await RefreshHealthInBackground();
         }
         private async Task Tune()
         {
@@ -199,10 +204,42 @@ namespace PortForge
         }
         private void Busy(bool busy)
         {
-            game.Enabled = fileButtons.Enabled = options.Enabled = fixes.Enabled = !busy;
+            if (busy && inputLock == null) inputLock = UiLock.Lock(this);
+            if (!busy && inputLock != null) { inputLock.Unlock(); inputLock = null; }
             save.Enabled = tune.Enabled = launch.Enabled = !busy && loadedGame != null && capabilities != null;
             scan.Enabled=undo.Enabled=!busy&&loadedGame!=null;askAi.Enabled=!busy&&loadedGame!=null&&CodexDiagnosis.Find()!=null;
             stop.Enabled = busy;
+        }
+        // The timer only reads. The main doctor's worker owns automatic repairs and optional AI reviews.
+        // Never reserve the foreground operation, reload settings, or repaint its status card for a timer tick.
+        private async Task RefreshHealthInBackground()
+        {
+            if (checkingInBackground || loadedGame == null || cancellation != null || enginePanel.IsWorking) return;
+            string exe = loadedGame; var cap = capabilities;
+            checkingInBackground = true;
+            try
+            {
+                var health = await Task.Run(() => GameDiagnostics.Scan(exe, cap, backendPath));
+                if (IsDisposed || Disposing || loadedGame != exe || cancellation != null || enginePanel.IsWorking) return;
+                string text = health.Text();
+                if (lastHealth != text)
+                {
+                    int start = findings.SelectionStart, length = findings.SelectionLength;
+                    findings.Text = lastHealth = text;
+                    findings.Select(Math.Min(start, findings.TextLength), Math.Min(length, Math.Max(0, findings.TextLength - start)));
+                }
+                string summary = "Background check: " + health.Summary;
+                if (backgroundStatus.Text != summary) backgroundStatus.Text = summary;
+            }
+            catch (Exception e)
+            {
+                if (!IsDisposed && !Disposing && loadedGame == exe && cancellation == null)
+                {
+                    string text = "Background check: " + e.Message;
+                    if (backgroundStatus.Text != text) backgroundStatus.Text = text;
+                }
+            }
+            finally { checkingInBackground = false; }
         }
         private void Changed()
         {
@@ -236,6 +273,7 @@ namespace PortForge
         }
         private async Task CheckHealth(bool forceAi,bool quiet=false)
         {
+            if (quiet) { await RefreshHealthInBackground(); return; }
             if(loadedGame==null||cancellation!=null)return;
             cancellation=new CancellationTokenSource();var token=cancellation.Token;if(!quiet)Busy(true);
             var repairProgress=new Progress<string>(m=>SetStatus("WORKING","Applying supported repairs",m,Muted));
@@ -264,7 +302,7 @@ namespace PortForge
                     {history.AppendText(await Task.Run(()=>GameDiagnostics.Repair(loadedGame,capabilities,backendPath,result.recommended_rules,true,repairProgress,token))+Environment.NewLine);if(capabilities!=null)ShowProfile(GameOptimization.Load(loadedGame));}
                     health=await Task.Run(()=>GameDiagnostics.Scan(loadedGame,capabilities,backendPath));
                 }
-                bool changed=lastHealth!=health.Text();findings.Text=lastHealth=health.Text();
+                bool changed=lastHealth!=health.Text();if(changed)findings.Text=lastHealth=health.Text();
                 if(!quiet||changed)
                 {
                     bool engine=health.Issues.Any(i=>new[]{"occlusion","renderer_failure","runtime_failure"}.Contains(i.Id));
@@ -310,7 +348,7 @@ namespace PortForge
         private static CheckBox Toggle(string text, bool value) { return new CheckBox { Text = text, Checked = value, AutoSize = true, Margin = new Padding(0, 6, 22, 6) }; }
         private static Label Label(string text, float size, Color color) { return new Label { Text = text, Font = new Font("Segoe UI", size), ForeColor = color, AutoSize = true, Margin = new Padding(0, 0, 0, 5) }; }
         private static TableLayoutPanel Stack() { return new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Margin = new Padding(0) }; }
-        private static Button Button(string text, bool primary) { var b = new Button { Text = text, AccessibleName = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Cursor = Cursors.Hand }; b.EnabledChanged += delegate { b.BackColor = b.Enabled ? (primary ? Mint : Surface) : Color.FromArgb(34, 38, 48); b.ForeColor = b.Enabled ? (primary ? Bg : Color.WhiteSmoke) : Color.FromArgb(120, 126, 140); }; b.FlatAppearance.BorderSize = 0; return b; }
-        protected override void Dispose(bool disposing){if(disposing){healthTimer.Stop();healthTimer.Dispose();}base.Dispose(disposing);}
+        private static Button Button(string text, bool primary) { var b = new ReadableButton { Text = text, AccessibleName = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Cursor = Cursors.Hand }; b.EnabledChanged += delegate { b.BackColor = b.Enabled ? (primary ? Mint : Surface) : Color.FromArgb(34, 38, 48); b.ForeColor = b.Enabled ? (primary ? Bg : Color.WhiteSmoke) : Color.FromArgb(120, 126, 140); }; b.FlatAppearance.BorderSize = 0; return b; }
+        protected override void Dispose(bool disposing){if(disposing){healthTimer.Stop();healthTimer.Dispose();if(inputLock!=null){inputLock.Unlock();inputLock=null;}}base.Dispose(disposing);}
     }
 }

@@ -133,7 +133,11 @@ The **PortForge Engine** is PortForge's own version of that engine, built to rem
 
 **AI Engine Lab** (needs the engine source, MSYS2 and Codex on the PC): the AI writes a change to the engine's code for your game's recorded problems. PortForge builds it, measures it on your game, and keeps it only if stutter measurably drops with no new errors. Otherwise it is thrown away.
 
-Loading freezes (the game creating many textures at once) are not fixed yet.
+Loading freezes and game-specific engine problems can remain. The log records stage timings to help identify the cause.
+
+**Background shader translation** in the Engine tab is experimental and off by default. It moves first-time shader translation to workers, using a copy of the shader and its constant buffers. Some draws can appear late or incorrectly; turn it off for that game if this happens. It requires Smart async shaders. This option cannot remove all stutter or make every game compatible.
+
+Automatic checkups run on background workers. The settings window refreshes its findings only when they change, without locking inputs, replacing unsaved selections or changing the main status card. The main AI Doctor still performs supported automatic repairs after a game closes. Manual scans and tests temporarily lock inputs while keeping the text readable.
 
 ## Installing PortForge
 

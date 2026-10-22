@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -21,6 +21,7 @@ namespace PortForge
 
     public sealed class NativeWindow : Form
     {
+        protected override CreateParams CreateParams { get { return SmoothPaint.Composited(base.CreateParams); } }
         private static readonly Color Background = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46),
             Muted = Color.FromArgb(173, 185, 203), Mint = Color.FromArgb(105, 226, 183), Red = Color.FromArgb(255, 157, 148), Blue = Color.FromArgb(140, 187, 255);
         private readonly TextBox name = Box("Game name"), input = Box("Game file"), backend = Box("Conversion engine"),
@@ -31,6 +32,7 @@ namespace PortForge
         private readonly Label statusBadge = new Label(), statusTitle = new Label(), statusMessage = new Label();
         private readonly Panel statusCard = new Panel(), leftScroll = new Panel();
         private readonly TableLayoutPanel fields = Stack(), extraFields = Stack();
+        private UiLock fieldLock;
         private readonly ProgressBar progress = new ProgressBar();
         private readonly ToolTip tips = new ToolTip();
         private readonly Button downloads = Button("Downloads", false), updates = Button("Check for updates", false), doctorButton = Button("AI Doctor", false);
@@ -40,6 +42,9 @@ namespace PortForge
         private readonly System.Collections.Generic.List<DoctorEvent> doctorEvents = new System.Collections.Generic.List<DoctorEvent>();
         private readonly NotifyIcon tray = new NotifyIcon();
         private LiveDoctor doctor;
+        private readonly System.Windows.Forms.Timer doctorUiTimer = new System.Windows.Forms.Timer { Interval = 500 };
+        private DoctorEvent pendingDoctorEvent, pendingDoctorNotice;
+        private DateTime lastDoctorNotice = DateTime.MinValue;
         /// <summary>Tests turn this off so a test window never watches or repairs real games.</summary>
         public static bool StartDoctorOnShow = true;
         private readonly CheckBox autoTune = new CheckBox { Text = "Automatically tune each new game (about 4 minutes)", Checked = true, AutoSize = true, AccessibleName = "Automatically tune new games", Margin = new Padding(0, 0, 0, 15) };
@@ -50,7 +55,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.16 | Switch to PC"; AppIcon.Apply(this);
+            Text = "PortForge 0.17 | Switch to PC"; AppIcon.Apply(this);
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -228,7 +233,7 @@ namespace PortForge
             Shown += delegate { AppPaths.RefreshRegistration(); };
             Shown += async delegate { await QuietUpdateCheck(); };
             Shown += delegate { if (StartDoctorOnShow) StartDoctor(); };
-            FormClosed += delegate { if (doctor != null) doctor.Dispose(); tray.Visible = false; tray.Dispose(); };
+            FormClosed += delegate { doctorUiTimer.Stop(); doctorUiTimer.Dispose(); if (doctor != null) doctor.Dispose(); tray.Visible = false; tray.Dispose(); };
         }
 
         private void StartDoctor()
@@ -239,21 +244,39 @@ namespace PortForge
             doctor.StartDiscovery(LiveDoctor.DefaultDiscoveryRoots(AppDomain.CurrentDomain.BaseDirectory));
             doctor.Reported += e =>
             {
-                lock (doctorEvents) { doctorEvents.Add(e); if (doctorEvents.Count > 500) doctorEvents.RemoveAt(0); }
-                if (IsDisposed || !IsHandleCreated) return;
-                try
+                lock (doctorEvents)
                 {
-                    BeginInvoke((Action)delegate
-                    {
-                        doctorStatus.Text = "AI Doctor: " + e;
-                        doctorStatus.ForeColor = e.Fixed ? Mint : e.Important ? Color.FromArgb(255, 199, 120) : Muted;
-                        if (e.Fixed || e.Important) tray.ShowBalloonTip(6000, "PortForge AI Doctor: " + e.Title, (e.Game.Length > 0 ? e.Game + ": " : "") + (e.Text.Length > 220 ? e.Text.Substring(0, 220) + "..." : e.Text), e.Kind == "crash" || e.Kind == "error" ? ToolTipIcon.Warning : ToolTipIcon.Info);
-                    });
+                    doctorEvents.Add(e); if (doctorEvents.Count > 500) doctorEvents.RemoveAt(0);
+                    pendingDoctorEvent = e;
+                    if (e.Fixed || e.Important) pendingDoctorNotice = e;
                 }
-                catch (InvalidOperationException) { }
             };
+            doctorUiTimer.Tick += delegate { FlushDoctorUpdates(); }; doctorUiTimer.Start();
             int count = doctor.Games.Length;
             doctorStatus.Text = "AI Doctor: " + (count == 0 ? "ready. It starts watching a game once you convert one or open it in Graphics and FPS." : "watching " + count + " game(s). Problems are explained live and fixed when the game closes.");
+        }
+
+        private void FlushDoctorUpdates()
+        {
+            DoctorEvent latest, notice = null;
+            lock (doctorEvents)
+            {
+                latest = pendingDoctorEvent; pendingDoctorEvent = null;
+                if ((DateTime.UtcNow - lastDoctorNotice).TotalSeconds >= 30)
+                { notice = pendingDoctorNotice; pendingDoctorNotice = null; }
+            }
+            if (latest != null)
+            {
+                string text = "AI Doctor: " + latest;
+                if (doctorStatus.Text != text) doctorStatus.Text = text;
+                Color color = latest.Fixed ? Mint : latest.Important ? Color.FromArgb(255, 199, 120) : Muted;
+                if (doctorStatus.ForeColor != color) doctorStatus.ForeColor = color;
+            }
+            if (notice != null)
+            {
+                lastDoctorNotice = DateTime.UtcNow;
+                tray.ShowBalloonTip(6000, "PortForge AI Doctor: " + notice.Title, (notice.Game.Length > 0 ? notice.Game + ": " : "") + (notice.Text.Length > 220 ? notice.Text.Substring(0, 220) + "..." : notice.Text), notice.Kind == "crash" || notice.Kind == "error" ? ToolTipIcon.Warning : ToolTipIcon.Info);
+            }
         }
 
         private async Task QuietUpdateCheck()
@@ -366,7 +389,7 @@ namespace PortForge
             CancellationToken token = cancellation.Token;
             int current = ++operation;
             result = lastLogPath = recoveryFolder = null;
-            fields.Enabled = convert.Enabled = openLog.Enabled = false;
+            fieldLock = UiLock.Lock(fields); convert.Enabled = openLog.Enabled = false;
             downloads.Enabled = false;
             cancel.Enabled = progress.Visible = true;
             ShowStatus("WORKING", "Starting conversion", "Checking your game and preparing the conversion. You can cancel at any time.", Blue);
@@ -433,7 +456,7 @@ namespace PortForge
             finally
             {
                 cancellation.Dispose(); cancellation = null;
-                fields.Enabled = true;
+                if (fieldLock != null) { fieldLock.Unlock(); fieldLock = null; }
                 cancel.Enabled = progress.Visible = false;
                 openLog.Enabled = File.Exists(lastLogPath);
                 convert.Enabled = true;
@@ -502,7 +525,7 @@ namespace PortForge
         { var label = Caption(text, 12, Mint, true); label.Margin = new Padding(0, 0, 0, 14); return label; }
         private static Button Button(string text, bool primary)
         {
-            var button = new Button { Text = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Background : Color.WhiteSmoke, Cursor = Cursors.Hand, Font = new Font("Segoe UI", 10, primary ? FontStyle.Bold : FontStyle.Regular) };
+            var button = new ReadableButton { Text = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Background : Color.WhiteSmoke, Cursor = Cursors.Hand, Font = new Font("Segoe UI", 10, primary ? FontStyle.Bold : FontStyle.Regular) };
             button.EnabledChanged += delegate { button.BackColor = button.Enabled ? (primary ? Mint : Surface) : Color.FromArgb(34, 38, 48); button.ForeColor = button.Enabled ? (primary ? Background : Color.WhiteSmoke) : Color.FromArgb(120, 126, 140); };
             button.FlatAppearance.BorderSize = 0;
             return button;

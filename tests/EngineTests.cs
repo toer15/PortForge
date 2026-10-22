@@ -33,6 +33,8 @@ internal static class EngineTests
             byte[] originalBytes = File.ReadAllBytes(exe);
 
             var package = EngineManager.Find(Package(root, "Engine", working));
+            string explicitRun = EngineManager.TimedRun(working, "-H --seconds=1", exe, CancellationToken.None);
+            Check(explicitRun.Contains("game_argument=" + Path.GetFullPath(exe)), "A test engine loads the chosen executable even when the folder and game names differ");
             Check(package != null && package.Version == "1.0" && package.Libraries.SequenceEqual(new[] { "libengine-test.dll", "zlib1.dll" }) && package.Name == "PortForge Engine 1.0", "The shipped engine package is read with its version and libraries");
             Check(EngineManager.Find(Path.Combine(root, "missing")) == null, "A missing engine package is reported as missing");
             Check(!EngineManager.IsInstalled(exe, package) && EngineManager.Describe(exe, package).Contains("original engine"), "A converted game starts out on its original engine");

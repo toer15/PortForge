@@ -6,6 +6,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
+using System.Reflection;
+using System.Threading.Tasks;
 using PortForge;
 
 internal static class NativeInterfaceTests
@@ -84,6 +86,31 @@ internal static class NativeInterfaceTests
                 form.Size = form.MinimumSize;
                 Application.DoEvents();
                 Check(form.ClientRectangle.Contains(form.PointToClient(button("Start conversion").PointToScreen(Point.Empty))), "Start button stays visible at the minimum window size");
+                using (var panel = new Panel())
+                {
+                    var text = new TextBox { Text = "readable", ForeColor = Color.WhiteSmoke, BackColor = Color.FromArgb(28,34,46) };
+                    var label = new Label { Text = "Status", ForeColor = Color.WhiteSmoke };
+                    var choice = new ComboBox(); choice.Items.Add("one"); choice.SelectedIndex = 0;
+                    var check = new CheckBox { Checked = true }; var off = new Button { Enabled = false };
+                    panel.Controls.AddRange(new Control[] { text, label, choice, check, off });
+                    using (var inputLock = UiLock.Lock(panel))
+                    {
+                        Check(panel.Enabled && label.Enabled && choice.Enabled && check.Enabled && text.ReadOnly && text.ForeColor == Color.WhiteSmoke,
+                            "Working inputs keep panels, labels and their normal text colors enabled");
+                        var key = Message.Create(choice.Handle, 0x100, (IntPtr)Keys.Down, IntPtr.Zero);
+                        var click = Message.Create(check.Handle, 0x201, IntPtr.Zero, IntPtr.Zero);
+                        Check(inputLock.PreFilterMessage(ref key) && inputLock.PreFilterMessage(ref click), "Working inputs block keyboard and mouse edits without dimming the controls");
+                    }
+                    Check(!text.ReadOnly && !off.Enabled, "Unlock restores prior editability and keeps previously disabled buttons disabled");
+                }
+                using (var readable = new ReadableButton { Text = "Working", Enabled = false, Size = new Size(120,34), BackColor = Color.FromArgb(34,38,48) })
+                using (var bitmap = new Bitmap(120,34))
+                {
+                    readable.CreateControl();
+                    readable.DrawToBitmap(bitmap, new Rectangle(0,0,120,34));
+                    int light = 0; for(int y=0;y<34;y++)for(int x=0;x<120;x++){Color pixel=bitmap.GetPixel(x,y);if(pixel.R>130&&pixel.G>130&&pixel.B>130)light++;}
+                    Check(light > 10, "A disabled button actually paints a light readable label on the dark background");
+                }
             GameSettingsWindow.IgnoreRemembered = true;
             using (var settingsForm = new GameSettingsWindow(null))
             {
@@ -109,10 +136,33 @@ internal static class NativeInterfaceTests
                 Check(gameBox.TextLength == 0 && !settingsButton("Save settings").Enabled && !settingsButton("Auto tune").Enabled, "Clearing the game invalidates loaded settings and disables save and test");
                 settingsButton("Load Windows game executable").PerformClick();
                 PumpUntil(() => settingsControls.OfType<Label>().Any(l => l.Text == "ERROR"));
+                if (!settingsControls.OfType<Label>().Any(l => l.Text.Contains("Choose the generated game's")))
+                    Console.Error.WriteLine("Settings error diagnostics: " + String.Join(" | ",settingsControls.OfType<Label>().Select(l=>l.Text)));
                 Check(settingsControls.OfType<Label>().Any(l => l.Text.Contains("Choose the generated game's")), "An invalid executable gets a clear, visible settings error");
                 settingsForm.Size = settingsForm.MinimumSize; Application.DoEvents();
                 Check(settingsForm.ClientRectangle.Contains(settingsForm.PointToClient(settingsButton("Auto tune").PointToScreen(Point.Empty))) && settingsForm.ClientRectangle.Contains(settingsForm.PointToClient(settingsButton("Save settings").PointToScreen(Point.Empty))), "Settings actions stay visible at minimum size while controls scroll");
+                string passiveGame = Path.Combine(root, "background.exe"); File.Copy(args[0], passiveGame);
+                string passiveIni = "fps_limit=120\nlog=2\ncompute=0\n"; File.WriteAllText(Path.ChangeExtension(passiveGame,".ini"), passiveIni);
+                var binding = BindingFlags.Instance | BindingFlags.NonPublic;
+                typeof(GameSettingsWindow).GetField("loadedGame", binding).SetValue(settingsForm, passiveGame);
+                var passiveCaps = new RuntimeCapabilities(); passiveCaps.Keys.UnionWith(new[] { "log", "compute" });
+                typeof(GameSettingsWindow).GetField("capabilities", binding).SetValue(settingsForm, passiveCaps);
+                typeof(GameSettingsWindow).GetField("dirty", binding).SetValue(settingsForm, true);
+                var refreshHealth = typeof(GameSettingsWindow).GetMethod("RefreshHealthInBackground", binding);
+                var background = (Task)refreshHealth.Invoke(settingsForm, null);
+                Check(gameBox.Enabled && !gameBox.ReadOnly && fpsMode.Enabled && typeof(GameSettingsWindow).GetField("cancellation", binding).GetValue(settingsForm) == null,
+                    "Background check leaves inputs editable and does not reserve the foreground operation");
+                PumpUntil(() => background.IsCompleted); background.GetAwaiter().GetResult();
+                Check(File.ReadAllText(Path.ChangeExtension(passiveGame,".ini")) == passiveIni && fps.Value == 120 && (bool)typeof(GameSettingsWindow).GetField("dirty", binding).GetValue(settingsForm) && settingsControls.OfType<Label>().Any(l => l.Text == "ERROR"),
+                    "Background results preserve unsaved settings, repairable INI values and the foreground status");
+                var findings = settingsControls.OfType<TextBox>().Single(b => b.AccessibleName == "Detected problems");
+                int repaints = 0; findings.TextChanged += delegate { repaints++; };
+                background = (Task)refreshHealth.Invoke(settingsForm, null); PumpUntil(() => background.IsCompleted); background.GetAwaiter().GetResult();
+                Check(repaints == 0, "An unchanged background result does not rewrite the results box");
+                background = (Task)refreshHealth.Invoke(settingsForm, null);
                 settingsForm.Close();
+                PumpUntil(() => background.IsCompleted); background.GetAwaiter().GetResult();
+                Check(settingsForm.IsDisposed, "Closing the window during a background scan completes without updating disposed controls");
             }
             using (var downloadForm = new DownloadWindow())
             using (var server = new DownloadServer(File.ReadAllBytes(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"NativeTest","original-test.nro"))))

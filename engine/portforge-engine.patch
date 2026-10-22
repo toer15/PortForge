@@ -1,8 +1,187 @@
+diff --git a/src/nx/gpu/shader/shader.c b/src/nx/gpu/shader/shader.c
+index 43d443b..5866e24 100644
+--- a/src/nx/gpu/shader/shader.c
++++ b/src/nx/gpu/shader/shader.c
+@@ -14,7 +14,7 @@
+ #define SH_SCAN_WORDS 16384 /* the length scan never looks further */
+ #define CRS_DEPTH     16    /* static resolution gives up on a deeper stack */
+ 
+-int (*g_shader_cb_read)(u32 idx, u32 off, u32* out);
++_Thread_local int (*g_shader_cb_read)(u32 idx, u32 off, u32* out);
+ 
+ const u64* shader_words(const u8* code, u32 bytes, u64** copy) {
+     u32 i, n = bytes / 8;
+diff --git a/src/nx/gpu/shader/shader.h b/src/nx/gpu/shader/shader.h
+index 4e94d17..7cdb310 100644
+--- a/src/nx/gpu/shader/shader.h
++++ b/src/nx/gpu/shader/shader.h
+@@ -138,7 +138,8 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
+                              int can_preserve);
+ /* reads word off (bytes) of constant buffer idx for jump tables, into *out as a host number: 1 when it could. Set by
+    whoever translates, NULL offline */
+-extern int (*g_shader_cb_read)(u32 idx, u32 off, u32* out);
++/* per thread: PortForge Engine translates shaders on its worker threads, each with its own reader */
++extern _Thread_local int (*g_shader_cb_read)(u32 idx, u32 off, u32* out);
+ /* the targets of the BRX at word index from its jump table, at most max_targets, or -1 */
+ int shader_brx_targets(const u64* words, u32 index, u32 count, u32* targets, int max_targets);
+ /* the program's hash, and its length in bytes in out_len */
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..b568c61 100644
+index 33f94b6..edcf208 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
-@@ -850,6 +850,32 @@ static void pipe_queue(Pipe* e, int queue) {
+@@ -49,9 +49,9 @@ static int sh_cb_read(u32 idx, u32 off, u32* out) {
+     *out = gmem_r32(a + off);
+     return 1;
+ }
+-static VkCbReader g_rec_read;
+-static VkCbReads* g_rec;
+-static int g_rec_failed;
++static _Thread_local VkCbReader g_rec_read;
++static _Thread_local VkCbReads* g_rec;
++static _Thread_local int g_rec_failed;
+ static int rec_read(u32 idx, u32 off, u32* out) {
+     int ok = g_rec_read(idx, off, out);
+     VkCbReads* reads = g_rec;
+@@ -345,9 +345,38 @@ static u64 g_pipes_new, g_sh_new, g_sh_ns;
+ static u64 g_pipe_wait_ns; /* the GPU thread's and the recording thread's waits, added atomically */
+ static u64 g_pipe_make_ns; /* the workers' time making pipelines, added atomically */
+ static u64 g_pipe_hits;    /* pipelines the pipeline cache had */
+-VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
+-                    u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb) {
++/* PortForge Engine: translating a shader on a worker. The job owns a copy of the program and of the constant buffers the
++   translator can read (as they are when the draw asks), and is made into the shader's module when the GPU thread next
++   sees it done */
++typedef struct ShJob ShJob;
++typedef struct CbSnap {
++    u32 limit[18];
++    u8* data[18];
++} CbSnap;
++struct ShJob {
++    ShJob* next; /* first: the worker's queue takes it through this */
++    VkSh* s;
++    u8* code;
++    int stage;
++    CbSnap snap;
++    u32* spv;
++    size_t nw;
++    VkShaderModule mod;
++    int module_failed;
++    int queued;
++    int done; /* set last, with release order, by the worker */
++    u64 ns;
++};
++#define SH_JOB_LIMIT 16 /* bound snapshot memory, including jobs whose original draw never comes back */
++static ShJob* g_sh_jobs[SH_JOB_LIMIT]; /* GPU thread only; workers use their separate queue link */
++static void sh_reap(void);
++static int sh_job_start(VkSh* s, u8* code, int stage, const GpuChannel* ch, int bind);
++static void sh_poll(VkSh* s);
++static VkSh* sh_wait(VkSh* s);
++static VkSh* shader_get_impl(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
++                             u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb, int async) {
+     pf_merge();
++    sh_reap();
+     g_sh_ch = ch;
+     g_sh_bind = stage <= ST_FS ? stage : 0;
+     u32 mask[20] = {(u32)int_mask,
+@@ -389,6 +418,11 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+             ca->wseen = vk_ww_now();
+             ca->gw = gpu_mem_generation();
+         }
++        if (same && s->pending) {
++            sh_poll(s);
++            if (s->pending && !async) sh_wait(s);
++            if (s->pending) return s;
++        }
+         if (same && vk_cb_reads_hold(&s->cbr, sh_cb_read)) return s;
+     } else /* the way used longest ago */
+         ca = !set[0].s || (set[1].s && (i32)(set[0].epoch - set[1].epoch) <= 0) ? &set[0] : &set[1];
+@@ -439,8 +473,14 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+        earlier runs (pf_merge) are found only so */
+     for (VkSh* q = g_shh[h & 1023]; q && !s; q = q->next)
+         if (q->hash == h && q->stage == stage && !memcmp(q->mask, mask, sizeof mask) && q->clen == len &&
+-            q->qh == qh && q->clen_a == len_a && q->qh_a == qh_a && vk_cb_reads_hold(&q->cbr, sh_cb_read))
++            q->qh == qh && q->clen_a == len_a && q->qh_a == qh_a && (q->pending || vk_cb_reads_hold(&q->cbr, sh_cb_read)))
+             s = q;
++    if (s && s->pending) {
++        sh_poll(s);
++        if (s->pending && !async) sh_wait(s);
++        /* Translation used a snapshot. A matching code hash doesn't mean its constant-buffer answers still hold. */
++        if (!s->pending && !vk_cb_reads_hold(&s->cbr, sh_cb_read)) s = NULL;
++    }
+     if (!s) {
+         s = calloc(1, sizeof *s);
+         if (!s) {
+@@ -471,6 +511,9 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+             memcpy(s->si.gp_skip_mask, mask + 12, sizeof s->si.gp_skip_mask);
+             if (xfb) s->si.xfb = *xfb;
+         }
++        int started = async && !vk_corpus_dir() && sh_job_start(s, code, stage, ch, g_sh_bind);
++        if (started) code = NULL; /* the job has it */
++        if (!started) {
+         if (vk_corpus_dir()) shader_corpus_save(vk_corpus_dir(), code, mlen, 0x10000, stage, &s->si, h ^ mix);
+         u64 t0 = plat_ns();
+         size_t nw = 0;
+@@ -505,6 +548,7 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+         }
+         g_sh_new++;
+         g_sh_ns += plat_ns() - t0;
++        }
+         s->next = g_shh[h & 1023];
+         g_shh[h & 1023] = s;
+     }
+@@ -520,6 +564,22 @@ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int
+     return s;
+ }
+ 
++VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
++                    u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb) {
++    return shader_get_impl(ch, gva, gva_a, stage, int_mask, sint_mask, rt_int, rt_sint, clip, dc_color, dc_funcs, unfed, xfb, 0);
++}
++VkSh* vk_shader_get_async(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
++                          u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb) {
++    return shader_get_impl(ch, gva, gva_a, stage, int_mask, sint_mask, rt_int, rt_sint, clip, dc_color, dc_funcs, unfed, xfb,
++                           g_settings.async_shaders && g_settings.async_shader_translation);
++}
++int vk_shader_pending(VkSh* s) {
++    if (!s) return 0;
++    if (s->pending) sh_poll(s);
++    return s->pending;
++}
++VkSh* vk_shader_wait(VkSh* s) { return s && s->pending ? sh_wait(s) : s; }
++
+ VkShaderModule vk_module_spv(const u32* spv, size_t nw) {
+     VkShaderModuleCreateInfo mi = {
+         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
+@@ -791,13 +851,27 @@ static PCond g_pj_work, g_pj_done;
+ static Pipe *g_pj_head, *g_pj_tail; /* a draw's */
+ static Pipe *g_pw_head, *g_pw_tail; /* the file's */
+ static int g_pj_started, g_pj_threads;
++static ShJob *g_tj_head, *g_tj_tail; /* shaders to translate, before any pipeline (a pipeline needs its shaders) */
++static void sh_job_run(ShJob* j);
+ static void pipe_worker(void* arg) {
+     (void)arg;
+     for (;;) {
+         Pipe* e;
+         VkPipeline p;
+         pm_lock(&g_pj_lock);
+-        while (!g_pj_head && !g_pw_head) pc_wait(&g_pj_work, &g_pj_lock, -1);
++        while (!g_pj_head && !g_pw_head && !g_tj_head) pc_wait(&g_pj_work, &g_pj_lock, -1);
++        if (g_tj_head) {
++            ShJob* j = g_tj_head;
++            g_tj_head = j->next;
++            if (!g_tj_head) g_tj_tail = NULL;
++            j->queued = 0;
++            pm_unlock(&g_pj_lock);
++            sh_job_run(j);
++            pm_lock(&g_pj_lock);
++            pc_broadcast(&g_pj_done);
++            pm_unlock(&g_pj_lock);
++            continue;
++        }
+         if (g_pj_head) {
+             e = g_pj_head;
+             g_pj_head = e->job;
+@@ -850,6 +924,32 @@ static void pipe_queue(Pipe* e, int queue) {
      e->queued = queue;
      pc_signal(&g_pj_work);
  }
@@ -35,7 +214,7 @@ index 33f94b6..b568c61 100644
  /* a pipeline of the file that a draw asks for before a worker took it goes to the draws' queue: 1 when it did */
  static int pipe_promote(Pipe* e) {
      int moved = 0;
-@@ -862,7 +888,7 @@ static int pipe_promote(Pipe* e) {
+@@ -862,7 +962,7 @@ static int pipe_promote(Pipe* e) {
          else
              g_pw_head = e->job;
          if (g_pw_tail == e) g_pw_tail = before;
@@ -44,7 +223,170 @@ index 33f94b6..b568c61 100644
          moved = 1;
      }
      pm_unlock(&g_pj_lock);
-@@ -885,6 +911,9 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+@@ -880,11 +980,172 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+     pm_unlock(&g_pj_lock);
+     return __atomic_load_n(&e->ready, __ATOMIC_ACQUIRE) ? e->p : VK_NULL_HANDLE;
+ }
++/* ------------------------------------------------------------ async shader translation (PortForge Engine) */
++static _Thread_local const CbSnap* tl_snap;
++/* sh_cb_read's answers from the copy: the same words, and the same refusals */
++static int snap_cb_read(u32 idx, u32 off, u32* out) {
++    if (idx >= 18 || !tl_snap) return 0;
++    u32 limit = tl_snap->limit[idx];
++    if (!tl_snap->data[idx] || limit < 4 || off > limit - 4) return 0;
++    *out = snx_ld_le32(tl_snap->data[idx] + off);
++    return 1;
++}
++#define SNAP_MAX (256u << 10)
++static void snap_free(CbSnap* c) {
++    for (int i = 0; i < 18; i++) free(c->data[i]);
++}
++/* on the GPU thread: the constant buffers the translator could read, as the draw has them. 0 when one is too big to copy
++   (the translation is then made here, as before) */
++static int snap_take(CbSnap* c, const GpuChannel* ch, int bind) {
++    memset(c, 0, sizeof *c);
++    for (int i = 0; i < 18; i++) {
++        u64 a = ch->cbind[bind][i];
++        u32 sz = ch->cbind_size[bind][i], limit = sz ? sz : 65536;
++        if (!a || limit < 4) continue;
++        if (limit > SNAP_MAX) { snap_free(c); return 0; }
++        c->data[i] = malloc(limit);
++        if (!c->data[i]) { snap_free(c); return 0; }
++        gmem_read(a, c->data[i], limit);
++        c->limit[i] = limit;
++    }
++    return 1;
++}
++/* on a worker */
++static void sh_job_run(ShJob* j) {
++    VkSh* s = j->s;
++    u64 t0 = plat_ns();
++    size_t nw = 0;
++    tl_snap = &j->snap;
++    u32* spv = vk_translate_spirv(j->code, 0x10000, j->stage, &s->si, &nw, snap_cb_read, &s->cbr);
++    tl_snap = NULL;
++    if (spv && s->si.nimg) {
++        u32 image_slots = g_vk.props.limits.maxPerStageDescriptorStorageImages;
++        if (image_slots > g_vk.props.limits.maxDescriptorSetStorageImages)
++            image_slots = g_vk.props.limits.maxDescriptorSetStorageImages;
++        int needs_unformatted = 0;
++        for (int i = 0; i < s->si.nimg; i++) needs_unformatted |= s->si.img[i].kind == 0;
++        if (j->stage != ST_FS || (u32)s->si.nimg > image_slots ||
++            (needs_unformatted && !g_vk.feat.shaderStorageImageWriteWithoutFormat)) {
++            free(spv);
++            spv = NULL;
++            snprintf(s->si.first_unsupported, sizeof s->si.first_unsupported,
++                     "fragment storage image feature or descriptor limit");
++        }
++    }
++    if (spv) {
++        VkShaderModuleCreateInfo mi = {
++            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
++        if (!VK_OK(vkCreateShaderModule(g_vk.dev, &mi, NULL, &j->mod))) j->module_failed = 1;
++    }
++    j->spv = spv;
++    j->nw = nw;
++    j->ns = plat_ns() - t0;
++    __atomic_store_n(&j->done, 1, __ATOMIC_RELEASE);
++}
++/* on the GPU thread: s made into a shader as the translation in place would have made it */
++static void sh_finalize(VkSh* s) {
++    ShJob* j = s->job;
++    for (int i = 0; i < s->si.ntex; i++) s->indexed |= (s->si.tex[i].flags & SNX_TEX_INDEXED) != 0;
++    if (j->spv) {
++        s->mod = j->mod;
++        if (j->module_failed)
++            s->failed = 1;
++        else
++            pf_shader_record(s, j->spv, j->nw);
++        free(j->spv);
++    } else {
++        s->failed = 1;
++        WARN("vulkan: shader %016llx (stage %d) not translated: %s\n", (unsigned long long)s->hash, s->stage,
++             s->si.first_unsupported[0] ? s->si.first_unsupported : "unsupported feature or float controls");
++    }
++    g_sh_new++;
++    snap_free(&j->snap);
++    free(j->code);
++    for (int i = 0; i < SH_JOB_LIMIT; i++)
++        if (g_sh_jobs[i] == j) { g_sh_jobs[i] = NULL; break; }
++    s->job = NULL;
++    free(j);
++    __atomic_store_n(&s->pending, 0, __ATOMIC_RELEASE);
++}
++static void sh_poll(VkSh* s) {
++    if (s->pending && __atomic_load_n(&s->job->done, __ATOMIC_ACQUIRE)) sh_finalize(s);
++}
++static void sh_reap(void) {
++    static u32 last_epoch = ~0u;
++    if (last_epoch == g_vk_epoch) return;
++    last_epoch = g_vk_epoch;
++    for (int i = 0; i < SH_JOB_LIMIT; i++)
++        if (g_sh_jobs[i]) sh_poll(g_sh_jobs[i]->s);
++}
++/* the job to the front of the queue, as a draw is now waiting for it */
++static void sh_expedite(ShJob* j) {
++    pm_lock(&g_pj_lock);
++    if (j->queued && g_tj_head != j) {
++        ShJob *q, *before = NULL;
++        for (q = g_tj_head; q && q != j; q = q->next) before = q;
++        if (q) {
++            before->next = j->next;
++            if (g_tj_tail == j) g_tj_tail = before;
++            j->next = g_tj_head;
++            g_tj_head = j;
++        }
++    }
++    pm_unlock(&g_pj_lock);
++}
++static VkSh* sh_wait(VkSh* s) {
++    ShJob* j = s->job;
++    u64 t0 = plat_ns();
++    sh_expedite(j);
++    pm_lock(&g_pj_lock);
++    while (!__atomic_load_n(&j->done, __ATOMIC_ACQUIRE)) pc_wait(&g_pj_done, &g_pj_lock, -1);
++    pm_unlock(&g_pj_lock);
++    g_sh_ns += plat_ns() - t0;
++    sh_finalize(s);
++    return s;
++}
++/* s to be translated from code (which the job takes over): 1 when a worker has it, 0 when the caller must translate */
++static int sh_job_start(VkSh* s, u8* code, int stage, const GpuChannel* ch, int bind) {
++    int slot;
++    for (slot = 0; slot < SH_JOB_LIMIT && g_sh_jobs[slot]; slot++) { }
++    if (slot == SH_JOB_LIMIT) return 0; /* ordinary synchronous path when the bounded queue is full */
++    ShJob* j = calloc(1, sizeof *j);
++    if (!j) return 0;
++    if (!snap_take(&j->snap, ch, bind)) {
++        free(j);
++        return 0;
++    }
++    j->s = s;
++    j->code = code;
++    j->stage = stage;
++    pm_lock(&g_pj_lock);
++    if (!pipe_workers()) {
++        pm_unlock(&g_pj_lock);
++        snap_free(&j->snap);
++        free(j);
++        return 0;
++    }
++    if (g_tj_tail)
++        g_tj_tail->next = j;
++    else
++        g_tj_head = j;
++    g_tj_tail = j;
++    j->queued = 1;
++    s->job = j;
++    s->pending = 1;
++    g_sh_jobs[slot] = j;
++    pc_signal(&g_pj_work);
++    pm_unlock(&g_pj_lock);
++    return 1;
++}
++
+ /* Stand-ins for pipelines still being made, which the GPU thread hands the recording thread in their place
+    (vk_pipeline_get_deferred): PIPE_STANDIN in the top bits, which no handle has (record.c's REC_STANDIN tells the same
     of descriptor sets), and the pipeline's index in this table, pages the GPU thread adds before a stand-in naming
     them goes through the ring. Pipelines live as long as the run, so a stand-in does too */
  #define PIPE_STANDIN   0x5EC6000000000000ull
@@ -54,7 +396,7 @@ index 33f94b6..b568c61 100644
  #define PSTAND_PAGE    1024
  static Pipe** g_pstand[1024];
  static u32 g_npstand;
-@@ -964,7 +993,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -964,7 +1225,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
          pf_pipe_record(&p->k);
          pm_lock(&g_pj_lock);
          if (pipe_workers()) {
@@ -63,7 +405,7 @@ index 33f94b6..b568c61 100644
              queued = 1;
          }
          pm_unlock(&g_pj_lock);
-@@ -981,17 +1010,42 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -981,17 +1242,42 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
  }
  /* on the recording thread: the pipeline a handle from vk_pipeline_get_deferred names, waited for while a worker makes
     it. VK_NULL_HANDLE when it couldn't be made */
@@ -109,6 +451,21 @@ index 33f94b6..b568c61 100644
  void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms) {
      *pipes = g_pipes_new;
      *hits = __atomic_load_n(&g_pipe_hits, __ATOMIC_RELAXED);
+diff --git a/src/nx/gpu/vk/query.c b/src/nx/gpu/vk/query.c
+index 2b46a4c..7648ada 100644
+--- a/src/nx/gpu/vk/query.c
++++ b/src/nx/gpu/vk/query.c
+@@ -131,6 +131,10 @@ static u32 msaa_samples(u32 mode) {
+     return n[mode & 15];
+ }
+ 
++int vk_query_counting(u32 chan) {
++    QCounter* c = counter(chan, 0);
++    return c && c->started && !c->disabled && !c->bad;
++}
+ void vk_query_draw(VkCommandBuffer cb, u32 chan, u32 msaa_mode) {
+     QCounter* c = counter(chan, 0);
+     u32 mul = msaa_samples(msaa_mode);
 diff --git a/src/nx/gpu/vk/record.c b/src/nx/gpu/vk/record.c
 index b3b0e2c..696ea88 100644
 --- a/src/nx/gpu/vk/record.c
@@ -123,16 +480,118 @@ index b3b0e2c..696ea88 100644
  }
  typedef struct {
 diff --git a/src/nx/gpu/vk/render.c b/src/nx/gpu/vk/render.c
-index b8247c0..331a5f8 100644
+index b8247c0..f1fb7dc 100644
 --- a/src/nx/gpu/vk/render.c
 +++ b/src/nx/gpu/vk/render.c
-@@ -2303,6 +2303,15 @@ retry:
+@@ -822,6 +822,45 @@ u32 vk_gbuf_desc(int stage, u32 off, const u32* v, u64* addr) {
+     return (size + 3) & ~3u;
+ }
+ 
++/* PortForge Engine's async shader translation: a shader the game needs for the first time is translated on a worker. A draw
++   into images the game redraws every present (its 3D world) is dropped for this frame and comes back when the shader is
++   done; any other draw (a menu, a loading screen, an image drawn once) waits for it, and asks again, so that what it
++   gets is checked against the constant buffers as they are then */
++static int g_shader_dropped;
++static u64 g_shader_async_skips;
++u64 vk_shader_async_skips(void) { return g_shader_async_skips; }
++void vk_shader_async_skipped(void) { g_shader_async_skips++; }
++static int targets_redrawn(GpuChannel* ch) {
++    /* Captured vertices and query counts can be consumed by the game, even when the picture is redrawn. */
++    if (ch->r3d[0x1D1] || vk_query_counting(ch->id)) return 0;
++    Surf* rt[8];
++    Surf* zt;
++    u32 n;
++    read_targets(ch, rt, &zt, &n);
++    int redrawn = n || zt;
++    for (u32 i = 0; i < n && redrawn; i++)
++        if (rt[i] && !vk_rt_redrawn(rt[i])) redrawn = 0;
++    if (redrawn && zt && !vk_rt_redrawn(zt)) redrawn = 0;
++    return redrawn;
++}
++static VkSh* sh_get(GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int, u32 rt_sint,
++                    u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb) {
++    VkSh* s = vk_shader_get_async(ch, gva, gva_a, stage, int_mask, sint_mask, rt_int, rt_sint, clip, dc_color, dc_funcs,
++                                  unfed, xfb);
++    for (int tries = 0; vk_shader_pending(s); tries++) {
++        if (targets_redrawn(ch)) {
++            g_shader_dropped = 1;
++            return NULL;
++        }
++        vk_shader_wait(s);
++        s = tries < 2 ? vk_shader_get_async(ch, gva, gva_a, stage, int_mask, sint_mask, rt_int, rt_sint, clip, dc_color,
++                                            dc_funcs, unfed, xfb)
++                      : vk_shader_get(ch, gva, gva_a, stage, int_mask, sint_mask, rt_int, rt_sint, clip, dc_color,
++                                      dc_funcs, unfed, xfb);
++    }
++    return s;
++}
++
+ /* the fragment shader keyed on which of its textures and outputs are integer. The textures it resolves for that are
+    kept in res (SH_MAXTEX entries), for stage_set */
+ /* last_out: the generic outputs the stage before rasterization writes */
+@@ -839,7 +878,7 @@ static VkSh* fs_get_keyed(GpuChannel* ch, u64 addr, TexRes* res, u32 last_out) {
+             if (f.sint) rs |= 1u << i;
+         }
+     }
+-    VkSh* s0 = vk_shader_get(ch, addr, 0, ST_FS, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
++    VkSh* s0 = sh_get(ch, addr, 0, ST_FS, 0, 0, 0, 0, 0, 0, 0, 0, NULL);
+     u32 unfed;
+     if (!s0) return s0;
+     unfed = s0->si.in_mask & ~last_out;
+@@ -878,7 +917,7 @@ static VkSh* fs_get_keyed(GpuChannel* ch, u64 addr, TexRes* res, u32 last_out) {
+         if (vk_image_key(&s0->si, i, tic)) rm |= 1u << (8 + i);
+     }
+     if (!tm && !rm && !dm && !unfed) return s0;
+-    return vk_shader_get(ch, addr, 0, ST_FS, tm, ts, rm, rs, 0, dm, df, unfed, NULL);
++    return sh_get(ch, addr, 0, ST_FS, tm, ts, rm, rs, 0, dm, df, unfed, NULL);
+ }
+ 
+ VkImageViewType vk_tex_view_type(const ShTex* st) {
+@@ -1807,15 +1846,20 @@ retry:
+         }
+     }
+     VkSh* vs =
+-        vk_shader_get(ch, code + r[0x811], (r[0x800] & 1) ? code + r[0x801] : 0, ST_VS, attr_int, attr_sint, 0, 0,
++        sh_get(ch, code + r[0x811], (r[0x800] & 1) ? code + r[0x801] : 0, ST_VS, attr_int, attr_sint, 0, 0,
+                       tes_on || gs_on ? SNX_SH_NOT_LAST : clip, 0, 0, 0, xfb_on && !tes_on && !gs_on ? &xfb : NULL);
+-    tcs = tcs_on ? vk_shader_get(ch, code + r[0x821], 0, ST_TCS, 0, 0, 0, 0, SNX_SH_NOT_LAST, 0, 0, 0, NULL) : NULL;
+-    tes = tes_on ? vk_shader_get(ch, code + r[0x831], 0, ST_TES, 0, 0, r[0xC8] & 0x333, 0,
++    tcs = tcs_on ? sh_get(ch, code + r[0x821], 0, ST_TCS, 0, 0, 0, 0, SNX_SH_NOT_LAST, 0, 0, 0, NULL) : NULL;
++    tes = tes_on ? sh_get(ch, code + r[0x831], 0, ST_TES, 0, 0, r[0xC8] & 0x333, 0,
+                                  gs_on ? SNX_SH_NOT_LAST : clip, 0, 0, 0, xfb_on && !gs_on ? &xfb : NULL)
+                  : NULL;
+-    gs = gs_on ? vk_shader_get(ch, code + r[0x841], 0, ST_GS, 0, 0, gs_input_vertices(topology, tes_on, r[0xC8]), 0,
++    gs = gs_on ? sh_get(ch, code + r[0x841], 0, ST_GS, 0, 0, gs_input_vertices(topology, tes_on, r[0xC8]), 0,
+                                clip, 0, 0, 0, xfb_on ? &xfb : NULL)
+                : NULL;
++    if (g_shader_dropped) { /* async shader translation: back next frame, when the shader is done */
++        g_shader_dropped = 0;
++        vk_shader_async_skipped();
++        return;
++    }
+     if ((tcs_on && (!tcs || tcs->failed)) || (tes_on && (!tes || tes->failed)) || (gs_on && (!gs || gs->failed))) {
+         g_vk_skipped++;
+         return;
+@@ -1825,6 +1869,11 @@ retry:
+     TexRes fres[SH_MAXTEX];
+     VkSh* last = gs ? gs : tes ? tes : vs;
+     VkSh* fs = (r[0x850] & 1) ? fs_get_keyed(ch, code + r[0x851], fres, last ? last->si.out_mask : ~0u) : NULL;
++    if (g_shader_dropped) {
++        g_shader_dropped = 0;
++        vk_shader_async_skipped();
++        return;
++    }
+     if (!vs || vs->failed || (fs && fs->failed)) {
+         g_vk_skipped++;
+         return;
+@@ -2303,6 +2352,16 @@ retry:
          memset(&g_dyn, 0, sizeof g_dyn);
          g_dyn.cb = vk_cb_begun();
      }
 +    /* PortForge Engine's async shaders: a pipeline still being made doesn't stop the frame when every image the draw
 +       writes is one the game redraws each present; the bind waits briefly, then its draws are dropped this frame */
-+    if (g_settings.async_shaders && vk_pipeline_pending(pipe)) {
++    if (g_settings.async_shaders && !xfb_on && !vk_query_counting(ch->id) && !vs->si.gbuf_wmask && !vs->si.nimg &&
++        (!fs || (!fs->si.gbuf_wmask && !fs->si.nimg)) && vk_pipeline_pending(pipe)) {
 +        int redrawn = n || zt;
 +        for (u32 i = 0; i < n && redrawn; i++)
 +            if (rt[i] && !vk_rt_redrawn(rt[i])) redrawn = 0;
@@ -143,7 +602,7 @@ index b8247c0..331a5f8 100644
          g_dyn.pipe = pipe;
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..25b873c 100644
+index f3ac2e2..b628a58 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -15,6 +15,7 @@
@@ -188,7 +647,7 @@ index f3ac2e2..25b873c 100644
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -467,6 +472,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +472,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -196,6 +655,9 @@ index f3ac2e2..25b873c 100644
 +                    LOG("vulkan: %llu binds dropped their draws for a frame while their pipelines were made (async "
 +                        "shaders)\n",
 +                        (unsigned long long)vk_pipeline_async_skips());
++                if (vk_shader_async_skips())
++                    LOG("vulkan: %llu draws dropped for a frame while their shaders were translated (async shaders)\n",
++                        (unsigned long long)vk_shader_async_skips());
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
@@ -289,7 +751,7 @@ index 6096f99..ed57f58 100644
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..1653fbc 100644
+index db13c2d..252ca6b 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -367,6 +367,7 @@ typedef struct Surf {
@@ -300,7 +762,40 @@ index db13c2d..1653fbc 100644
      int in_drawn;   /* in surface.c's list of drawn targets, entered at drawn_from */
      u64 drawn_from;
      u64 draw_gw;    /* guest-memory generation at the first draw this present or since a full replacement */
-@@ -846,12 +847,21 @@ int vk_pipeline_worker_count(int setting, int cpus);
+@@ -708,6 +709,7 @@ void vk_release_drain(void);
+    a game's draw in a rendering pass, vk_query_pass_end before the pass ends or a draw of the renderer's own in it
+    (render.c), vk_query_flush outside a pass before a submit (cmd.c) */
+ void vk_query_draw(VkCommandBuffer cb, u32 chan, u32 msaa_mode); /* msaa_mode: 3D 0x574 */
++int vk_query_counting(u32 chan); /* this draw contributes a query result the game can consume */
+ void vk_query_pass_end(VkCommandBuffer cb);
+ void vk_query_flush(VkCommandBuffer cb);
+ void vk_query_reset(u32 chan);
+@@ -780,6 +782,8 @@ typedef struct VkSh {
+     int failed;
+     u32 clen, clen_a;
+     u64 qh, qh_a;
++    int pending;         /* being translated on a worker (PortForge Engine): only the key fields above are valid until it is done */
++    struct ShJob* job;   /* the translation, while pending */
+     struct VkSh* next;
+ } VkSh;
+ /* the pipeline layout whose sets have no texture array bindings: compute's, and the one push constants go through
+@@ -810,6 +814,15 @@ void vk_pipeline_init(void);
+    rasterization's outputs (ShaderInfo.xfb), NULL for none */
+ VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
+                     u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb);
++/* the same, but with async shaders and async_translation on, a shader not made yet is translated on a worker and
++   comes back pending: vk_shader_pending says so, vk_shader_wait waits for it. Ask again after it is done: the
++   answer is checked against the constant buffers as they are then */
++VkSh* vk_shader_get_async(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
++                          u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb);
++int vk_shader_pending(VkSh* s);
++VkSh* vk_shader_wait(VkSh* s);
++u64 vk_shader_async_skips(void); /* draws dropped for a frame while their shaders were translated */
++void vk_shader_async_skipped(void);
+ typedef struct {
+     VkShaderModule vs, fs;
+     VkShaderModule tcs, tes, gs; /* tessellation control and evaluation, geometry: VK_NULL_HANDLE when off */
+@@ -846,12 +859,21 @@ int vk_pipeline_worker_count(int setting, int cpus);
  /* a draw's pipeline: the pipeline, or a stand-in the recording thread waits for at its bind (vk_pipeline_resolve, the
     pipeline a stand-in names, or h itself) */
  VkPipeline vk_pipeline_get_deferred(const PipeKey* k);
@@ -383,10 +878,10 @@ index 2f956fa..23ac531 100644
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..9468bf5 100644
+index be57ac5..0a9bcd7 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -190,6 +190,15 @@ setting Pipeline threads
+@@ -190,6 +190,24 @@ setting Pipeline threads
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
      help threads, two to six; 1 to 32 = that many. More make a first run's new pipelines sooner, with less CPU left
      help for the game
@@ -399,6 +894,15 @@ index be57ac5..9468bf5 100644
 +    help draws into images the game has drawn to in each of the last presents (its 3D world, redrawn every frame), so
 +    help a missing object comes back a frame later instead of the game stopping. Draws into anything else (menus,
 +    help loading screens, images drawn once) still wait. 0 = every draw waits for its pipeline
++setting Async shader translation
++    key async_translation
++    int 0 1
++    default 0
++    words Off|On
++    help Experimental PortForge Engine option, with Async shaders on. 1 = a shader the game needs for the first time is translated on the
++    help worker threads while the frame goes on, and a draw that needs it is skipped for a frame when it draws into
++    help images the game redraws every present (its 3D world). Everything else (menus, loading screens, images drawn
++    help once) waits for the translation as before. 0 = the frame waits for every translation
  setting JIT threads
      key jit_threads
      int 0 8

@@ -11,6 +11,7 @@ namespace PortForge
 {
     public sealed class DownloadWindow : Form
     {
+        protected override CreateParams CreateParams { get { return SmoothPaint.Composited(base.CreateParams); } }
         private static readonly Color Bg = Color.FromArgb(17,21,30), Surface = Color.FromArgb(28,34,46), Mint = Color.FromArgb(105,226,183), Muted = Color.FromArgb(173,185,203);
         private readonly TextBox url = Box("Direct download link"), destination = Box("Download save path"), checksum = Box("Expected SHA-256"), log = Box("Download details");
         private readonly CheckBox parallel = new CheckBox { Text = "Use several connections when they help (automatic)", Checked = true, AutoSize = true }, unpack = new CheckBox { Text = "Unpack ZIP files automatically", Checked = true, AutoSize = true }, convertAfter = new CheckBox { Text = "Start conversion when the game is ready", Checked = true, AutoSize = true };
@@ -20,6 +21,7 @@ namespace PortForge
         private readonly ListBox games = new ListBox { AccessibleName = "Downloaded game files", Dock = DockStyle.Fill, HorizontalScrollbar = true, BackColor = Surface, ForeColor = Color.WhiteSmoke };
         private readonly TableLayoutPanel fields = Stack();
         private CancellationTokenSource cancellation;
+        private UiLock fieldLock;
         private string completedPath;
         public string SelectedInput { get; private set; }
         public bool ConvertWhenReady { get { return convertAfter.Checked; } }
@@ -89,7 +91,7 @@ namespace PortForge
             var request = new DownloadRequest { Url = url.Text.Trim(), Destination = destination.Text.Trim(), Sha256 = checksum.Text.Trim(), Connections = parallel.Checked ? 0 : 1 };
             try { GameDownloads.Validate(request); } catch (Exception e) { Error(e); return; }
             cancellation = new CancellationTokenSource(); var token = cancellation.Token;
-            fields.Enabled = start.Enabled = use.Enabled = folder.Enabled = false; pause.Enabled = true;
+            fieldLock = UiLock.Lock(fields); start.Enabled = use.Enabled = folder.Enabled = false; pause.Enabled = true;
             games.Items.Clear(); log.Clear(); completedPath = null; bar.Style = ProgressBarStyle.Marquee; bar.Value = 0;
             SetStatus("WORKING","Preparing download","Checking the source and any previous download parts.",Muted);
             string lastMessage = null;
@@ -123,7 +125,7 @@ namespace PortForge
             catch (Exception e) { Error(e); log.AppendText(e.Message + Environment.NewLine); }
             finally
             {
-                cancellation.Dispose(); cancellation = null; fields.Enabled = start.Enabled = true; pause.Enabled = false;
+                cancellation.Dispose(); cancellation = null; if (fieldLock != null) { fieldLock.Unlock(); fieldLock = null; } start.Enabled = true; pause.Enabled = false;
                 use.Enabled = games.SelectedItem != null; folder.Enabled = File.Exists(completedPath); bar.Style = ProgressBarStyle.Continuous;
             }
             if (automaticallyUse) ChooseGame();
@@ -164,6 +166,6 @@ namespace PortForge
         private static TextBox Box(string name) { return new TextBox { AccessibleName = name, Dock = DockStyle.Fill, BackColor = Surface, ForeColor = Color.WhiteSmoke, BorderStyle = BorderStyle.FixedSingle }; }
         private static TableLayoutPanel Stack() { return new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Margin = new Padding(0) }; }
         private static Label Caption(string text,float size,Color color) { return new Label { Text = text, AutoSize = true, ForeColor = color, Font = new Font("Segoe UI",size), Margin = new Padding(0,0,0,4) }; }
-        private static Button Button(string text,bool primary) { var b = new Button { Text = text, AccessibleName = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Cursor = Cursors.Hand }; b.FlatAppearance.BorderSize = 0; return b; }
+        private static Button Button(string text,bool primary) { var b = new ReadableButton { Text = text, AccessibleName = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Mint : Surface, ForeColor = primary ? Bg : Color.WhiteSmoke, Cursor = Cursors.Hand }; b.FlatAppearance.BorderSize = 0; return b; }
     }
 }

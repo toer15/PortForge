@@ -10,6 +10,7 @@ namespace PortForge
 {
     public sealed class UpdateWindow : Form
     {
+        protected override CreateParams CreateParams { get { return SmoothPaint.Composited(base.CreateParams); } }
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183),
             Muted = Color.FromArgb(173, 185, 203), Red = Color.FromArgb(255, 157, 148), Blue = Color.FromArgb(140, 187, 255);
         private readonly Label badge = Label("CHECKING", 9, Mint), title = Label("Checking for updates", 18, Color.White), message = Label("", 10, Muted), version = Label("", 10, Muted);
@@ -59,7 +60,7 @@ namespace PortForge
         private static Label Label(string text, float size, Color color) { return new Label { Text = text, AutoSize = true, ForeColor = color, Font = new Font("Segoe UI", size), Margin = new Padding(0, 2, 0, 6) }; }
         private static Button Action(string text, bool primary)
         {
-            return new Button { Text = text, AccessibleName = text, Size = new Size(150, 34), FlatStyle = FlatStyle.Flat, ForeColor = primary ? Color.Black : Color.White, BackColor = primary ? Mint : Color.FromArgb(48, 58, 76), UseVisualStyleBackColor = false, Margin = new Padding(0, 0, 8, 0) };
+            return new ReadableButton { Text = text, AccessibleName = text, Size = new Size(150, 34), FlatStyle = FlatStyle.Flat, ForeColor = primary ? Color.Black : Color.White, BackColor = primary ? Mint : Color.FromArgb(48, 58, 76), UseVisualStyleBackColor = false, Margin = new Padding(0, 0, 8, 0) };
         }
         private void Status(string kind, string heading, string text, Color color)
         {

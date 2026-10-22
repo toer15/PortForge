@@ -198,7 +198,8 @@ namespace PortForge
             if (Interlocked.Exchange(ref busy, 1) == 1) return;
             try
             {
-                foreach (var game in games.Values.ToArray())
+                Game[] snapshot; lock (sync) snapshot = games.Values.ToArray();
+                foreach (var game in snapshot)
                 {
                     if (stop.IsCancellationRequested) return;
                     bool running = GameDiagnostics.Running(game.Exe);
@@ -321,7 +322,7 @@ namespace PortForge
             if (package == null || EngineManager.IsInstalled(exe, package) || EngineManager.Declined(exe) != null) return;
             try
             {
-                Report(new DoctorEvent { Game = name, Kind = "engine", Title = "Installing the PortForge Engine", Text = "It removes shader stutter. The original engine is kept, and PortForge checks the game still starts." });
+                Report(new DoctorEvent { Game = name, Kind = "engine", Title = "Installing the PortForge Engine", Text = "It reduces supported shader stalls. The original engine is kept, and PortForge checks the game still starts." });
                 string done = EngineManager.Install(exe, package, null, stop.Token);
                 Report(new DoctorEvent { Game = name, Kind = "fixed", Title = "PortForge Engine installed", Fixed = true, Important = true, Text = done });
             }

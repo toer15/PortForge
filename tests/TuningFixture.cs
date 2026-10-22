@@ -6,12 +6,15 @@ internal static class TuningFixture
 {
     private static void Main(string[] args)
     {
+        Console.OutputEncoding = new System.Text.UTF8Encoding(false);
         if (Array.IndexOf(args, "--settings") >= 0)
         {
             foreach (string key in new[] {"fps_limit", "resolution", "anisotropy", "shadows", "vsync", "docked", "fullscreen", "log", "compute", "vk_validation", "profile", "nvn_trace", "vk_gpu_profile", "mme_verify", "diag"})
                 Console.WriteLine("Test\t" + key + "\t0\tint\t0\t1000\thelp\tlabel\t");
             return;
         }
+        string explicitGame = Array.Find(args, a => a.StartsWith("--game="));
+        if (explicitGame != null) Console.WriteLine("game_argument=" + explicitGame.Substring(7));
         string path = Path.ChangeExtension(System.Reflection.Assembly.GetExecutingAssembly().Location, ".ini");
         File.WriteAllText(path, "runtime wrote this while testing");
         File.WriteAllText(path + ".started", "started");
