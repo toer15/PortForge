@@ -100,7 +100,7 @@ internal static class DownloadTests
                 var invalid=request("/game.nro","invalid.nro",1); invalid.Url="file:///C:/bad"; Reject(()=>GameDownloads.Validate(invalid),"Non-HTTP links are rejected");
                 invalid=request("/game.nro","invalid.nro",1); invalid.Sha256="bad"; Reject(()=>GameDownloads.Validate(invalid),"Invalid source checksums are rejected before downloading");
                 invalid=request("/game.nro","invalid.exe",1); Reject(()=>GameDownloads.Validate(invalid),"The downloader accepts game files and ZIPs rather than executing installers");
-                var p=request("/game.nro","parallel.nro",4); p.Sha256=expected;
+                var p=request("/game.nro","parallel.nro",8); p.Sha256=expected;
                 var result=GameDownloads.Download(p,new Updates(),CancellationToken.None);
                 Check(File.ReadAllBytes(result.File).SequenceEqual(server.Data) && result.Sha256==expected,"Parallel ranges assemble into the exact source file and verify SHA-256");
                 Check(server.MaxActive>=2,"A range-capable server receives concurrent download connections");

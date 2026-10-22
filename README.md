@@ -9,7 +9,7 @@ PortForge is a Windows app (.NET Framework 4.8, no install needed) built around 
 ## Features
 
 - **Simple conversion screen** – game file, game name, save folder. Clear buttons beside every input, and a status card for progress, done, errors and cancelled.
-- **Downloads** – paste a direct link: up to 4 connections, retries, pause/resume, checksum checks, ZIP unpacking, hand-off to conversion.
+- **Downloads** – paste a direct link: up to 8 connections, retries, pause/resume, checksum checks, ZIP unpacking, hand-off to conversion.
 - **Graphics and FPS** – per-game FPS limit (10–1,000 or unlimited), render scale, texture filtering, shadows, VSync, plus an automatic benchmark tuner (local measurements, no AI model).
 - **Automatic fixes** – reads a game's log, reports known problems, applies supported repairs with backups and undo, and can ask a locally installed Codex for an AI diagnosis. Engine-level glitches are reported, not fixed.
 - **AI Doctor** – watches converted games while they run, explains every slowdown live (shader stutter, loading freezes, or other programs using the CPU), and when the game closes applies the supported repairs and asks Codex AI about new problems. It never changes a running game, and saves and settings are backed up first.

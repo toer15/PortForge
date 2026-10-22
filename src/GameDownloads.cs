@@ -18,7 +18,7 @@ namespace PortForge
     public sealed class DownloadRequest
     {
         public string Url, Destination, Sha256;
-        public int Connections = 4;
+        public int Connections = 8;
     }
     public sealed class DownloadProgress
     {
@@ -44,7 +44,7 @@ namespace PortForge
             if (String.IsNullOrWhiteSpace(r.Destination) || !Path.IsPathRooted(r.Destination)) throw new ArgumentException("Choose an absolute Save as path.");
             string ext = Path.GetExtension(r.Destination).ToLowerInvariant();
             if (!new[] {".nro", ".nsp", ".xci", ".dnsp", ".dxci", ".zip"}.Contains(ext)) throw new ArgumentException("Save as an .nro, .nsp, .xci or .zip file. Unpack RAR/7z archives first.");
-            if (r.Connections < 1 || r.Connections > 4) throw new ArgumentException("Choose between one and four download connections.");
+            if (r.Connections < 1 || r.Connections > 16) throw new ArgumentException("Choose between one and sixteen download connections.");
             if (!String.IsNullOrWhiteSpace(r.Sha256) && !Regex.IsMatch(r.Sha256.Trim(), "^[0-9a-fA-F]{64}$")) throw new ArgumentException("The optional SHA-256 must contain exactly 64 hexadecimal characters.");
             Paths.CheckLinks(r.Destination);
             return uri;
@@ -66,7 +66,7 @@ namespace PortForge
             var req = (HttpWebRequest)WebRequest.Create(uri);
             req.UserAgent = "PortForge/0.6"; req.Timeout = 30000; req.ReadWriteTimeout = 30000;
             req.AllowAutoRedirect = true; req.MaximumAutomaticRedirections = 5; req.AutomaticDecompression = DecompressionMethods.None;
-            req.Headers[HttpRequestHeader.AcceptEncoding] = "identity"; req.ServicePoint.ConnectionLimit = Math.Max(req.ServicePoint.ConnectionLimit, 4);
+            req.Headers[HttpRequestHeader.AcceptEncoding] = "identity"; req.ServicePoint.ConnectionLimit = Math.Max(req.ServicePoint.ConnectionLimit, 16); req.ServicePoint.UseNagleAlgorithm = false; req.ServicePoint.Expect100Continue = false;
             if (start.HasValue) { if (end.HasValue) req.AddRange(start.Value, end.Value); else req.AddRange(start.Value); }
             if (!String.IsNullOrEmpty(etag) && start.HasValue) req.Headers["If-Range"] = etag;
             return req;
@@ -153,14 +153,14 @@ namespace PortForge
             var e = doc.DocumentElement;
             if (e == null || e.Name != "PortForgeDownload" || e.GetAttribute("version") != "1") throw new IOException("The download recovery file is not recognized. Choose a different Save as path.");
             var m = new Metadata { Source = e.GetAttribute("source"), ETag = e.GetAttribute("etag"), Length = Int64.Parse(e.GetAttribute("length")), Parts = Int32.Parse(e.GetAttribute("parts")) };
-            if (m.Parts < 1 || m.Parts > 4 || m.Length < -1) throw new IOException("The download recovery file is damaged. Choose a different Save as path.");
+            if (m.Parts < 1 || m.Parts > 16 || m.Length < -1) throw new IOException("The download recovery file is damaged. Choose a different Save as path.");
             sha = e.GetAttribute("sha256"); return m;
         }
         private static string Part(string work, int i) { return Path.Combine(work, "part-" + i + ".bin"); }
         private static void ClearParts(string work)
         {
             // Only fixed files belonging to this downloader are removed. Never recursively remove a folder.
-            foreach (string file in Enumerable.Range(0, 4).Select(i => Part(work, i)).Concat(new[] { Path.Combine(work, "assembled.tmp") }))
+            foreach (string file in Enumerable.Range(0, 16).Select(i => Part(work, i)).Concat(new[] { Path.Combine(work, "assembled.tmp") }))
             { if (!Paths.IsInside(file, work)) throw new IOException("Invalid download work path."); Paths.CheckLinks(file); if (File.Exists(file)) File.Delete(file); }
         }
         private static void Space(string path, long needed)
@@ -294,10 +294,15 @@ namespace PortForge
                     }
                     string assembled = Path.Combine(work, "assembled.tmp"); Paths.CheckLinks(assembled);
                     Tell(progress, "Checking the completed file. Large games can take a while.", meta.Length, meta.Length);
-                    using (var output = new FileStream(assembled, FileMode.Create, FileAccess.Write, FileShare.None))
-                    foreach (int i in Enumerable.Range(0, meta.Parts)) using (var part = File.OpenRead(Part(work, i)))
-                    { byte[] buffer = new byte[1024 * 1024]; int n; while ((n = part.Read(buffer, 0, buffer.Length)) > 0) { token.ThrowIfCancellationRequested(); output.Write(buffer, 0, n); } }
-                    string actual = HashFile(assembled, token);
+                    string actual;
+                    // One pass: the parts are joined and hashed as they are copied, instead of copying and then reading the whole file again.
+                    using (var hasher = SHA256.Create())
+                    {
+                        using (var output = new FileStream(assembled, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024))
+                        foreach (int i in Enumerable.Range(0, meta.Parts)) using (var part = new FileStream(Part(work, i), FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024))
+                        { byte[] buffer = new byte[4 * 1024 * 1024]; int n; while ((n = part.Read(buffer, 0, buffer.Length)) > 0) { token.ThrowIfCancellationRequested(); output.Write(buffer, 0, n); hasher.TransformBlock(buffer, 0, n, null, 0); } }
+                        hasher.TransformFinalBlock(new byte[0], 0, 0); actual = BitConverter.ToString(hasher.Hash).Replace("-", "").ToLowerInvariant();
+                    }
                     if (expectedHash.Length > 0 && expectedHash != actual)
                     {
                         if (integrityAttempt < 1) { Tell(progress, "Checksum mismatch. Automatically downloading a fresh copy once."); ClearParts(work); continue; }

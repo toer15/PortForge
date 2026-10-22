@@ -12,7 +12,7 @@ The status panel shows progress, completion, pauses and errors. The speed displa
 
 The download manager automatically:
 
-- Uses up to four simultaneous connections when the source supports safe byte ranges, and falls back to a full single transfer if ranges are refused.
+- Uses up to eight simultaneous connections when the source supports safe byte ranges, and falls back to a full single transfer if ranges are refused.
 - Retries temporary connection failures and busy-server responses with delays, including the server's Retry-After instruction up to two minutes.
 - Keeps partial download data when paused. A later download with the same destination resumes when the server supplies byte ranges and a matching strong ETag. Otherwise it restarts safely. If the source file changes, old and new bytes are never mixed.
 - Checks file headers and ZIP structure. A supplied checksum mismatch or broken file/ZIP structure triggers one fresh download. If that also fails, the app explains the problem and keeps the failed file out of the final destination.

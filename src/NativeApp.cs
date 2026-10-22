@@ -50,7 +50,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.12 | Switch to PC";
+            Text = "PortForge 0.13 | Switch to PC";
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -235,6 +235,7 @@ namespace PortForge
             tray.Icon = Icon ?? SystemIcons.Application; tray.Text = "PortForge AI Doctor"; tray.Visible = true;
             tray.BalloonTipClicked += delegate { doctorButton.PerformClick(); };
             doctor = new LiveDoctor(AppDomain.CurrentDomain.BaseDirectory) { AutoFix = doctorAuto.Checked, UseAi = doctorAi.Checked };
+            doctor.StartDiscovery(LiveDoctor.DefaultDiscoveryRoots(AppDomain.CurrentDomain.BaseDirectory));
             doctor.Reported += e =>
             {
                 lock (doctorEvents) { doctorEvents.Add(e); if (doctorEvents.Count > 500) doctorEvents.RemoveAt(0); }

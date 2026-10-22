@@ -109,6 +109,14 @@ internal static class DoctorTests
             Check(File.ReadAllBytes(otherExe).SequenceEqual(originalEngine) && !engineEvents.Any(e => e.Kind == "engine"), "A player's choice to keep the original engine is respected");
             EngineManager.FolderOverride = null;
             Check(LiveDoctor.AiProblem("ERROR: You've hit your usage limit. Upgrade to Pro").Contains("usage limit") && LiveDoctor.AiProblem("401 Unauthorized").Contains("not signed in") && LiveDoctor.AiProblem("something else").Contains("could not finish"), "Codex problems are explained in plain words");
+            // Games nobody told the doctor about are found by what a converted game looks like, wherever it was saved.
+            string finds = Path.Combine(root, "finds"), deep = Path.Combine(finds, "Games", "Some Game"), ignored = Path.Combine(deep, "Some Game_data", "nested");
+            Directory.CreateDirectory(ignored);
+            foreach (string stem in new[] { Path.Combine(deep, "Some Game"), Path.Combine(ignored, "Hidden") }) { File.WriteAllText(stem + ".exe", "x"); File.WriteAllText(stem + "_code.dll", "x"); File.WriteAllText(stem + ".abi", "x"); }
+            File.WriteAllText(Path.Combine(finds, "Games", "NotAGame.exe"), "x");
+            var discovered = LiveDoctor.FindConvertedGames(new[] { finds });
+            Check(discovered.Count == 1 && discovered[0].EndsWith("Some Game.exe"), "A converted game is found by its .abi and _code.dll beside its .exe, without opening it first");
+            Check(LiveDoctor.FindConvertedGames(new[] { finds }, 1).Count == 0, "Discovery does not go deeper than the depth it was given");
             Console.WriteLine(checks + " doctor checks passed. Evidence: " + root); return 0;
         }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }

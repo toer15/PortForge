@@ -13,7 +13,7 @@ namespace PortForge
     {
         private static readonly Color Bg = Color.FromArgb(17,21,30), Surface = Color.FromArgb(28,34,46), Mint = Color.FromArgb(105,226,183), Muted = Color.FromArgb(173,185,203);
         private readonly TextBox url = Box("Direct download link"), destination = Box("Download save path"), checksum = Box("Expected SHA-256"), log = Box("Download details");
-        private readonly CheckBox parallel = new CheckBox { Text = "Use up to 4 connections when supported", Checked = true, AutoSize = true }, unpack = new CheckBox { Text = "Unpack ZIP files automatically", Checked = true, AutoSize = true }, convertAfter = new CheckBox { Text = "Start conversion when the game is ready", Checked = true, AutoSize = true };
+        private readonly CheckBox parallel = new CheckBox { Text = "Use up to 8 connections when supported", Checked = true, AutoSize = true }, unpack = new CheckBox { Text = "Unpack ZIP files automatically", Checked = true, AutoSize = true }, convertAfter = new CheckBox { Text = "Start conversion when the game is ready", Checked = true, AutoSize = true };
         private readonly Label badge = Caption("READY", 9, Mint), title = Caption("Download your game file", 18, Color.White), message = Caption("Paste a direct file link and choose where to save it.", 10, Muted), speed = Caption("", 10, Muted);
         private readonly Button start = Button("Download / Resume", true), pause = Button("Pause", false), use = Button("Use selected game", true), folder = Button("Open folder", false);
         private readonly ProgressBar bar = new ProgressBar { Dock = DockStyle.Fill };
@@ -86,7 +86,7 @@ namespace PortForge
         private async Task Download()
         {
             if (cancellation != null) return;
-            var request = new DownloadRequest { Url = url.Text.Trim(), Destination = destination.Text.Trim(), Sha256 = checksum.Text.Trim(), Connections = parallel.Checked ? 4 : 1 };
+            var request = new DownloadRequest { Url = url.Text.Trim(), Destination = destination.Text.Trim(), Sha256 = checksum.Text.Trim(), Connections = parallel.Checked ? 8 : 1 };
             try { GameDownloads.Validate(request); } catch (Exception e) { Error(e); return; }
             cancellation = new CancellationTokenSource(); var token = cancellation.Token;
             fields.Enabled = start.Enabled = use.Enabled = folder.Enabled = false; pause.Enabled = true;

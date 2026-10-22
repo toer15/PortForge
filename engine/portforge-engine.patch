@@ -1,8 +1,50 @@
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..3b761d2 100644
+index 33f94b6..b568c61 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
-@@ -885,6 +885,9 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+@@ -850,6 +850,32 @@ static void pipe_queue(Pipe* e, int queue) {
+     e->queued = queue;
+     pc_signal(&g_pj_work);
+ }
++/* PortForge: a draw's new pipeline goes to the front of the draws' queue, and one the draw may skip (vk_pipeline_skippable)
++   moves to the back. A bind that must wait for its pipeline (a loading screen, an image drawn once) used to queue behind
++   every pipeline of the 3D world, which are skipped while they are made: one game's loading screen waited 1.6 s for 13
++   pipelines of 125 ms each, with hundreds of skippable ones ahead of them. */
++static void pipe_queue_front(Pipe* e) {
++    e->job = g_pj_head;
++    g_pj_head = e;
++    if (!g_pj_tail) g_pj_tail = e;
++    e->queued = 1;
++    pc_signal(&g_pj_work);
++}
++/* e out of the draws' queue (g_pj_lock held): 1 when it was in it */
++static int pipe_dequeue_draw(Pipe* e) {
++    Pipe *q, *before = NULL;
++    if (e->queued != 1) return 0;
++    for (q = g_pj_head; q && q != e; q = q->job) before = q;
++    if (!q) return 0;
++    if (before)
++        before->job = e->job;
++    else
++        g_pj_head = e->job;
++    if (g_pj_tail == e) g_pj_tail = before;
++    e->job = NULL;
++    e->queued = 0;
++    return 1;
++}
+ /* a pipeline of the file that a draw asks for before a worker took it goes to the draws' queue: 1 when it did */
+ static int pipe_promote(Pipe* e) {
+     int moved = 0;
+@@ -862,7 +888,7 @@ static int pipe_promote(Pipe* e) {
+         else
+             g_pw_head = e->job;
+         if (g_pw_tail == e) g_pw_tail = before;
+-        pipe_queue(e, 1);
++        pipe_queue_front(e);
+         moved = 1;
+     }
+     pm_unlock(&g_pj_lock);
+@@ -885,6 +911,9 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
     of descriptor sets), and the pipeline's index in this table, pages the GPU thread adds before a stand-in naming
     them goes through the ring. Pipelines live as long as the run, so a stand-in does too */
  #define PIPE_STANDIN   0x5EC6000000000000ull
@@ -12,7 +54,16 @@ index 33f94b6..3b761d2 100644
  #define PSTAND_PAGE    1024
  static Pipe** g_pstand[1024];
  static u32 g_npstand;
-@@ -981,17 +984,35 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -964,7 +993,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+         pf_pipe_record(&p->k);
+         pm_lock(&g_pj_lock);
+         if (pipe_workers()) {
+-            pipe_queue(p, 1);
++            pipe_queue_front(p);
+             queued = 1;
+         }
+         pm_unlock(&g_pj_lock);
+@@ -981,17 +1010,42 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
  }
  /* on the recording thread: the pipeline a handle from vk_pipeline_get_deferred names, waited for while a worker makes
     it. VK_NULL_HANDLE when it couldn't be made */
@@ -43,7 +94,14 @@ index 33f94b6..3b761d2 100644
 +}
 +VkPipeline vk_pipeline_skippable(VkPipeline h) {
 +    u64 v = (u64)(uintptr_t)h;
-+    return (v & ~(u64)0xFFFFFFFFull) == PIPE_STANDIN ? (VkPipeline)(uintptr_t)(v | PIPE_SKIPPABLE) : h;
++    if ((v & ~(u64)0xFFFFFFFFull) != PIPE_STANDIN) return h;
++    Pipe* p = standin_pipe(v);
++    if (!__atomic_load_n(&p->ready, __ATOMIC_ACQUIRE)) {
++        pm_lock(&g_pj_lock);
++        if (pipe_dequeue_draw(p)) pipe_queue(p, 1); /* after the pipelines a bind has to wait for */
++        pm_unlock(&g_pj_lock);
++    }
++    return (VkPipeline)(uintptr_t)(v | PIPE_SKIPPABLE);
 +}
 +u64 vk_pipeline_async_skips(void) {
 +    return __atomic_load_n(&g_pipe_async_skips, __ATOMIC_RELAXED);
@@ -152,6 +210,29 @@ index db13c2d..c03ef7c 100644
  VkPipeline vk_pipeline_resolve(VkPipeline h);
  /* so far: pipelines made, how many of them the pipeline cache had, ms the workers took making them, ms the GPU thread
     waited for new ones, shaders translated, ms translating them */
+diff --git a/src/nx/runtime/driver/hactool/nca.c b/src/nx/runtime/driver/hactool/nca.c
+index 2f956fa..23ac531 100644
+--- a/src/nx/runtime/driver/hactool/nca.c
++++ b/src/nx/runtime/driver/hactool/nca.c
+@@ -1420,13 +1420,15 @@ void nca_save_section_file(nca_section_ctx_t *ctx, uint64_t ofs, uint64_t total_
+         return;
+     }
+ 
+-    uint64_t read_size = 0x400000; /* 4 MB buffer. */
+-    unsigned char *buf = malloc(read_size);
++    /* PortForge: a buffer the size of the file, up to 4 MB. A game's RomFS holds tens of thousands of small files, and
++       a filled 4 MB buffer for each of them kept the extraction at about 1 MB/s. */
++    uint64_t read_size = total_size < 0x400000 ? total_size : 0x400000;
++    uint64_t buffer_size = read_size ? read_size : 1;
++    unsigned char *buf = malloc(buffer_size);
+     if (buf == NULL) {
+         fprintf(stderr, "Failed to allocate file-save buffer!\n");
+         exit(EXIT_FAILURE);
+     }
+-    memset(buf, 0xCC, read_size); /* Debug in case I fuck this up somehow... */
+     uint64_t end_ofs = ofs + total_size;
+     while (ofs < end_ofs) {
+         nca_section_fseek(ctx, ofs);
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
 index be57ac5..9468bf5 100644
 --- a/src/nx/runtime/settings.txt

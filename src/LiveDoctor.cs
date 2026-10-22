@@ -110,6 +110,56 @@ namespace PortForge
 
         public string[] Games { get { lock (sync) return games.Keys.ToArray(); } }
 
+        private Timer discoverTimer;
+        private static readonly string[] SkipFolders = { "_data", "_build", "romfs", "exefs", "shader_cache", "PortForge-engine-backup", ".git", "node_modules", "AppData", "Windows", "$Recycle.Bin", "Program Files", "Program Files (x86)" };
+
+        /// <summary>The folders where converted games are usually kept: the desktop, documents, downloads, the games folders and the app's own output.</summary>
+        public static string[] DefaultDiscoveryRoots(string appFolder)
+        {
+            var roots = new List<string> { Path.Combine(appFolder, "NativeGames") };
+            foreach (var folder in new[] { Environment.SpecialFolder.DesktopDirectory, Environment.SpecialFolder.MyDocuments, Environment.SpecialFolder.UserProfile })
+                try { roots.Add(Environment.GetFolderPath(folder)); } catch (Exception) { }
+            try { roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")); roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games")); } catch (Exception) { }
+            foreach (var drive in DriveInfo.GetDrives()) try { if (drive.DriveType == DriveType.Fixed && drive.IsReady) { roots.Add(Path.Combine(drive.Name, "Games")); roots.Add(Path.Combine(drive.Name, "Downloads")); } } catch (Exception) { }
+            return roots.Where(Directory.Exists).Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        /// <summary>Converted games under the roots, up to three folders deep: a game's .exe beside its .abi and _code.dll. Any game made by PortForge or ScarletNX is found, whatever its name.</summary>
+        public static List<string> FindConvertedGames(IEnumerable<string> roots, int maxDepth = 3, int limit = 200)
+        {
+            var found = new List<string>();
+            foreach (string root in roots) Scan(root, 0, maxDepth, limit, found);
+            return found;
+        }
+        private static void Scan(string folder, int depth, int maxDepth, int limit, List<string> found)
+        {
+            if (found.Count >= limit) return;
+            try
+            {
+                foreach (string abi in Directory.GetFiles(folder, "*.abi"))
+                {
+                    string stem = Path.Combine(folder, Path.GetFileNameWithoutExtension(abi));
+                    if (File.Exists(stem + ".exe") && File.Exists(stem + "_code.dll")) found.Add(stem + ".exe");
+                }
+                if (depth >= maxDepth) return;
+                foreach (string sub in Directory.GetDirectories(folder))
+                {
+                    string name = Path.GetFileName(sub);
+                    if (name.StartsWith(".", StringComparison.Ordinal) || SkipFolders.Any(s => name.EndsWith(s, StringComparison.OrdinalIgnoreCase))) continue;
+                    Scan(sub, depth + 1, maxDepth, limit, found);
+                }
+            }
+            catch (UnauthorizedAccessException) { }
+            catch (IOException) { }
+        }
+
+        /// <summary>Starts watching every converted game on this PC, now and every half hour, so each one gets the PortForge Engine and the doctor's repairs without the player loading it first.</summary>
+        public void StartDiscovery(IEnumerable<string> roots, int firstDelayMs = 8000)
+        {
+            var list = roots.ToArray();
+            discoverTimer = new Timer(delegate { try { foreach (string exe in FindConvertedGames(list)) Watch(exe); } catch (Exception) { } }, null, firstDelayMs, 30 * 60 * 1000);
+        }
+
         public void Watch(string exe)
         {
             if (Add(exe, true)) Report(new DoctorEvent { Game = Path.GetFileNameWithoutExtension(exe), Kind = "watch", Title = "Now watching this game" });
@@ -320,7 +370,7 @@ namespace PortForge
             return "Codex could not finish the review.";
         }
 
-        public void Dispose() { stop.Cancel(); timer.Dispose(); if (Current == this) Current = null; }
+        public void Dispose() { stop.Cancel(); timer.Dispose(); if (discoverTimer != null) discoverTimer.Dispose(); if (Current == this) Current = null; }
 
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
