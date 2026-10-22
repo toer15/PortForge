@@ -82,6 +82,33 @@ internal static class DoctorTests
                 Check(File.ReadAllText(Path.Combine(games, "PortForge-doctor.log")).Contains("Fixed automatically"), "Everything the doctor did is written to the game's doctor log");
             }
             GameOptimization.GameplaySeconds = 45;
+
+            // On any PC: the doctor puts the shipped PortForge Engine under a watched game by itself, and respects a "keep original" choice.
+            string enginePkg = Path.Combine(root, "Engine"); Directory.CreateDirectory(enginePkg);
+            File.Copy(args[0], Path.Combine(enginePkg, "scarletnx.exe")); File.WriteAllText(Path.Combine(enginePkg, "ENGINE.txt"), "version=1.0\nbase=0de0a87\nfeatures=Smart async shaders\n");
+            EngineManager.FolderOverride = enginePkg;
+            string other = Path.Combine(root, "Other"); Directory.CreateDirectory(other);
+            string otherExe = Path.Combine(other, "Other game.exe"); File.Copy(args[1], otherExe); File.Copy(args[1], Path.Combine(other, "Other game_code.dll"));
+            byte[] originalEngine = File.ReadAllBytes(otherExe);
+            var engineEvents = new List<DoctorEvent>();
+            using (var doctor = new LiveDoctor(Path.Combine(root, "app2")) { UseAi = false })
+            {
+                doctor.Reported += e => { lock (engineEvents) engineEvents.Add(e); };
+                Directory.CreateDirectory(Path.Combine(root, "app2"));
+                doctor.Watch(otherExe);
+                Check(Wait(() => { lock (engineEvents) return engineEvents.Any(e => e.Kind == "fixed" && e.Title == "PortForge Engine installed"); }, 40), "The doctor installs the PortForge Engine under a watched game by itself");
+            }
+            Check(EngineManager.IsInstalled(otherExe, EngineManager.Find()), "The game really runs on the PortForge Engine afterwards");
+            EngineManager.Restore(otherExe); EngineManager.Decline(otherExe, "The player restored the original engine.");
+            engineEvents.Clear();
+            using (var doctor = new LiveDoctor(Path.Combine(root, "app2")) { UseAi = false })
+            {
+                doctor.Reported += e => { lock (engineEvents) engineEvents.Add(e); };
+                Thread.Sleep(6000);
+            }
+            Check(File.ReadAllBytes(otherExe).SequenceEqual(originalEngine) && !engineEvents.Any(e => e.Kind == "engine"), "A player's choice to keep the original engine is respected");
+            EngineManager.FolderOverride = null;
+            Check(LiveDoctor.AiProblem("ERROR: You've hit your usage limit. Upgrade to Pro").Contains("usage limit") && LiveDoctor.AiProblem("401 Unauthorized").Contains("not signed in") && LiveDoctor.AiProblem("something else").Contains("could not finish"), "Codex problems are explained in plain words");
             Console.WriteLine(checks + " doctor checks passed. Evidence: " + root); return 0;
         }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }

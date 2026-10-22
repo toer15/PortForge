@@ -29,7 +29,9 @@ namespace PortForge
     public static class EngineManager
     {
         public const string BackupFolderName = "PortForge-engine-backup";
-        public static string DefaultFolder { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Engine"); } }
+        /// <summary>Tests point this at a package of their own; the app uses its Engine folder.</summary>
+        public static string FolderOverride;
+        public static string DefaultFolder { get { return FolderOverride ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Engine"); } }
 
         public static EnginePackage Find(string folder = null)
         {
@@ -87,10 +89,23 @@ namespace PortForge
                 if (!Regex.IsMatch(output, @"(?m)^frames=\d+")) throw new IOException("The game did not draw any frames on the new engine.");
             }
             catch (OperationCanceledException) { Restore(gameExe); throw; }
-            catch (Exception e) { Restore(gameExe); throw new IOException("The PortForge Engine could not run this game, so the original engine was put back. " + e.Message, e); }
+            catch (Exception e) { Restore(gameExe); Decline(gameExe, "The PortForge Engine could not run this game: " + e.Message); throw new IOException("The PortForge Engine could not run this game, so the original engine was put back. " + e.Message, e); }
+            try { File.Delete(Path.Combine(backup, DeclinedFile)); } catch (IOException) { }
             return "Installed the " + package.Name + " and checked that the game starts. Smart async shaders are on; turn them off in this tab if something looks wrong.";
         }
 
+        public const string DeclinedFile = "keep-original-engine.txt";
+        /// <summary>Why the doctor should not put the PortForge Engine under this game again (the player chose the original, or it failed), or null.</summary>
+        public static string Declined(string gameExe)
+        {
+            string marker = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(gameExe)), BackupFolderName, DeclinedFile);
+            try { return File.Exists(marker) ? File.ReadAllText(marker).Trim() : null; } catch (IOException) { return "unreadable marker"; }
+        }
+        public static void Decline(string gameExe, string reason)
+        {
+            string backup = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(gameExe)), BackupFolderName);
+            Directory.CreateDirectory(backup); File.WriteAllText(Path.Combine(backup, DeclinedFile), reason);
+        }
         public static void Restore(string gameExe)
         {
             gameExe = Path.GetFullPath(gameExe); GameOptimization.EnsureStopped(gameExe);

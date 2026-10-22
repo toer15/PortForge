@@ -17,8 +17,9 @@ namespace PortForge
         public bool needs_engine_fix {get;set;}
         public string ReportPath;
     }
-    public static class CodexDiagnosis
+public static class CodexDiagnosis
     {
+        private static string LastChars(string text,int count){text=(text??"").Trim();return text.Length<=count?text:text.Substring(text.Length-count);}
         private static readonly string[] Rules={"restore_runtime","disable_debug","restore_rendering","reduce_upscale","speed_pipelines"};
         public static string Find()
         {
@@ -64,7 +65,7 @@ namespace PortForge
                     byte[] bytes=Encoding.UTF8.GetBytes(prompt);process.StandardInput.BaseStream.Write(bytes,0,bytes.Length);process.StandardInput.Close();
                     while(!process.WaitForExit(100)){token.ThrowIfCancellationRequested();if(watch.Elapsed.TotalSeconds>180)throw new TimeoutException("AI diagnosis timed out. The supported local repairs remain available.");}
                     token.ThrowIfCancellationRequested();
-                    if(process.ExitCode!=0||!File.Exists(answer))throw new IOException("Codex could not complete AI diagnosis. Check its sign-in, connection and account availability. No AI repair was applied. "+stderr.Result.Substring(Math.Max(0,stderr.Result.Length-500)));
+                    if(process.ExitCode!=0||!File.Exists(answer))throw new IOException("Codex could not complete AI diagnosis. Check its sign-in, connection and account availability. No AI repair was applied. "+LastChars(stderr.Result+Environment.NewLine+stdout.Result,800));
                     string events=stdout.Result;
                     if(events.Contains("\"type\":\"command_execution\"")||events.Contains("\"type\":\"mcp_tool_call\""))throw new IOException("The AI attempted an unexpected tool call. Its response was rejected.");
                     var result=Parse(File.ReadAllText(answer),health);result.ReportPath=answer;return result;

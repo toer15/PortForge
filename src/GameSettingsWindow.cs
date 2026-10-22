@@ -41,6 +41,7 @@ namespace PortForge
         public GameSettingsWindow(string initialGame,string backendFile=null)
         {
             backendPath=backendFile;
+            if(!File.Exists(backendPath)&&File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Engine","scarletnx.exe")))backendPath=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Engine","scarletnx.exe");
             if(!File.Exists(backendPath)) {try {string locator=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"backend-location.txt");if(File.Exists(locator))backendPath=File.ReadAllText(locator).Trim();}catch(IOException){}}
             reportsRoot=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Diagnostics");
             Text = "PortForge | Graphics and performance";

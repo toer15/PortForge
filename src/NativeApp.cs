@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -36,7 +36,7 @@ namespace PortForge
         private readonly Button downloads = Button("Downloads", false), updates = Button("Check for updates", false), doctorButton = Button("AI Doctor", false);
         private readonly Label doctorStatus = new Label();
         private readonly CheckBox doctorAuto = new CheckBox { Text = "Fix automatically", Checked = true, AutoSize = true, AccessibleName = "AI Doctor fixes automatically" },
-            doctorAi = new CheckBox { Text = "Use AI (Codex)", Checked = true, AutoSize = true, AccessibleName = "AI Doctor uses Codex" };
+            doctorAi = new CheckBox { Text = "Extra AI review (Codex)", Checked = true, AutoSize = true, AccessibleName = "AI Doctor extra review with Codex" };
         private readonly System.Collections.Generic.List<DoctorEvent> doctorEvents = new System.Collections.Generic.List<DoctorEvent>();
         private readonly NotifyIcon tray = new NotifyIcon();
         private LiveDoctor doctor;
@@ -50,7 +50,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.10 | Switch to PC";
+            Text = "PortForge 0.11 | Switch to PC";
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -476,8 +476,11 @@ namespace PortForge
         private void LocateBackend()
         {
             string locator = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "backend-location.txt");
+            string engine = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Engine", "scarletnx.exe");
             string bundled = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Backends", "ScarletNX", "bin", "scarletnx.exe");
-            if (File.Exists(bundled)) backend.Text = bundled;
+            // The PortForge Engine ships with the app, so every PC converts with it and every new game gets its stutter fix
+            if (File.Exists(engine)) backend.Text = engine;
+            else if (File.Exists(bundled)) backend.Text = bundled;
             else if (File.Exists(locator))
             { string path = File.ReadAllText(locator).Trim(); if (File.Exists(path)) backend.Text = path; }
         }

@@ -93,7 +93,7 @@ namespace PortForge
         private readonly Timer timer;
         private readonly CancellationTokenSource stop = new CancellationTokenSource();
         private int busy;
-        public bool AutoFix = true, UseAi = true;
+        public bool AutoFix = true, UseAi = true, AutoEngine = true;
         public event Action<DoctorEvent> Reported;
         public Func<string, bool> IsBusyElsewhere = exe => false;
         public static readonly string[] SkipProcesses = { "Idle", "System", "_Total", "dwm", "csrss", "audiodg", "Memory Compression" };
@@ -219,41 +219,105 @@ namespace PortForge
             return text;
         }
 
-        /// <summary>When a game closes: apply supported repairs (with backups), then ask the AI about new problems.</summary>
+        private static DateTime aiPausedUntil = DateTime.MinValue;
+        private static string aiPauseReason = "";
+        /// <summary>Why the extra AI review is not running right now, for the doctor's window ("" when it can run).</summary>
+        public static string AiStatus
+        {
+            get
+            {
+                if (CodexDiagnosis.Find() == null) return "Extra AI review: Codex isn't installed on this PC (optional).";
+                return DateTime.UtcNow < aiPausedUntil ? "Extra AI review paused until " + aiPausedUntil.ToLocalTime().ToString("HH:mm") + ": " + aiPauseReason : "";
+            }
+        }
+
+        /// <summary>
+        /// When a game closes: put the PortForge Engine under it (the stutter fix, on any PC), apply the supported repairs
+        /// (with backups), then, only as an optional extra, ask Codex about new problems. Each step works on its own: a
+        /// failed or unavailable AI never stops the built-in fixes.
+        /// </summary>
         private void AfterSession(string exe)
         {
-            if (!AutoFix || stop.IsCancellationRequested) return;
-            if (IsBusyElsewhere(exe)) { Report(new DoctorEvent { Game = Path.GetFileNameWithoutExtension(exe), Kind = "skip", Title = "Repairs postponed", Text = "Another PortForge window is working on this game." }); return; }
+            if (stop.IsCancellationRequested) return;
             string name = Path.GetFileNameWithoutExtension(exe);
+            if (IsBusyElsewhere(exe)) { Report(new DoctorEvent { Game = name, Kind = "skip", Title = "Repairs postponed", Text = "Another PortForge window is working on this game." }); return; }
+            RuntimeCapabilities cap = null;
+            if (AutoFix && AutoEngine) InstallEngine(exe, name);
+            if (AutoFix)
+            {
+                try
+                {
+                    cap = RuntimeCapabilities.Read(exe, stop.Token);
+                    var health = GameDiagnostics.Scan(exe, cap, null);
+                    if (health.Issues.Any(i => i.Fix != null))
+                    {
+                        Report(new DoctorEvent { Game = name, Kind = "fixing", Title = "Fixing " + health.Issues.Count(i => i.Fix != null) + " problem(s)", Text = String.Join("; ", health.Issues.Where(i => i.Fix != null).Select(i => i.Title)) + ". Your save and settings are backed up first." });
+                        string done = GameDiagnostics.Repair(exe, cap, null, null, true, new Progress<string>(m => Report(new DoctorEvent { Game = name, Kind = "progress", Title = "Working", Text = m })), stop.Token);
+                        Report(new DoctorEvent { Game = name, Kind = "fixed", Title = "Fixed automatically", Fixed = true, Important = true, Text = done.Replace("\r\n", " ") });
+                    }
+                }
+                catch (OperationCanceledException) { return; }
+                catch (Exception e) { Report(new DoctorEvent { Game = name, Kind = "error", Title = "A built-in repair could not finish", Important = true, Text = e.Message + " Settings and saves stay as their backups had them." }); }
+            }
+            if (UseAi) AiReview(exe, name, cap);
+        }
+
+        private void InstallEngine(string exe, string name)
+        {
+            var package = EngineManager.Find();
+            if (package == null || EngineManager.IsInstalled(exe, package) || EngineManager.Declined(exe) != null) return;
             try
             {
-                var cap = RuntimeCapabilities.Read(exe, stop.Token);
+                Report(new DoctorEvent { Game = name, Kind = "engine", Title = "Installing the PortForge Engine", Text = "It removes shader stutter. The original engine is kept, and PortForge checks the game still starts." });
+                string done = EngineManager.Install(exe, package, null, stop.Token);
+                Report(new DoctorEvent { Game = name, Kind = "fixed", Title = "PortForge Engine installed", Fixed = true, Important = true, Text = done });
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception e) { Report(new DoctorEvent { Game = name, Kind = "engine", Title = "Kept the original engine", Important = true, Text = e.Message + " The doctor won't try again for this game; you can still install it from the Engine tab." }); }
+        }
+
+        /// <summary>The optional AI review. Without Codex, or while its account is limited, the doctor goes on without it.</summary>
+        private void AiReview(string exe, string name, RuntimeCapabilities cap)
+        {
+            if (CodexDiagnosis.Find() == null || DateTime.UtcNow < aiPausedUntil) return;
+            try
+            {
+                cap = cap ?? RuntimeCapabilities.Read(exe, stop.Token);
                 var health = GameDiagnostics.Scan(exe, cap, null);
-                if (health.Issues.Any(i => i.Fix != null))
-                {
-                    Report(new DoctorEvent { Game = name, Kind = "fixing", Title = "Fixing " + health.Issues.Count(i => i.Fix != null) + " problem(s)", Text = String.Join("; ", health.Issues.Where(i => i.Fix != null).Select(i => i.Title)) + ". Your save and settings are backed up first." });
-                    string done = GameDiagnostics.Repair(exe, cap, null, null, true, new Progress<string>(m => Report(new DoctorEvent { Game = name, Kind = "progress", Title = "Working", Text = m })), stop.Token);
-                    Report(new DoctorEvent { Game = name, Kind = "fixed", Title = "Fixed automatically", Fixed = true, Important = true, Text = done.Replace("\r\n", " ") });
-                    health = GameDiagnostics.Scan(exe, cap, null);
-                }
-                if (!UseAi || CodexDiagnosis.Find() == null) return;
                 string signature = CodexDiagnosis.Fingerprint(health);
                 if (signature == null) return;
                 Directory.CreateDirectory(reportsRoot);
                 string cache = Path.Combine(reportsRoot, "last-ai-" + signature + ".json");
                 if (File.Exists(cache)) return;
-                Report(new DoctorEvent { Game = name, Kind = "ai", Title = "AI is reviewing this session", Text = "Codex reads a short summary of the log (no files, keys or paths) and picks from the supported repairs." });
+                Report(new DoctorEvent { Game = name, Kind = "ai", Title = "Extra AI review", Text = "Codex reads a short summary of the log (no files, keys or paths) and can pick from the supported repairs." });
                 var ai = CodexDiagnosis.Review(health, reportsRoot, stop.Token);
                 File.Copy(ai.ReportPath, cache, true);
                 Report(new DoctorEvent { Game = name, Kind = "ai", Title = "AI diagnosis", Important = true, Text = ai.summary + (ai.needs_engine_fix ? " Engine note: " + ai.engineering_note : "") });
-                if (ai.recommended_rules.Length > 0)
+                if (AutoFix && ai.recommended_rules.Length > 0)
                 {
                     string done = GameDiagnostics.Repair(exe, cap, null, ai.recommended_rules, true, null, stop.Token);
                     Report(new DoctorEvent { Game = name, Kind = "fixed", Title = "AI-recommended repair applied", Fixed = true, Important = true, Text = done.Replace("\r\n", " ") });
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception e) { Report(new DoctorEvent { Game = name, Kind = "error", Title = "Automatic repair stopped", Important = true, Text = e.Message }); }
+            catch (Exception e)
+            {
+                string why = AiProblem(e.Message);
+                aiPausedUntil = DateTime.UtcNow.AddHours(why.Contains("usage limit") || why.Contains("signed in") ? 3 : 0.5);
+                aiPauseReason = why;
+                Report(new DoctorEvent { Game = name, Kind = "ai-skipped", Title = "Extra AI review skipped", Text = why + " The built-in checks and fixes work without it." });
+            }
+        }
+
+        /// <summary>A plain explanation of why Codex could not help, from its error text.</summary>
+        public static string AiProblem(string error)
+        {
+            string e = error ?? "";
+            if (e.IndexOf("usage limit", StringComparison.OrdinalIgnoreCase) >= 0) return "Your Codex account has reached its usage limit for now; the doctor will try again later.";
+            if (e.IndexOf("login", StringComparison.OrdinalIgnoreCase) >= 0 || e.IndexOf("sign in", StringComparison.OrdinalIgnoreCase) >= 0 || e.IndexOf("unauthorized", StringComparison.OrdinalIgnoreCase) >= 0) return "Codex is not signed in on this PC (sign in to Codex to use the extra AI review).";
+            if (e.IndexOf("timed out", StringComparison.OrdinalIgnoreCase) >= 0) return "Codex took too long to answer.";
+            if (e.IndexOf("network", StringComparison.OrdinalIgnoreCase) >= 0 || e.IndexOf("connect", StringComparison.OrdinalIgnoreCase) >= 0) return "Codex could not reach its service (check the internet connection).";
+            return "Codex could not finish the review.";
         }
 
         public void Dispose() { stop.Cancel(); timer.Dispose(); if (Current == this) Current = null; }

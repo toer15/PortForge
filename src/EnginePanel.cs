@@ -43,7 +43,7 @@ namespace PortForge
             SizeChanged += delegate { int w = Math.Max(240, ClientSize.Width - 50); foreach (var l in new[] { about, labAbout, detail, status }) l.MaximumSize = new Size(w, 0); };
             Controls.Add(stack);
             install.Click += async delegate { await Work("Installing the PortForge Engine", (p, t) => EngineManager.Install(game, package, p, t)); };
-            restore.Click += async delegate { await Work("Restoring the original engine", (p, t) => { EngineManager.Restore(game); return "The original engine is back in place."; }); };
+            restore.Click += async delegate { await Work("Restoring the original engine", (p, t) => { EngineManager.Restore(game); EngineManager.Decline(game, "The player restored the original engine."); return "The original engine is back in place. The AI Doctor won't install the PortForge Engine for this game again unless you select Install."; }); };
             measure.Click += async delegate { await Work("Measuring", Measure); };
             lab.Click += async delegate { await Work("AI Engine Lab", (p, t) => EngineLab.Improve(game, p, t)); };
             stop.Click += delegate { if (cancellation != null) cancellation.Cancel(); };

@@ -63,7 +63,7 @@ if ($Test) {
     & $compiler /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /r:System.Core.dll /r:System.Xml.dll @downloadReferences (('/win32manifest:' + (Join-Path $projectRoot 'app.manifest'))) (('/out:' + (Join-Path $projectRoot 'build\DoctorTests.exe'))) @conversionSources (Join-Path $projectRoot 'tests\DoctorTests.cs')
     if ($LASTEXITCODE -ne 0) { throw 'Doctor tests compilation failed.' }
     Copy-Item -LiteralPath (Join-Path $projectRoot 'app.config') -Destination (Join-Path $projectRoot 'build\DoctorTests.exe.config')
-    & (Join-Path $projectRoot 'build\DoctorTests.exe') (Join-Path $projectRoot 'build\TuningFixture.exe')
+    & (Join-Path $projectRoot 'build\DoctorTests.exe') (Join-Path $projectRoot 'build\TuningFixture.exe') (Join-Path $projectRoot 'build\DiagnosisFixture.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Doctor tests failed.' }
 
     & $compiler /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /r:System.Core.dll /r:System.Xml.dll @downloadReferences (('/win32manifest:' + (Join-Path $projectRoot 'app.manifest'))) (('/out:' + (Join-Path $projectRoot 'build\EngineTests.exe'))) @conversionSources (Join-Path $projectRoot 'tests\EngineTests.cs')
