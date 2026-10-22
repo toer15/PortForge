@@ -128,6 +128,13 @@ internal static class NativeInterfaceTests
                 Check(fpsMode.SelectedIndex == 0 && !fps.Enabled && fps.Minimum == 10 && fps.Maximum == 1000, "FPS control starts at game timing and exposes the supported custom range");
                 fpsMode.SelectedIndex = 1; fps.Value = 240; settingsButton("Performance").PerformClick();
                 Check(fps.Enabled && fps.Value == 240 && scale.Value == 75, "Performance preset lowers render work and preserves the custom frame cap");
+                var protectionBinding = BindingFlags.Instance | BindingFlags.NonPublic;
+                var protectionCap = new RuntimeCapabilities(); protectionCap.Keys.Add("render_scale_safety");
+                typeof(GameSettingsWindow).GetField("capabilities",protectionBinding).SetValue(settingsForm,protectionCap);
+                settingsButton("Performance").PerformClick();
+                Check(scale.Value == 100 && scale.Minimum == 100 && scale.Maximum == 100 && scale.ReadOnly && fps.Value == 240,
+                    "Performance on a protected engine keeps native image sizes and readable controls without changing game timing");
+                typeof(GameSettingsWindow).GetField("capabilities",protectionBinding).SetValue(settingsForm,null);
                 settingsButton("Clear FPS limit").PerformClick(); settingsButton("Clear Render scale (%)").PerformClick();
                 Check(fpsMode.SelectedIndex == 0 && !fps.Enabled && scale.Value == 100, "Clear restores safe defaults for frame timing and resolution");
                 filter.SelectedIndex = 7;

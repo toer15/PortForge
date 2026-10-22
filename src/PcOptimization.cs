@@ -24,6 +24,7 @@ namespace PortForge
         {
             if (cap == null || !cap.SupportsGraphics) throw new InvalidOperationException("This engine does not expose the required graphics settings.");
             var settings = pc.AutomaticBaseline(current).Values();
+            if (cap.ProtectsRenderScale) { settings["resolution"] = "1"; settings["render_scale_safety"] = "1"; }
             if (!cap.Keys.Contains("upscaler")) settings.Remove("upscaler");
             if (pc.LogicalCpus > 0)
             {

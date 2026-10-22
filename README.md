@@ -1,8 +1,8 @@
-# PortForge 0.25 / Engine 1.8
+# PortForge 0.26 / Engine 1.9
 
-Play opens your game or returns to the existing window; background settings probes no longer count as gameplay. The Graphics and performance window now includes **AMD FSR 1 spatial upscaling**, with a Linear off switch and per-game settings. It applies automatically on Engine 1.8 when the rendered SDR image is smaller than the game window. Try 75% render scale to reduce GPU load. New conversions and the existing backed-up engine upgrade path include it.
+Performance presets now keep internal rendering at 100% on Engine 1.9. Reduced internal rendering was corrupting generated game images and could hide the world, produce huge incorrect surfaces, and break lighting. **Graphics protection** is enabled inside the engine by default, so existing 75% settings are protected even when a game runs directly. The app's presets, PC matching and Auto tune preserve it. New conversions and downloaded inputs use the bundled engine; existing watched games use the backed-up upgrade path.
 
-344 application checks, 10 installer checks and five selected engine suites cover this release. Mario launched on this PC with FSR actually active; short samples did not establish a game-wide speedup. **FSR 4, DLSS and frame generation are not implemented.** There is no promise of doubled FPS, fixed 1% lows, zero lag, or fully static native execution; the engine retains AOT/JIT translation. See VALIDATION-0.25.md for the test scope.
+FSR 1 still upscales the finished SDR picture to a larger display. This safety fix removes the reduced-internal-resolution speed tradeoff; it does not establish a speedup or a universal rendering guarantee. Mario's saved scene was reproduced broken at 75%, then rendered correctly with protection on. See VALIDATION-0.26.md. The runtime still uses AOT/JIT translation; FSR 4, DLSS and frame generation remain unimplemented.
 
 # PortForge
 

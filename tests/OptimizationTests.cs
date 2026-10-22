@@ -149,6 +149,17 @@ internal static class OptimizationTests
             File.Delete(Path.ChangeExtension(exe,".log"));
             using(new GameStateGuard(exe))File.WriteAllText(Path.ChangeExtension(exe,".log"),"temporary benchmark log");
             Check(!File.Exists(Path.ChangeExtension(exe,".log")),"A benchmark does not leave a session log behind when none existed before it");
+            var protectedCap = new RuntimeCapabilities(); protectedCap.Keys.UnionWith(cap.Keys); protectedCap.Keys.Add("render_scale_safety");
+            var performance = GraphicsProfile.Preset("Performance", profile);
+            GameOptimization.SaveAndVerify(exe, performance, protectedCap);
+            var protectedValues = GameOptimization.ReadValues(File.ReadAllText(config));
+            Check(protectedValues["resolution"] == "1" && protectedValues["render_scale_safety"] == "1" && GameOptimization.Load(exe).FpsLimit == performance.FpsLimit, "Saving Performance on a protected engine preserves native game images and the player's frame cap");
+            var protectedEntry = PcOptimization.SettingsFor(entry, performance, protectedCap);
+            Check(protectedEntry["resolution"] == "1" && protectedEntry["render_scale_safety"] == "1", "Automatic PC matching cannot downscale game data even on an entry-level PC");
+            string protectedIni = "fps_limit=120\nvsync=0\nresolution=0.75\npc_profile_test=1\nfixture_graphics_protection=1\n";
+            File.WriteAllText(config, protectedIni);
+            var protectedTune = GameOptimization.Tune(exe, performance, 60, new Updates(), CancellationToken.None, true, true);
+            Check(protectedTune.Samples.Count == 1 && protectedTune.Samples.All(s=>s.Profile.Resolution==1) && File.ReadAllText(config)==protectedIni, "Protected Auto tune measures and labels native rendering, skips duplicate unsafe scales and restores the original settings");
             Console.WriteLine(checks + " optimization checks passed. Evidence: " + root); return 0;
         }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }

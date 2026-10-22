@@ -130,8 +130,8 @@ namespace PortForge
             AddHint("Speed lock: with PortForge Engine 1.6 or newer, a game always runs at its own speed, whatever the cap. A higher cap can't speed up a 30 or 60 FPS game, and a lower cap shows fewer frames instead of slowing the game down. Your PC's power goes into sharper graphics instead. VSync may also limit FPS to your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
             AddOption("Upscaler", upscaler, delegate { upscaler.SelectedIndex = 1; });
-            AddHint("AMD FSR 1 upscales and sharpens when the rendered image is smaller than the game window. Try 75% render scale to reduce GPU work. Requires Engine 1.8. FSR 4, DLSS and frame generation are not included; CPU and loading stalls can remain.");
-            AddHint("100% = the game's original resolution. Lower values reduce 3D GPU work; Vulkan scales the final image to your window. Higher values sharpen it and cost performance. Scaling cannot remove CPU, game-loading or shader-compilation stalls.");
+            AddHint("AMD FSR 1 upscales and sharpens the finished image when the game window is larger. Engine 1.9 keeps internal rendering at 100% to protect game data and geometry. FSR 4, DLSS and frame generation are not included.");
+            AddHint("100% = the game's original resolution. Protected engines keep this at 100% because changing intermediate image sizes can break the world and lighting. Older engines expose experimental scaling. FSR still scales the finished picture to your display.");
             AddOption("Texture detail at angles", filtering, delegate { filtering.SelectedIndex = 0; });
             var checks = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
             checks.Controls.AddRange(new Control[] { vsync, shadows, docked, fullscreen }); options.Controls.Add(checks);
@@ -359,11 +359,13 @@ namespace PortForge
         }
         private GraphicsProfile ReadProfile()
         {
-            return new GraphicsProfile { FpsLimit = fpsMode.SelectedIndex == 0 ? "game" : fpsMode.SelectedIndex == 2 ? "0" : ((int)fps.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), Resolution = scale.Value / 100, Anisotropy = filtering.SelectedIndex, Upscaler = upscaler.SelectedIndex, VSync = vsync.Checked, Shadows = shadows.Checked, Docked = docked.Checked, Fullscreen = fullscreen.Checked };
+            return new GraphicsProfile { FpsLimit = fpsMode.SelectedIndex == 0 ? "game" : fpsMode.SelectedIndex == 2 ? "0" : ((int)fps.Value).ToString(System.Globalization.CultureInfo.InvariantCulture), Resolution = capabilities!=null&&capabilities.ProtectsRenderScale?1:scale.Value / 100, Anisotropy = filtering.SelectedIndex, Upscaler = upscaler.SelectedIndex, VSync = vsync.Checked, Shadows = shadows.Checked, Docked = docked.Checked, Fullscreen = fullscreen.Checked };
         }
         private void ShowProfile(GraphicsProfile p)
         {
             showingProfile=true;
+            scale.Maximum = 400; scale.Minimum = 25; scale.ReadOnly = false;
+            if(capabilities!=null&&capabilities.ProtectsRenderScale){p=p.Copy();p.Resolution=1;scale.Minimum=100;scale.Maximum=100;scale.ReadOnly=true;}
             fpsMode.SelectedIndex = p.FpsLimit == "game" ? 0 : p.FpsLimit == "0" ? 2 : 1;
             if (fpsMode.SelectedIndex == 1) fps.Value = Int32.Parse(p.FpsLimit);
             fps.Visible=fps.Enabled = fpsMode.SelectedIndex == 1; scale.Value = p.Resolution * 100;

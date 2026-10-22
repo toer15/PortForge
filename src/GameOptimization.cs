@@ -54,6 +54,7 @@ namespace PortForge
     {
         public readonly HashSet<string> Keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public bool SupportsGraphics { get { return new[] {"fps_limit", "resolution", "anisotropy", "shadows", "vsync", "docked", "fullscreen"}.All(Keys.Contains); } }
+        public bool ProtectsRenderScale { get { return Keys.Contains("render_scale_safety"); } }
         public static RuntimeCapabilities Parse(string table)
         {
             var result = new RuntimeCapabilities();
@@ -213,6 +214,7 @@ namespace PortForge
             string text = File.Exists(path) ? File.ReadAllText(path) : "";
             var existing=ReadValues(text);
             var supported = profile.Values();
+            if (capabilities.ProtectsRenderScale) { supported["resolution"] = "1"; supported["render_scale_safety"] = "1"; }
             if (!capabilities.Keys.Contains("upscaler")) supported.Remove("upscaler");
             if(supported.All(item=>existing.ContainsKey(item.Key)&&existing[item.Key]==item.Value))return null;
             string backup = File.Exists(path) ? path + ".before-portforge-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + ".bak" : null;
@@ -223,7 +225,12 @@ namespace PortForge
         {
             Save(exe,profile,capabilities);
             var actual=Load(exe).Values();
-            foreach(var item in profile.Values()) if(capabilities.Keys.Contains(item.Key)&&actual[item.Key]!=item.Value) throw new IOException("The saved "+item.Key+" setting did not match. The game was not started.");
+            foreach(var item in profile.Values()) if(capabilities.Keys.Contains(item.Key)&&actual[item.Key]!=(item.Key=="resolution"&&capabilities.ProtectsRenderScale?"1":item.Value)) throw new IOException("The saved "+item.Key+" setting did not match. The game was not started.");
+            if(capabilities.ProtectsRenderScale) {
+                string enabled;
+                if(!ReadValues(File.ReadAllText(ConfigPath(exe))).TryGetValue("render_scale_safety",out enabled)||enabled!="1")
+                    throw new IOException("Graphics protection could not be verified. The game was not started.");
+            }
         }
         public static Process SaveAndStart(string exe, GraphicsProfile profile, RuntimeCapabilities capabilities)
         {
@@ -369,6 +376,7 @@ namespace PortForge
             if (target < 10 || target > 1000) throw new ArgumentException("Choose a test target between 10 and 1000 FPS.");
             var cap = RuntimeCapabilities.Read(exe, token);
             if (!cap.Keys.Contains("log")) throw new IOException("This engine cannot run a measured timed test.");
+            if (cap.ProtectsRenderScale) { desired = desired.Copy(); desired.Resolution = 1; }
             string config = ConfigPath(exe);
             byte[] original = File.Exists(config) ? File.ReadAllBytes(config) : null;
             string rollback = config + ".tuning-recovery-" + Guid.NewGuid().ToString("N") + ".bak";
@@ -385,12 +393,13 @@ namespace PortForge
                 log.WriteLine("PortForge measured " + (gameplay ? "gameplay" : "startup") + " tuning | " + DateTime.UtcNow.ToString("u"));
                 log.WriteLine("Game: " + exe + "\r\nTarget: " + target + " FPS. " + (gameplay ? "Each sample plays the first minute of the game with scripted button presses (A) from a backed-up save. Other areas can still differ." : "Samples include loading and menus, not a gameplay guarantee."));
                 log.WriteLine("Samples render offscreen. Display upscaling and presentation costs are excluded; these measurements do not establish FSR speedups or displayed 1% lows.");
+                if(cap.ProtectsRenderScale)log.WriteLine("Graphics protection keeps internal rendering at 100%; these samples do not test reduced internal resolution.");
                 try
                 {
                     progress.Report(gameplay ? "Warming the shader cache by playing the opening of the game (" + seconds + " seconds). Your settings and save will be restored." : "Warming the startup scene and shader cache (8 seconds). Your original settings will be restored.");
                     log.WriteLine(RunProtectedSample(exe, "-H --seconds=" + (gameplay ? seconds : 8) + " --log=1 --fullscreen=0 --fps_limit=" + testLimit + " --vsync=" + testVsync + workload, (gameplay ? seconds : 8) + 45, token, gameplay));
                     string[] names = preferSmoothness ? new[] {"Current", "Lower", "Half"} : new[] {"Current", "Performance", "Balanced", "Quality"};
-                    var testedScales = new HashSet<decimal>();
+                    var testedScales = new HashSet<string>();
                     foreach (string name in names)
                     {
                         token.ThrowIfCancellationRequested(); EnsureStopped(exe);
@@ -398,8 +407,11 @@ namespace PortForge
                         if (preferSmoothness)
                         {
                             p.Resolution = Math.Max(.25m, desired.Resolution * (name == "Lower" ? .75m : name == "Half" ? .5m : 1m));
-                            if (!testedScales.Add(p.Resolution)) continue;
                         }
+                        if (cap.ProtectsRenderScale) {
+                            p.Resolution = 1;
+                            if (!testedScales.Add("native|" + p.Anisotropy.ToString(Invariant))) continue;
+                        } else if (preferSmoothness && !testedScales.Add(p.Resolution.ToString(Invariant))) continue;
                         progress.Report("Testing " + name + " at " + (p.Resolution * 100).ToString("0") + "% render scale (" + seconds + " seconds, " + (gameplay ? "playing the opening of the game" : "startup scene") + ").");
                         // CLI overrides do not change the player's chosen limiter. Test the chosen target only for this run.
                         string args = "-H --seconds=" + seconds + " --log=1 --fullscreen=0 --fps_limit=" + testLimit + " --vsync=" + testVsync + " --resolution=" + p.Resolution.ToString(Invariant) + " --anisotropy=" + p.Anisotropy + " --shadows=" + (p.Shadows ? "1" : "0") + " --docked=" + (p.Docked ? "1" : "0") + workload;
