@@ -109,6 +109,25 @@ namespace PortForge
 
         public int PipelineThreads { get { return PipelineThreadsFor(LogicalCpus); } }
 
+        public string Details
+        {
+            get
+            {
+                string graphics = Gpus.Count == 0 ? "Not detected" : String.Join("; ", Gpus.Select(g => g.Name + (g.VramMb > 0 ? " (" + (g.VramMb / 1024.0).ToString("0.#", CultureInfo.InvariantCulture) + " GB dedicated)" : " (dedicated memory unknown)")));
+                return "CPU: " + (Cpu.Length == 0 ? "Not detected" : Cpu) + " (" + LogicalCpus + " threads available)\r\nGraphics: " + graphics + "\r\nRAM: " + (RamGb > 0 ? RamGb + " GB usable" : "Not detected") + ". " + (Vulkan ? "Vulkan loader found; the game checks GPU support." : "Vulkan loader not found; check the graphics driver.");
+            }
+        }
+
+        // Automatic conversion prioritizes headroom. Higher quality can be selected later after measuring gameplay.
+        public GraphicsProfile AutomaticBaseline(GraphicsProfile current)
+        {
+            var p = current.Copy();
+            if (Tier == PcTier.Unknown || Tier == PcTier.Unsupported) return p;
+            p.Resolution = Math.Min(p.Resolution, Tier == PcTier.Entry ? .75m : 1m);
+            p.Anisotropy = Math.Min(p.Anisotropy, Tier == PcTier.Entry ? 2 : Tier == PcTier.Mid ? 4 : 8);
+            return p;
+        }
+
         public static bool LooksIntegrated(string name, long vramMb) { return IntegratedName.IsMatch(name ?? "") && !Regex.IsMatch(name ?? "", @"\bArc\b", RegexOptions.IgnoreCase) || (vramMb > 0 && vramMb < 1024 && !Weak.IsMatch(name ?? "") && !Regex.IsMatch(name ?? "", @"(RTX|GTX|RX\s*\d|Arc)", RegexOptions.IgnoreCase)); }
 
         /// <summary>Sorts a PC into a tier. Pure, so every rule can be tested without the hardware.</summary>

@@ -47,6 +47,7 @@ namespace PortForge
                 }
                 else if (Directory.Exists(saveFolder)) Directory.Delete(saveFolder, true);
                 if (logBytes != null) File.WriteAllBytes(logPath, logBytes);
+                else if (File.Exists(logPath)) File.Delete(logPath);
                 if (Directory.Exists(backupRoot)) Directory.Delete(backupRoot, true);
             }
             catch (Exception e)

@@ -45,6 +45,7 @@ internal static class OptimizationTests
             var sample = GameOptimization.ParseSample("sample", profile, "vulkan: 3 frames over 50 ms in the last 600\nframes=1160 hash=ab12\n", 20);
             Check(sample.Fps == 58 && sample.SlowFrames == 3, "Measured FPS and reported stalls parse from runtime output");
             Fails(() => GameOptimization.ParseSample("bad", profile, "frames=0 hash=0", 20), "A no-frame or failed startup never becomes a valid tuning result");
+            Fails(() => GameOptimization.ParseSample("crashed",profile,"FATAL: guest crash\nframes=1200 hash=1",20),"A crash report cannot become a tuning recommendation even when frames were recorded");
             var low = new BenchmarkSample { Success = true, Frames = 1200, Fps = 60, Profile = new GraphicsProfile { Resolution = .75m } };
             var high = new BenchmarkSample { Success = true, Frames = 1180, Fps = 59, Profile = new GraphicsProfile { Resolution = 1.5m } };
             Check(GameOptimization.Select(new[] {low, high}, 60) == high, "Automatic selection keeps higher detail when it meets the target");
@@ -77,6 +78,38 @@ internal static class OptimizationTests
             Check(File.ReadAllText(Path.Combine(saveFolder, "slot.dat")) == "my progress" && !File.Exists(Path.Combine(saveFolder, "extra.dat")), "Gameplay tuning cannot change or add to the game save");
             Check(File.ReadAllBytes(Path.ChangeExtension(exe, ".log")).SequenceEqual(logBytes) && File.ReadAllBytes(config).SequenceEqual(bytes), "Gameplay tuning puts back the player log and exact settings");
             Check(!Directory.GetDirectories(root, "PortForge-test-backup-*").Any(), "Gameplay tuning removes its temporary backups");
+            var fastGpu = new[] {new GpuInfo {Name="NVIDIA GeForce RTX 4090",VramMb=24576}};
+            var strong = HardwareProfile.Classify("Synthetic strong CPU",16,32,fastGpu,true);
+            var entry = HardwareProfile.Classify("Synthetic small CPU",4,8,new[]{new GpuInfo{Name="Intel(R) UHD Graphics 770",VramMb=128}},true);
+            var picked = new GraphicsProfile {FpsLimit="120",VSync=false,Fullscreen=true,Resolution=2m,Anisotropy=16,Shadows=false,Docked=false};
+            var strongPlan=PcOptimization.SettingsFor(strong,picked,cap);var entryPlan=PcOptimization.SettingsFor(entry,picked,cap);
+            Check(strongPlan["resolution"]=="1"&&entryPlan["resolution"]=="0.75"&&strongPlan["pipeline_threads"]=="6"&&entryPlan["pipeline_threads"]=="1"&&entryPlan["jit_threads"]=="1", "Automatic profiles scale quality and worker counts for strong and small PCs without automatic upscaling");
+            Check(strongPlan["fps_limit"]=="120"&&strongPlan["vsync"]=="0"&&strongPlan["fullscreen"]=="1"&&strongPlan["shadows"]=="0"&&!strongPlan.ContainsKey("async_translation"), "PC matching preserves timing, display choices and experimental shader preferences");
+            var noWorkers=new RuntimeCapabilities();noWorkers.Keys.UnionWith(picked.Values().Keys);
+            Check(!PcOptimization.SettingsFor(strong,picked,noWorkers).ContainsKey("pipeline_threads"),"Unsupported engine worker settings are not written");
+            var steady=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=1,WorstFrameMs=70,Profile=new GraphicsProfile{Resolution=.75m}};
+            var hitching=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=12,WorstFrameMs=500,Profile=new GraphicsProfile{Resolution=1m}};
+            Check(GameOptimization.SelectSmooth(new[]{steady,hitching},60,1)==steady,"Automatic matching chooses fewer freezes when average FPS is equal");
+            hitching.SlowFrames=1;hitching.WorstFrameMs=800;
+            Check(GameOptimization.SelectSmooth(new[]{steady,hitching},60,1)==steady,"A much longer worst freeze can lower the selected resolution despite equal FPS and stall counts");
+            hitching.WorstFrameMs=100;
+            Check(GameOptimization.SelectSmooth(new[]{steady,hitching},60,1)==hitching,"Small timing differences do not unnecessarily lower image quality");
+            string pcIni="fps_limit=120\nvsync=0\nresolution=2\nanisotropy=16\ngamepad_map=A:B\nasync_translation=0\npc_profile_test=1\n";
+            File.WriteAllText(config,pcIni);
+            var baseline=PcOptimization.Configure(exe,strong,false,new Updates(),CancellationToken.None);
+            var baselineValues=GameOptimization.ReadValues(File.ReadAllText(config));
+            Check(baseline.Warning==null&&!baseline.Measured&&baselineValues["resolution"]=="1"&&baselineValues["pipeline_threads"]=="6"&&baselineValues["jit_threads"]=="3"&&baselineValues["gamepad_map"]=="A:B"&&baselineValues["async_translation"]=="0", "A real configuration write applies and verifies only supported PC settings while preserving other choices");
+            Check(File.ReadAllText(baseline.ReportPath).Contains("Synthetic strong CPU")&&File.ReadAllText(baseline.ReportPath).Contains("not game performance measurements"),"The hardware report distinguishes an unmeasured baseline from game measurements");
+            var measured=PcOptimization.Configure(exe,strong,true,new Updates(),CancellationToken.None);
+            var measuredValues=GameOptimization.ReadValues(File.ReadAllText(config));
+            Check(measured.Warning==null&&measured.Measured&&measuredValues["resolution"]=="0.75"&&measuredValues["fps_limit"]=="120"&&measuredValues["vsync"]=="0", "End-to-end PC matching measures actual fixture processes and saves the smoother profile without changing the frame cap");
+            string measuredReport=File.ReadAllText(Directory.GetFiles(root,"PortForge-performance-*.txt").OrderByDescending(x=>x).First());
+            Check(System.Text.RegularExpressions.Regex.Matches(measuredReport,"save_before=my progress").Count==4&&File.ReadAllText(Path.Combine(saveFolder,"slot.dat"))=="my progress"&&!File.Exists(Path.Combine(saveFolder,"extra.dat")),"Warm-up and all three comparisons start from the same save and restore it afterwards");
+            using(var cancelled=new CancellationTokenSource())
+            {cancelled.Cancel();bool stopped=false;string before=File.ReadAllText(config);try{PcOptimization.Configure(exe,strong,true,new Updates(),cancelled.Token);}catch(OperationCanceledException){stopped=true;}Check(stopped&&File.ReadAllText(config)==before,"Cancelling PC matching before it starts writes no settings");}
+            File.Delete(Path.ChangeExtension(exe,".log"));
+            using(new GameStateGuard(exe))File.WriteAllText(Path.ChangeExtension(exe,".log"),"temporary benchmark log");
+            Check(!File.Exists(Path.ChangeExtension(exe,".log")),"A benchmark does not leave a session log behind when none existed before it");
             Console.WriteLine(checks + " optimization checks passed. Evidence: " + root); return 0;
         }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }

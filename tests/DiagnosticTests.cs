@@ -59,7 +59,8 @@ internal static class DiagnosticTests
             string message=GameDiagnostics.Repair(exe,cap,null,null,true);
             Check(message.Contains("Shader cache warmed")&&message.Contains("10 pipelines built"),"The warm-up repair runs the scripted play-through and reports what it built");
             Check(File.ReadAllText(Path.Combine(saveFolder,"slot.dat"))=="original save"&&!File.Exists(Path.Combine(saveFolder,"extra.dat")),"The scripted play-through cannot change or add to the game's save");
-            Check(File.ReadAllText(Path.ChangeExtension(exe,".log"))==warmLog&&File.ReadAllText(Path.ChangeExtension(exe,".ini"))==warmIni,"The player's own log and settings are put back after the warm-up");
+            var afterWarm=GameOptimization.ReadValues(File.ReadAllText(Path.ChangeExtension(exe,".ini")));
+            Check(File.ReadAllText(Path.ChangeExtension(exe,".log"))==warmLog&&GameOptimization.ReadValues(warmIni).All(p=>afterWarm.ContainsKey(p.Key)&&afterWarm[p.Key]==p.Value),"The player's log and original settings are preserved while the supported worker repair is kept");
             Check(!Directory.GetDirectories(root,"PortForge-test-backup-*").Any()&&!Directory.GetDirectories(Path.Combine(root,"Diagnostic game_data"),"save.pf-test-*").Any(),"Temporary backups are removed after a successful warm-up");
             var again=GameDiagnostics.Scan(exe,cap,null).Issues.First(i=>i.Id=="pipeline_stalls");
             Check(again.Fix==null&&again.Evidence.Contains("already applied"),"The same recorded session is not warmed again and again");

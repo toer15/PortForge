@@ -37,6 +37,8 @@ namespace PortForge
         private readonly ToolTip tips = new ToolTip();
         private readonly Button downloads = Button("Downloads", false), updates = Button("Check for updates", false), doctorButton = Button("AI Doctor", false);
         private readonly Label doctorStatus = new Label();
+        private readonly Label hardwareInfo = Caption("Checking this PC in the background...", 9, Muted, false);
+        private HardwareProfile detectedHardware;
         private readonly CheckBox doctorAuto = new CheckBox { Text = "Fix automatically", Checked = true, AutoSize = true, AccessibleName = "AI Doctor fixes automatically" },
             doctorAi = new CheckBox { Text = "Extra AI review (Codex)", Checked = true, AutoSize = true, AccessibleName = "AI Doctor extra review with Codex" };
         private readonly System.Collections.Generic.List<DoctorEvent> doctorEvents = new System.Collections.Generic.List<DoctorEvent>();
@@ -47,7 +49,8 @@ namespace PortForge
         private DateTime lastDoctorNotice = DateTime.MinValue;
         /// <summary>Tests turn this off so a test window never watches or repairs real games.</summary>
         public static bool StartDoctorOnShow = true;
-        private readonly CheckBox autoTune = new CheckBox { Text = "Automatically tune each new game (about 4 minutes)", Checked = true, AutoSize = true, AccessibleName = "Automatically tune new games", Margin = new Padding(0, 0, 0, 15) };
+        private readonly CheckBox matchHardware = new CheckBox { Text = "Match new games to this PC", Checked = true, AutoSize = true, AccessibleName = "Match games to this PC", Margin = new Padding(0, 0, 0, 6) };
+        private readonly CheckBox autoTune = new CheckBox { Text = "Measure game settings (takes a few minutes)", Checked = true, AutoSize = true, AccessibleName = "Automatically tune new games", Margin = new Padding(0, 0, 0, 15) };
         private CancellationTokenSource cancellation;
         private string result, lastLogPath, actionField, recoveryFolder;
         private bool initializing = true;
@@ -55,7 +58,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.17 | Switch to PC"; AppIcon.Apply(this);
+            Text = "PortForge 0.18 | Switch to PC"; AppIcon.Apply(this);
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -128,6 +131,11 @@ namespace PortForge
             fields.Padding = new Padding(0, 0, 14, 0);
             leftScroll.Controls.Add(fields);
             left.Controls.Add(leftScroll, 0, 0);
+            fields.Controls.Add(Section("Your PC"));
+            hardwareInfo.AccessibleName = "Detected hardware"; fields.Controls.Add(hardwareInfo);
+            var hardwareHint = Caption("Automatic matching uses this PC's hardware and game measurements. It works without an AI account.", 9, Muted, false);
+            hardwareHint.Margin = new Padding(0, 0, 0, 14); fields.Controls.Add(hardwareHint);
+            fields.SizeChanged += delegate { int width = Math.Max(220, fields.ClientSize.Width - 18); hardwareInfo.MaximumSize = hardwareHint.MaximumSize = new Size(width, 0); };
             fields.Controls.Add(Section("1   Choose your game"));
             AddField(fields, "Game file", input, "Select an .nsp, .xci or .nro file. Use Folder if your game is already extracted.",
                 delegate { PickFile(input, "Switch game files|*.nro;*.nsp;*.xci;*.dnsp;*.dxci|All files|*.*"); }, true);
@@ -136,7 +144,7 @@ namespace PortForge
             fields.Controls.Add(Section("2   Choose where to save"));
             AddField(fields, "Save folder", output, "A new folder with your game name will be created here.", delegate { PickFolder(output); }, false);
             output.Text = AppPaths.DefaultGamesFolder;
-            fields.Controls.Add(autoTune);
+            fields.Controls.Add(matchHardware); fields.Controls.Add(autoTune);
 
             extraToggle.Height = 34;
             extraToggle.Dock = DockStyle.Top;
@@ -232,6 +240,7 @@ namespace PortForge
             { if (cancellation != null) { e.Cancel = true; CancelConversion(); } };
             Shown += delegate { AppPaths.RefreshRegistration(); };
             Shown += async delegate { await QuietUpdateCheck(); };
+            Shown += async delegate { await DetectHardware(); };
             Shown += delegate { if (StartDoctorOnShow) StartDoctor(); };
             FormClosed += delegate { doctorUiTimer.Stop(); doctorUiTimer.Dispose(); if (doctor != null) doctor.Dispose(); tray.Visible = false; tray.Dispose(); };
         }
@@ -254,6 +263,20 @@ namespace PortForge
             doctorUiTimer.Tick += delegate { FlushDoctorUpdates(); }; doctorUiTimer.Start();
             int count = doctor.Games.Length;
             doctorStatus.Text = "AI Doctor: " + (count == 0 ? "ready. It starts watching a game once you convert one or open it in Graphics and FPS." : "watching " + count + " game(s). Problems are explained live and fixed when the game closes.");
+        }
+
+        private async Task DetectHardware()
+        {
+            try
+            {
+                var pc = await Task.Run(() => HardwareProfile.Detect());
+                if (IsDisposed || Disposing) return;
+                detectedHardware = pc; hardwareInfo.Text = pc.Details;
+            }
+            catch (Exception)
+            {
+                if (!IsDisposed && !Disposing) hardwareInfo.Text = "Hardware could not be read yet. Conversion will retry the hardware check.";
+            }
         }
 
         private void FlushDoctorUpdates()
@@ -384,7 +407,7 @@ namespace PortForge
         private async Task Compile()
         {
             if (cancellation != null || !CheckRequired()) return;
-            var request = new NativeRequest { Name = name.Text.Trim(), Input = input.Text.Trim(), Backend = backend.Text.Trim(), Output = output.Text.Trim(), ProductKeys = keys.Text.Trim(), TitleKeys = titleKeys.Text.Trim(), AutoOptimize = autoTune.Checked };
+            var request = new NativeRequest { Name = name.Text.Trim(), Input = input.Text.Trim(), Backend = backend.Text.Trim(), Output = output.Text.Trim(), ProductKeys = keys.Text.Trim(), TitleKeys = titleKeys.Text.Trim(), AutoOptimize = autoTune.Checked, MatchHardware = matchHardware.Checked, Hardware = detectedHardware };
             cancellation = new CancellationTokenSource();
             CancellationToken token = cancellation.Token;
             int current = ++operation;
@@ -413,8 +436,9 @@ namespace PortForge
                 try { File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last-game.txt"), Path.Combine(result, request.Name + ".exe")); } catch { }
                 if (doctor != null) doctor.Watch(Path.Combine(result, request.Name + ".exe"));
                 ShowStatus("DONE", "Your files are ready", "The Windows game files were created successfully. Open the game folder to find " + request.Name + ".exe. Whether the game runs depends on game support.", Mint);
+                if (request.PcSummary != null) ShowStatus("DONE", "Your game settings are ready", request.PcSummary + " See PortForge-PC-settings.txt in the game folder for the hardware and settings used. Game compatibility can vary.", Mint);
                 if (request.TuningWarning != null)
-                    ShowStatus("DONE / TUNING SKIPPED", "Your files are ready", "The game files were created, but automatic tuning could not finish. See Open full log for the reason, or try Graphics and FPS for this game.", Blue);
+                    ShowStatus("DONE / CHECK SETTINGS", "Your files are ready", (request.PcSummary ?? "The game files were created.") + " Automatic tuning could not finish. Open full log for the reason, or use Graphics and FPS.", Blue);
                 statusAction.Text = "Open game folder";
                 statusAction.Visible = true;
                 AppendLog("DONE: Files created in " + result);

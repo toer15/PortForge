@@ -32,7 +32,7 @@ internal static class NativeTests
             Directory.CreateDirectory(root);
             string input = Path.Combine(root, "Switch code with spaces.nro");
             File.Copy(args[1], input);
-            var request = new NativeRequest { Name = "Compiled Switch Test", Input = input, Backend = Path.GetFullPath(args[0]), Output = Path.Combine(root, "exports") };
+            var request = new NativeRequest { Name = "Compiled Switch Test", Input = input, Backend = Path.GetFullPath(args[0]), Output = Path.Combine(root, "exports"), MatchHardware = false };
             Check(NativeConversion.DetectInput(input) == "NRO", "Switch NRO detected from its header");
             var stages = new StageReporter();
             string built = NativeConversion.Convert(request, new Reporter(), CancellationToken.None, stages);
@@ -49,6 +49,7 @@ internal static class NativeTests
             string autoLog = Directory.GetFiles(request.Output, autoRequest.Name + "-build-*.log").Single();
             Check(File.ReadAllText(autoLog).Contains("Automatic tuning could not finish"), "Unsupported automatic tuning is recorded as a warning instead of a conversion failure");
             Check(!String.IsNullOrWhiteSpace(autoRequest.TuningWarning), "Skipped tuning is available to show prominently in the completion status");
+            Check(File.Exists(Path.Combine(autoBuilt, PcOptimization.ReportName)) && !String.IsNullOrWhiteSpace(autoRequest.PcSummary), "Conversion automatically writes a report of this PC and the settings applied even when measurement cannot finish");
             File.Delete(input);
             string moved = Path.Combine(root, "Moved native game & spaces");
             Directory.Move(built, moved);

@@ -51,6 +51,10 @@ internal static class NativeInterfaceTests
                 form.Show();
                 Application.DoEvents();
                 var controls = All(form).ToList();
+                PumpUntil(() => controls.OfType<Label>().Single(l => l.AccessibleName == "Detected hardware").Text.Contains("CPU:"));
+                string hardware = controls.OfType<Label>().Single(l => l.AccessibleName == "Detected hardware").Text;
+                Check(hardware.Contains("Graphics:") && hardware.Contains("RAM:") && controls.OfType<CheckBox>().Single(c => c.AccessibleName == "Match games to this PC").Checked && controls.OfType<CheckBox>().Single(c => c.AccessibleName == "Automatically tune new games").Checked,
+                    "Startup detects and shows this PC's CPU, graphics and RAM with matching and measurement enabled");
                 Check(controls.OfType<Button>().Any(b => b.Text == "Graphics and FPS"), "Graphics controls are directly accessible from the main screen");
                 Check(controls.OfType<Button>().Any(b => b.Text == "Downloads"), "Downloads are directly accessible from the main screen");
                 var boxes = controls.OfType<TextBox>().ToDictionary(box => box.AccessibleName);

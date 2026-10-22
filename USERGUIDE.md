@@ -147,6 +147,16 @@ To remove it, use **Installed apps > PortForge > Uninstall**. It removes the pro
 
 Silent install for IT use: `PortForge-Setup.exe /S /D=C:\Tools\PortForge /NODESKTOP /NOLAUNCH`.
 
+## Automatic settings for your PC
+
+The main window shows **Your PC** when PortForge opens: the CPU, available CPU threads, Windows graphics adapters, dedicated graphics memory and RAM. Detection runs in the background. Finding a Vulkan loader is not proof that a GPU can run a particular game; the runtime checks that when it starts.
+
+**Match new games to this PC** is on by default. After conversion, it saves supported graphics settings and shader/JIT worker counts for the computer doing the conversion, and verifies what was saved. Automatic matching starts at no more than 100% scale (75% for entry hardware). It keeps FPS limits, VSync, controllers and experimental shader choices. It works with supported local inputs and with games handed over from Downloads. No AI account or hardware upload is required.
+
+**Measure game settings** is also on by default. The app warms the cache, then compares the baseline with lower resolutions on this PC. It prefers measured FPS and fewer/shorter freezes before image quality, while tolerating small timing differences. Every sample starts from the same protected save. Scripted button presses may remain in a menu in some games; later areas can behave differently.
+
+The completed game folder contains **PortForge-PC-settings.txt**, identifying the hardware, applied settings and whether measurement succeeded. If a benchmark cannot finish, the hardware baseline is kept and the completion status explains the limitation. Switching measurement off still applies the baseline; switching matching off leaves the old manual tuning path available. Converted games still use the ScarletNX AOT/JIT runtime. Hardware matching cannot guarantee zero lag, compatibility with every game or native-only execution.
+
 ## Auto fix everything
 
 On the **Engine** tab, **Auto fix everything** works through one game in four steps: it puts the PortForge Engine under the game, applies every repair the app knows (each with a backup), matches the engine's shader workers to this PC, and plays the game for 20 seconds to check it works. If the engine makes the game fail that check, the original engine is put back. The report lists what was fixed, what was already fine, what the check measured, and what no setting can change. Close the game first.

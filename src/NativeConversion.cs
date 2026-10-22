@@ -13,6 +13,9 @@ namespace PortForge
     {
         public string Name, Input, Backend, Output, ProductKeys, TitleKeys;
         public bool AutoOptimize;
+        public bool MatchHardware = true;
+        public HardwareProfile Hardware;
+        public string PcSummary;
         public string TuningWarning;
     }
 
@@ -66,6 +69,7 @@ namespace PortForge
         public static string Convert(NativeRequest r, IProgress<string> progress, CancellationToken token, IProgress<ConversionStatus> status = null)
         {
             r.TuningWarning = null;
+            r.PcSummary = null;
             ReportStatus(status, "Checking your choices", "Checking the game file, conversion engine and save folder.");
             Validate(r);
             token.ThrowIfCancellationRequested();
@@ -120,7 +124,16 @@ namespace PortForge
                         "Graphics, audio, saves, controllers and service compatibility depend on this backend and game.\r\n" +
                         "Game assets are copied from the selected input. No keys are intentionally included.\r\n" +
                         "The backend targets the build PC's CPU features; moving to an older CPU is not guaranteed.\r\n");
-                    if (r.AutoOptimize)
+                    if (r.MatchHardware)
+                    {
+                        ReportStatus(status, "Matching this PC", "Choosing settings for this computer. Measured tuning protects the game's save and settings.");
+                        var pcProgress = new InlineProgress(line => { log.WriteLine(line); progress.Report(line); ReportStatus(status, "Matching this PC", line); });
+                        var matched = PcOptimization.Configure(exe, r.Hardware, r.AutoOptimize, pcProgress, token);
+                        r.PcSummary = matched.Summary; r.TuningWarning = matched.Warning;
+                        log.WriteLine(matched.Summary); progress.Report(matched.Summary);
+                        if (matched.Warning != null) { log.WriteLine("WARNING: " + matched.Warning); progress.Report(matched.Warning); }
+                    }
+                    else if (r.AutoOptimize)
                     {
                         ReportStatus(status, "Tuning graphics", "Comparing four startup profiles. This takes about two minutes. Gameplay performance can vary.");
                         try

@@ -69,7 +69,7 @@ namespace PortForge
     {
         public string Name, Diagnostic;
         public GraphicsProfile Profile;
-        public int Frames, SlowFrames;
+        public int Frames, SlowFrames, WorstFrameMs;
         public double Fps;
         public bool Success;
     }
@@ -249,10 +249,12 @@ namespace PortForge
         {
             var m = Regex.Match(output, @"(?m)^frames=(\d+)\b");
             int frames;
-            if (!m.Success || !Int32.TryParse(m.Groups[1].Value, out frames) || frames < 2 || output.Contains("is not a setting"))
+            if (!m.Success || !Int32.TryParse(m.Groups[1].Value, out frames) || frames < 2 || output.Contains("is not a setting") || Regex.IsMatch(output, @"\bFATAL:|\*\*\* Crash|No new frame for \d+ seconds"))
                 throw new IOException("The engine did not report usable frame measurements. Settings were left unchanged.");
             var slow = Regex.Matches(output, @"(\d+) frames over 50 ms").Cast<Match>().Select(x => Int32.Parse(x.Groups[1].Value)).ToList();
-            return new BenchmarkSample { Name = name, Profile = profile, Frames = frames, Fps = (double)frames / seconds, SlowFrames = slow.Count == 0 ? 0 : slow.Max(), Success = true, Diagnostic = output };
+            var stalls = GameDiagnostics.StallFrames(output);
+            var worst = Regex.Matches(output, @"(?:the slowest|worst) (\d+) ms").Cast<Match>().Select(x => Int32.Parse(x.Groups[1].Value)).Concat(stalls.Select(f => f.FrameMs)).ToList();
+            return new BenchmarkSample { Name = name, Profile = profile, Frames = frames, Fps = (double)frames / seconds, SlowFrames = Math.Max(slow.Count == 0 ? 0 : slow.Max(), stalls.Count), WorstFrameMs = worst.Count == 0 ? 0 : worst.Max(), Success = true, Diagnostic = output };
         }
         public static BenchmarkSample Select(IEnumerable<BenchmarkSample> samples, int target, decimal maxResolution = 4)
         {
@@ -264,7 +266,25 @@ namespace PortForge
         }
         public static int GameplaySeconds = 45;
         public static readonly string GameplayScript = String.Join(",", Enumerable.Range(0, 9).Select(i => (6000 + i * 4000) + ":1"));
-        public static OptimizationResult Tune(string exe, GraphicsProfile desired, int target, IProgress<string> progress, CancellationToken token, bool gameplay = true)
+        public static BenchmarkSample SelectSmooth(IEnumerable<BenchmarkSample> samples, int target, decimal maxResolution)
+        {
+            var good = samples.Where(x => x.Success && x.Frames > 1 && x.Profile.Resolution <= maxResolution).ToList();
+            if (good.Count == 0) throw new IOException("No profile completed a usable test. Your settings were left unchanged.");
+            double threshold = Math.Min(target * .95, good.Max(x => x.Fps) * .97);
+            var fast = good.Where(x => x.Fps >= threshold).ToList();
+            int slowBudget = fast.Min(x => x.SlowFrames) + 1;
+            var smooth = fast.Where(x => x.SlowFrames <= slowBudget).ToList();
+            double worstBudget = Math.Max(smooth.Min(x => x.WorstFrameMs) * 1.5, smooth.Min(x => x.WorstFrameMs) + 100);
+            return smooth.Where(x => x.WorstFrameMs <= worstBudget).OrderByDescending(x => x.Profile.Resolution).ThenByDescending(x => x.Profile.Anisotropy).ThenBy(x => x.SlowFrames).First();
+        }
+
+        private static string RunProtectedSample(string exe, string args, int timeout, CancellationToken token, bool gameplay)
+        {
+            using (var guard = gameplay ? new GameStateGuard(exe) : null)
+                return Run(exe, args, timeout, token);
+        }
+
+        public static OptimizationResult Tune(string exe, GraphicsProfile desired, int target, IProgress<string> progress, CancellationToken token, bool gameplay = true, bool preferSmoothness = false)
         {
             ValidateGame(exe); EnsureStopped(exe); desired.Validate();
             if (target < 10 || target > 1000) throw new ArgumentException("Choose a test target between 10 and 1000 FPS.");
@@ -276,6 +296,8 @@ namespace PortForge
             if (original != null) File.WriteAllBytes(rollback, original);
             var result = new OptimizationResult();
             int seconds = gameplay ? GameplaySeconds : 20;
+            string testLimit = preferSmoothness ? desired.FpsLimit : target.ToString(Invariant);
+            string testVsync = preferSmoothness && desired.VSync ? "1" : "0";
             string workload = gameplay ? " --script=" + GameplayScript + " --press_len=300" : "";
             string report = Path.Combine(Path.GetDirectoryName(exe), "PortForge-performance-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + ".txt");
             using (var guard = gameplay ? new GameStateGuard(exe) : null)
@@ -286,30 +308,37 @@ namespace PortForge
                 try
                 {
                     progress.Report(gameplay ? "Warming the shader cache by playing the opening of the game (" + seconds + " seconds). Your settings and save will be restored." : "Warming the startup scene and shader cache (8 seconds). Your original settings will be restored.");
-                    log.WriteLine(Run(exe, "-H --seconds=" + (gameplay ? seconds : 8) + " --log=1 --fullscreen=0 --fps_limit=" + target + " --vsync=0" + workload, (gameplay ? seconds : 8) + 45, token));
-                    string[] names = {"Current", "Performance", "Balanced", "Quality"};
+                    log.WriteLine(RunProtectedSample(exe, "-H --seconds=" + (gameplay ? seconds : 8) + " --log=1 --fullscreen=0 --fps_limit=" + testLimit + " --vsync=" + testVsync + workload, (gameplay ? seconds : 8) + 45, token, gameplay));
+                    string[] names = preferSmoothness ? new[] {"Current", "Lower", "Half"} : new[] {"Current", "Performance", "Balanced", "Quality"};
+                    var testedScales = new HashSet<decimal>();
                     foreach (string name in names)
                     {
                         token.ThrowIfCancellationRequested(); EnsureStopped(exe);
-                        var p = name == "Current" ? desired.Copy() : GraphicsProfile.Preset(name, desired);
+                        var p = name == "Current" || preferSmoothness ? desired.Copy() : GraphicsProfile.Preset(name, desired);
+                        if (preferSmoothness)
+                        {
+                            p.Resolution = Math.Max(.25m, desired.Resolution * (name == "Lower" ? .75m : name == "Half" ? .5m : 1m));
+                            if (!testedScales.Add(p.Resolution)) continue;
+                        }
                         progress.Report("Testing " + name + " at " + (p.Resolution * 100).ToString("0") + "% render scale (" + seconds + " seconds, " + (gameplay ? "playing the opening of the game" : "startup scene") + ").");
                         // CLI overrides do not change the player's chosen limiter. Test the chosen target only for this run.
-                        string args = "-H --seconds=" + seconds + " --log=1 --fullscreen=0 --fps_limit=" + target + " --vsync=0 --resolution=" + p.Resolution.ToString(Invariant) + " --anisotropy=" + p.Anisotropy + " --shadows=" + (p.Shadows ? "1" : "0") + " --docked=" + (p.Docked ? "1" : "0") + workload;
+                        string args = "-H --seconds=" + seconds + " --log=1 --fullscreen=0 --fps_limit=" + testLimit + " --vsync=" + testVsync + " --resolution=" + p.Resolution.ToString(Invariant) + " --anisotropy=" + p.Anisotropy + " --shadows=" + (p.Shadows ? "1" : "0") + " --docked=" + (p.Docked ? "1" : "0") + workload;
                         try
                         {
-                            var sample = ParseSample(name, p, Run(exe, args, seconds + 45, token), seconds);
-                            result.Samples.Add(sample); log.WriteLine("\r\n" + name + ": " + sample.Fps.ToString("F1", Invariant) + " FPS, " + sample.SlowFrames + " reported frames over 50 ms\r\n" + sample.Diagnostic);
+                            var sample = ParseSample(name, p, RunProtectedSample(exe, args, seconds + 45, token, gameplay), seconds);
+                            result.Samples.Add(sample); log.WriteLine("\r\n" + name + ": " + sample.Fps.ToString("F1", Invariant) + " FPS, " + sample.SlowFrames + " reported frames over 50 ms, worst " + sample.WorstFrameMs + " ms\r\n" + sample.Diagnostic);
                             progress.Report(name + ": " + sample.Fps.ToString("F1") + " FPS in the " + (gameplay ? "gameplay" : "startup") + " sample.");
                         }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception error) { log.WriteLine(name + " failed: " + error); progress.Report(name + " could not be measured; trying the next profile."); }
                     }
                     token.ThrowIfCancellationRequested();
-                    var best = Select(result.Samples, target, desired.Resolution);
+                    var best = preferSmoothness ? SelectSmooth(result.Samples, target, desired.Resolution) : Select(result.Samples, target, desired.Resolution);
                     result.Profile = best.Profile.Copy();
                     result.Summary = best.Name + " chosen: " + best.Fps.ToString("F1") + " FPS average in the " + (gameplay ? "gameplay" : "startup") + " sample at " + (best.Profile.Resolution * 100).ToString("0") + "% scale. " +
                         (!gameplay && best.Fps < target * .95 ? "The test did not reach the target. " : "") + (gameplay ? "Measured while playing the first scenes, including loading. Later areas can be heavier. " : "Includes loading/menus; test demanding gameplay before raising quality. ") + " Your FPS and VSync choices are preserved. Select Save settings to apply.";
                     result.ReportPath = report; log.WriteLine("\r\n" + result.Summary);
+                    if (preferSmoothness) log.WriteLine("Automatic PC matching prioritized measured FPS and freezes before resolution. Scripted inputs may stay in a menu in some games; these are samples, not proof of later gameplay. Each sample starts from the original backed-up save.");
                     return result;
                 }
                 finally
