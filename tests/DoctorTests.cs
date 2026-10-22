@@ -109,6 +109,24 @@ internal static class DoctorTests
             Check(File.ReadAllBytes(otherExe).SequenceEqual(originalEngine) && !engineEvents.Any(e => e.Kind == "engine"), "A player's choice to keep the original engine is respected");
             EngineManager.FolderOverride = null;
             Check(LiveDoctor.AiProblem("ERROR: You've hit your usage limit. Upgrade to Pro").Contains("usage limit") && LiveDoctor.AiProblem("401 Unauthorized").Contains("not signed in") && LiveDoctor.AiProblem("something else").Contains("could not finish"), "Codex problems are explained in plain words");
+            // Every kind of PC is sorted by rules that can be checked without owning it.
+            Func<string, long, GpuInfo[]> one = (name, mb) => new[] { new GpuInfo { Name = name, VramMb = mb } };
+            Check(HardwareProfile.Classify("cpu", 16, 32, one("NVIDIA GeForce RTX 4090", 24576), false).Tier == PcTier.Unsupported, "A PC without a Vulkan driver is reported as unsupported with the reason");
+            Check(HardwareProfile.Classify("cpu", 12, 16, one("Intel(R) UHD Graphics 770", 128), true).Tier == PcTier.Entry, "Integrated graphics is an entry-level PC");
+            Check(HardwareProfile.Classify("cpu", 8, 16, one("AMD Radeon(TM) Graphics", 512), true).Tier == PcTier.Entry, "An AMD integrated GPU is an entry-level PC");
+            Check(HardwareProfile.Classify("cpu", 8, 16, one("NVIDIA GeForce GTX 1060 6GB", 6144), true).Tier == PcTier.Mid, "A 6 GB discrete card is a mid-range PC");
+            Check(HardwareProfile.Classify("cpu", 12, 16, one("NVIDIA GeForce RTX 3060", 12288), true).Tier == PcTier.High, "A large-memory card of a lower class is high-end, not enthusiast");
+            Check(HardwareProfile.Classify("cpu", 16, 32, one("AMD Radeon RX 9070 XT", 16304), true).Tier == PcTier.Enthusiast, "A top-class card with 16 GB is an enthusiast PC");
+            Check(HardwareProfile.Classify("cpu", 16, 8, one("NVIDIA GeForce RTX 4090", 24576), true).Tier == PcTier.Mid && HardwareProfile.Classify("cpu", 16, 6, one("NVIDIA GeForce RTX 4090", 24576), true).Tier == PcTier.Entry, "Little RAM holds a strong card back");
+            Check(HardwareProfile.Classify("cpu", 2, 32, one("NVIDIA GeForce RTX 4090", 24576), true).Tier == PcTier.Entry, "Two CPU threads hold a strong card back");
+            var discreteAndIntegrated = HardwareProfile.Classify("cpu", 16, 32, new[] { new GpuInfo { Name = "AMD Radeon(TM) Graphics", VramMb = 512 }, new GpuInfo { Name = "NVIDIA GeForce RTX 4070", VramMb = 12288 } }, true);
+            Check(discreteAndIntegrated.BestGpu.Name.Contains("4070"), "With two graphics chips the discrete one is the one rated");
+            Check(HardwareProfile.PipelineThreadsFor(16) == 6 && HardwareProfile.PipelineThreadsFor(4) == 2 && HardwareProfile.PipelineThreadsFor(64) == 8, "Pipeline workers scale with the CPU between two and eight");
+            var chosen = new GraphicsProfile { FpsLimit = "120", VSync = false, Fullscreen = true };
+            var matched = HardwareProfile.Classify("cpu", 16, 32, one("AMD Radeon RX 9070 XT", 16304), true).Recommended(chosen);
+            Check(matched.Resolution == 2m && matched.Anisotropy == 16 && matched.FpsLimit == "120" && !matched.VSync && matched.Fullscreen, "Matching the PC changes quality only and keeps the player's frame limit, VSync and display mode");
+            var here = HardwareProfile.Detect();
+            Check(here.LogicalCpus > 0 && here.Summary.Length > 0 && here.Estimate.Length > 0, "This PC can be read and described");
             // Games nobody told the doctor about are found by what a converted game looks like, wherever it was saved.
             string finds = Path.Combine(root, "finds"), deep = Path.Combine(finds, "Games", "Some Game"), ignored = Path.Combine(deep, "Some Game_data", "nested");
             Directory.CreateDirectory(ignored);

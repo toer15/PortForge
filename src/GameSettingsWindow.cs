@@ -102,14 +102,14 @@ namespace PortForge
             options.Padding = new Padding(0, 0, 18, 0);
             options.Controls.Add(Label("Choose a starting point", 12, Mint));
             var presets = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = false };
-            foreach (string text in new[] {"Performance", "Balanced", "Quality", "Reset defaults"})
+            foreach (string text in new[] {"Match my PC", "Performance", "Balanced", "Quality", "Reset defaults"})
             {
                 var b = Button(text, false); b.AutoSize = true; b.Height = 32;
                 string preset = text;
-                b.Click += delegate { try { ShowProfile(preset == "Reset defaults" ? new GraphicsProfile() : GraphicsProfile.Preset(preset, ReadProfile())); SetStatus("READY", "Settings changed", "Select Save settings to apply them next time you start the game.", Mint); } catch (Exception e) { Error(e); } };
+                b.Click += delegate { try { ShowProfile(preset == "Reset defaults" ? new GraphicsProfile() : preset == "Match my PC" ? HardwareProfile.Detect().Recommended(ReadProfile()) : GraphicsProfile.Preset(preset, ReadProfile())); SetStatus("READY", "Settings changed", "Select Save settings to apply them next time you start the game.", Mint); } catch (Exception e) { Error(e); } };
                 presets.Controls.Add(b);
             }
-            options.Controls.Add(presets);
+            options.Controls.Add(presets); var pcLine = Label("Checking this PC...", 9, Muted); pcLine.MaximumSize = new Size(700, 0); options.Controls.Add(pcLine); Shown += async delegate { var pc = await Task.Run(() => HardwareProfile.Detect()); pcLine.Text = "Your PC: " + pc.TierName + " (" + pc.Summary + "). " + pc.Why + " " + pc.Estimate + " Match my PC applies the settings this class of PC can afford; Auto tune measures the real game."; };
             var fpsRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoSize = true, Margin = new Padding(0) };
             fpsMode.Width = 235; fps.Width = 95; fpsRow.Controls.AddRange(new Control[] { fpsMode, fps });
             AddOption("FPS limit", fpsRow, delegate { fpsMode.SelectedIndex = 0; fps.Value = 120; });

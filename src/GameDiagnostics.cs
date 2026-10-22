@@ -143,7 +143,7 @@ namespace PortForge
             if(allowed.Contains("reduce_upscale")&&cap!=null&&cap.Keys.Contains("resolution"))changes["resolution"]="1";
             if(allowed.Contains("speed_pipelines")&&cap!=null&&cap.Keys.Contains("pipeline_threads")&&Environment.ProcessorCount>=6)
             {
-                int want=Math.Min(8,Environment.ProcessorCount-2),now;string iniText=File.Exists(GameOptimization.ConfigPath(exe))?File.ReadAllText(GameOptimization.ConfigPath(exe)):"";
+                int want=HardwareProfile.PipelineThreadsFor(Environment.ProcessorCount),now;string iniText=File.Exists(GameOptimization.ConfigPath(exe))?File.ReadAllText(GameOptimization.ConfigPath(exe)):"";
                 var current=GameOptimization.ReadValues(iniText);
                 if(!current.ContainsKey("pipeline_threads")||!Int32.TryParse(current["pipeline_threads"],out now)||now<want)changes["pipeline_threads"]=want.ToString(CultureInfo.InvariantCulture);
             }
