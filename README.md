@@ -1,8 +1,8 @@
-# PortForge 0.26 / Engine 1.9
+# PortForge 0.27 / Engine 1.10
 
-Performance presets now keep internal rendering at 100% on Engine 1.9. Reduced internal rendering was corrupting generated game images and could hide the world, produce huge incorrect surfaces, and break lighting. **Graphics protection** is enabled inside the engine by default, so existing 75% settings are protected even when a game runs directly. The app's presets, PC matching and Auto tune preserve it. New conversions and downloaded inputs use the bundled engine; existing watched games use the backed-up upgrade path.
+**Performance** now selects the game's handheld rendering mode with AMD FSR 1, while keeping intermediate images at their protected native scale. This lets the game choose a lower-resolution layout without blindly shrinking images used as game data. Balanced and Quality restore TV mode. Auto tune compares the two modes and prefers TV quality when handheld provides no measured benefit. Entry-level PC matching starts in handheld mode. New conversions and downloaded inputs use the bundled engine; watched games use the backed-up upgrade path.
 
-FSR 1 still upscales the finished SDR picture to a larger display. This safety fix removes the reduced-internal-resolution speed tradeoff; it does not establish a speedup or a universal rendering guarantee. Mario's saved scene was reproduced broken at 75%, then rendered correctly with protection on. See VALIDATION-0.26.md. The runtime still uses AOT/JIT translation; FSR 4, DLSS and frame generation remain unimplemented.
+The graphics window shows the latest recorded FSR dispatch or bypass status, including actual source/output sizes. Merely preparing the GPU shaders does not count as active upscaling. FSR adds presentation work; potential performance gains come from the game's lighter rendering mode. Mario rendered correctly at 1280x720 in handheld mode versus 1600x900 in TV mode on the tested scene, but the comparison did not establish an FPS or 1% low improvement. Some games render identically in both modes. See VALIDATION-0.27.md. The runtime remains AOT/JIT; FSR 4, DLSS and frame generation are not implemented.
 
 # PortForge
 

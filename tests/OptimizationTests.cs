@@ -150,16 +150,24 @@ internal static class OptimizationTests
             using(new GameStateGuard(exe))File.WriteAllText(Path.ChangeExtension(exe,".log"),"temporary benchmark log");
             Check(!File.Exists(Path.ChangeExtension(exe,".log")),"A benchmark does not leave a session log behind when none existed before it");
             var protectedCap = new RuntimeCapabilities(); protectedCap.Keys.UnionWith(cap.Keys); protectedCap.Keys.Add("render_scale_safety");
-            var performance = GraphicsProfile.Preset("Performance", profile);
+            var performance = GraphicsProfile.Preset("Performance", profile, true);
+            Check(!performance.Docked && performance.Upscaler == 1 && performance.Resolution == 1 && performance.FpsLimit == profile.FpsLimit && performance.Fullscreen == profile.Fullscreen && performance.VSync == profile.VSync,
+                "Protected Performance requests the game's handheld layout with FSR while preserving timing and fullscreen");
+            Check(GraphicsProfile.Preset("Balanced", performance, true).Docked && GraphicsProfile.Preset("Quality", performance, true).Docked,
+                "Protected Balanced and Quality can restore TV rendering after Performance");
             GameOptimization.SaveAndVerify(exe, performance, protectedCap);
             var protectedValues = GameOptimization.ReadValues(File.ReadAllText(config));
             Check(protectedValues["resolution"] == "1" && protectedValues["render_scale_safety"] == "1" && GameOptimization.Load(exe).FpsLimit == performance.FpsLimit, "Saving Performance on a protected engine preserves native game images and the player's frame cap");
             var protectedEntry = PcOptimization.SettingsFor(entry, performance, protectedCap);
-            Check(protectedEntry["resolution"] == "1" && protectedEntry["render_scale_safety"] == "1", "Automatic PC matching cannot downscale game data even on an entry-level PC");
+            Check(protectedEntry["resolution"] == "1" && protectedEntry["render_scale_safety"] == "1" && protectedEntry["docked"] == "0" && protectedEntry["upscaler"] == "1", "Entry-level PC matching selects handheld plus FSR without scaling intermediate game data");
             string protectedIni = "fps_limit=120\nvsync=0\nresolution=0.75\npc_profile_test=1\nfixture_graphics_protection=1\n";
             File.WriteAllText(config, protectedIni);
             var protectedTune = GameOptimization.Tune(exe, performance, 60, new Updates(), CancellationToken.None, true, true);
-            Check(protectedTune.Samples.Count == 1 && protectedTune.Samples.All(s=>s.Profile.Resolution==1) && File.ReadAllText(config)==protectedIni, "Protected Auto tune measures and labels native rendering, skips duplicate unsafe scales and restores the original settings");
+            Check(protectedTune.Samples.Count == 2 && protectedTune.Samples.All(s=>s.Profile.Resolution==1) && protectedTune.Samples.Select(s=>s.Profile.Docked).Distinct().Count()==2 && File.ReadAllText(config)==protectedIni, "Protected Auto tune compares actual TV and handheld processes, skips duplicate modes and restores the exact settings");
+            Check(!protectedTune.Profile.Docked && protectedTune.Samples.All(s=>s.Diagnostic.Contains("tested_mode=")) && !protectedTune.Summary.Contains("FSR speedup"), "Measured handheld p99 improvement selects handheld without claiming measured FSR cost");
+            var tiedHandheld = new BenchmarkSample {Success=true,Frames=1200,Fps=60,Profile=new GraphicsProfile{Docked=false}};
+            var tiedTv = new BenchmarkSample {Success=true,Frames=1200,Fps=60,Profile=new GraphicsProfile{Docked=true}};
+            Check(GameOptimization.SelectSmooth(new[]{tiedHandheld,tiedTv},60,1)==tiedTv, "TV image quality wins when handheld brings no measured smoothness benefit");
             Console.WriteLine(checks + " optimization checks passed. Evidence: " + root); return 0;
         }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }

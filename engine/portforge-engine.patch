@@ -5115,10 +5115,10 @@ index 6096f99..ed57f58 100644
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/upscale.c b/src/nx/gpu/vk/upscale.c
 new file mode 100644
-index 0000000..c68efad
+index 0000000..671827d
 --- /dev/null
 +++ b/src/nx/gpu/vk/upscale.c
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,173 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* Presentation-only FSR 1. Guest targets, timing, saves and game data are untouched. Two reusable images, no CPU
 +   readback or queue idle wait; allocation/format failures use the existing linear blit. Under vk_lock. */
@@ -5134,8 +5134,17 @@ index 0000000..c68efad
 +    VkSampler sampler;
 +    Surf easu, rcas;
 +    int failed;
++    int status;
 +    u64 frames;
 +} g_upscale;
++
++/* Report transitions, not every frame: a checked setting is not proof that a frame was upscaled. */
++static void report(int status, const char* reason, u32 w, u32 h, u32 dw, u32 dh) {
++    if (g_upscale.status == status) return;
++    g_upscale.status = status;
++    LOG("vulkan: FSR 1 %s, source %ux%u, output %ux%u, %s mode\n", reason, w, h, dw, dh,
++        g_settings.tv_mode ? "TV" : "handheld");
++}
 +
 +int vk_upscale_init(void) {
 +    if (g_upscale.failed) return 0;
@@ -5205,26 +5214,40 @@ index 0000000..c68efad
 +}
 +
 +Surf* vk_upscale(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh) {
-+    if (!src || !w || !h || !dw || !dh || dw < w || dh < h || (dw == w && dh == h) ||
++    if (!src || !w || !h || !dw || !dh ||
 +        x > src->sw || w > src->sw - x || y > src->sh || h > src->sh - y ||
 +        dw > g_vk.props.limits.maxImageDimension2D || dh > g_vk.props.limits.maxImageDimension2D ||
-+        src->layers != 1 || src->f.depth || src->f.is_int || src->f.bw != 1 || src->f.bh != 1) return NULL;
++        src->layers != 1 || src->f.depth || src->f.is_int || src->f.bw != 1 || src->f.bh != 1) {
++        report(2, "inactive: unsupported image or crop; standard scaling", w, h, dw, dh);
++        return NULL;
++    }
++    if (dw < w || dh < h || (dw == w && dh == h)) {
++        report(3, "inactive: no enlargement needed; maximize the window to upscale", w, h, dw, dh);
++        return NULL;
++    }
 +    VkFormat linear = vk_srgb_as(src->f.vk, 0);
 +    /* SDR only: preserve float/HDR and unusual formats through the normal path. */
 +    if (linear != VK_FORMAT_R8G8B8A8_UNORM && linear != VK_FORMAT_B8G8R8A8_UNORM &&
-+        linear != VK_FORMAT_A8B8G8R8_UNORM_PACK32) return NULL;
-+    if (!vk_upscale_init()) return NULL;
++        linear != VK_FORMAT_A8B8G8R8_UNORM_PACK32) {
++        report(4, "inactive: unsupported color format; standard scaling", w, h, dw, dh);
++        return NULL;
++    }
++    if (!vk_upscale_init()) {
++        report(5, "inactive: GPU setup unavailable; standard scaling", w, h, dw, dh);
++        return NULL;
++    }
 +    vk_surf_touch(src); /* scratch allocations may trim the cache; keep this frame's source alive */
 +    const VkComponentMapping identity = {0, 0, 0, 0};
 +    VkImageView input = vk_tex_view(src, VK_IMAGE_VIEW_TYPE_2D, 0, &identity, 0);
-+    if (!input) return NULL;
++    if (!input) { report(6, "inactive: input view unavailable; standard scaling", w, h, dw, dh); return NULL; }
 +    if (!image_make(&g_upscale.easu, dw, dh) || !image_make(&g_upscale.rcas, dw, dh)) {
 +        drop(&g_upscale.easu); drop(&g_upscale.rcas); g_upscale.failed = 1;
 +        LOG("vulkan: FSR 1 unavailable: no scratch image memory; using linear scaling\n");
++        report(7, "inactive: insufficient scratch memory; standard scaling", w, h, dw, dh);
 +        return NULL;
 +    }
 +    VkDescriptorSet sets[2] = {vk_desc_alloc(g_upscale.ds), vk_desc_alloc(g_upscale.ds)};
-+    if (!sets[0] || !sets[1]) return NULL;
++    if (!sets[0] || !sets[1]) { report(8, "inactive: descriptors unavailable; standard scaling", w, h, dw, dh); return NULL; }
 +    struct { i32 crop[4]; u32 size[2], srgb; float sharpness; } pc =
 +        {{(i32)x, (i32)y, (i32)w, (i32)h}, {dw, dh}, linear != src->f.vk, 0.5f};
 +    vk_render_end();
@@ -5251,6 +5274,7 @@ index 0000000..c68efad
 +    }
 +    vk_surf_use(cb, &g_upscale.rcas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +        VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
++    report(1, "active: EASU + RCAS dispatched", w, h, dw, dh);
 +    if (++g_upscale.frames == 1 || g_upscale.frames % 600 == 0)
 +        LOG("vulkan: FSR 1 upscaled %llu frames, latest %ux%u to %ux%u\n",
 +            (unsigned long long)g_upscale.frames, w, h, dw, dh);
@@ -5266,7 +5290,7 @@ index 0000000..c68efad
 +    if (g_upscale.ds) vkDestroyDescriptorSetLayout(g_vk.dev, g_upscale.ds, NULL);
 +    g_upscale.pipes[0] = g_upscale.pipes[1] = VK_NULL_HANDLE; g_upscale.sampler = VK_NULL_HANDLE;
 +    g_upscale.layout = VK_NULL_HANDLE; g_upscale.ds = VK_NULL_HANDLE; g_upscale.failed = 0;
-+    g_upscale.frames = 0;
++    g_upscale.frames = 0; g_upscale.status = 0;
 +}
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
 index db13c2d..bc621fc 100644
@@ -5762,10 +5786,10 @@ index 2bd6181..b587bf4 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..8c4d57d 100644
+index be57ac5..82af9a5 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -80,6 +80,24 @@ setting Game mods off
+@@ -80,13 +80,34 @@ setting Game mods off
      help order. The launcher's list of updates, DLCs and mods writes it. A mod's exefs/ is recompiled into the game
  
  table g_display_ini
@@ -5785,12 +5809,23 @@ index be57ac5..8c4d57d 100644
 +    startup
 +    words Linear|AMD FSR 1
 +    help AMD FSR 1 spatial upscaling and sharpening when the display is larger than the rendered image.
-+    help Lower resolution to reduce GPU work. This does not generate frames, change game speed, or remove CPU stalls.
++    help FSR adds GPU work. Handheld mode (docked=0) lets the game choose a lighter rendering layout where supported,
++    help which FSR then enlarges. FSR alone does not boost FPS, generate frames, change game speed or remove CPU stalls.
 +    help Unsupported formats or insufficient memory use linear scaling. FSR 4 and DLSS are not implemented.
  setting TV mode
      key docked
      int 0 1
-@@ -166,7 +184,17 @@ setting FPS limit
+     default 1
+     startup
+     words Off|On
+-    help 1 = TV mode (the console in its dock), 0 = handheld mode (1280x720)
++    help 1 = TV mode (the console in its dock), 0 = handheld mode (1280x720 display).
++    help The game chooses its own rendering layout; some games reduce resolution or effects in handheld mode.
++    help Internal resolution scaling stays protected. Use FSR 1 to enlarge the finished image to a larger window.
+ setting Fullscreen
+     key fullscreen
+     int 0 1
+@@ -166,7 +187,17 @@ setting FPS limit
      default game
      set options_fps_set
      help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
@@ -5809,7 +5844,7 @@ index be57ac5..8c4d57d 100644
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -188,8 +216,35 @@ setting Pipeline threads
+@@ -188,8 +219,35 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -6068,19 +6103,20 @@ index 53c5e45..3c043fc 100644
      vi_show_buffer(7, 0x40, 1, 1, 4, 1, 0, 1, crop, 0);
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
 diff --git a/tests/vulkan_headless.c b/tests/vulkan_headless.c
-index 25f0af2..9c57172 100644
+index 25f0af2..d2d3ce2 100644
 --- a/tests/vulkan_headless.c
 +++ b/tests/vulkan_headless.c
-@@ -795,6 +795,75 @@ static int check_rt_overlap(void) {
+@@ -795,6 +795,102 @@ static int check_rt_overlap(void) {
      return 0;
  }
  
-+/* Real FSR shaders: cropped constant color must survive odd sizes, border clamps, sRGB and repeated resize. */
++/* Real FSR shaders: crop/color/resize invariants plus a diagonal-edge comparison against linear scaling. */
 +static int check_upscaler(void) {
 +    CHECK(vk_upscale_init());
-+    for (int pass = 0; pass < 4; pass++) {
++    for (int pass = 0; pass < 8; pass++) {
 +        int srgb = pass & 1;
-+        u32 dw = pass < 2 ? 23 : 31, dh = pass < 2 ? 13 : 17;
++        int edge = pass >= 4;
++        u32 dw = pass % 4 < 2 ? 23 : 31, dh = pass % 4 < 2 ? 13 : 17;
 +        Surf src = {.w = 8, .h = 6, .sw = 8, .sh = 6, .layers = 1, .levels = 1,
 +            .type = VK_IMAGE_VIEW_TYPE_2D,
 +            .f = {.vk = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, .bpp = 4, .bw = 1, .bh = 1}};
@@ -6099,6 +6135,7 @@ index 25f0af2..9c57172 100644
 +            int inside = x >= 2 && x < 6 && y >= 1 && y < 5;
 +            u8* p = pixels + (y * 8 + x) * 4;
 +            p[0] = inside ? 64 : 255; p[1] = inside ? 128 : 0; p[2] = inside ? 192 : 0; p[3] = 255;
++            if (edge && inside) p[0] = p[1] = p[2] = x - 2 >= y - 1 ? 192 : 64;
 +        }
 +        VkCommandBuffer cb = vk_cmd();
 +        vk_surf_use(cb, &src, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -6125,29 +6162,54 @@ index 25f0af2..9c57172 100644
 +        rec_CmdBlitImage(cb, out->img, out->layout, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
 +        vk_barrier(cb, output, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
 +            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-+        u8* result = vk_readback_buffer((u64)dw * dh * 4, &readback);
++        u64 bytes = (u64)dw * dh * 4;
++        u8* result = vk_readback_buffer(bytes * (edge ? 2 : 1), &readback);
 +        CHECK(result);
 +        VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {dw, dh, 1}};
 +        rec_CmdCopyImageToBuffer(cb, output, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &copy);
++        if (edge) {
++            /* Keep the FSR bytes, then independently scale the original crop with the ordinary blit. */
++            vk_surf_use(cb, &src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
++            vk_barrier(cb, output, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
++                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++            blit.srcOffsets[0] = (VkOffset3D){2, 1, 0}; blit.srcOffsets[1] = (VkOffset3D){6, 5, 1};
++            rec_CmdBlitImage(cb, src.img, src.layout, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
++            vk_barrier(cb, output, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
++                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++            copy.bufferOffset = bytes;
++            rec_CmdCopyImageToBuffer(cb, output, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &copy);
++        }
 +        vk_finish(); vk_readback_ready();
++        int differs = 0, dark = 0, light = 0;
 +        for (u32 i = 0; i < dw * dh; i++) {
-+            CHECK(abs((int)result[i * 4] - 64) <= 2);
-+            CHECK(abs((int)result[i * 4 + 1] - 128) <= 2);
-+            CHECK(abs((int)result[i * 4 + 2] - 192) <= 2);
++            if (!edge) {
++                CHECK(abs((int)result[i * 4] - 64) <= 2);
++                CHECK(abs((int)result[i * 4 + 1] - 128) <= 2);
++                CHECK(abs((int)result[i * 4 + 2] - 192) <= 2);
++            } else {
++                /* RCAS deliberately sharpens beyond the original edge endpoints. */
++                dark += result[i * 4] < 90; light += result[i * 4] > 170;
++                CHECK(abs((int)result[i * 4] - result[i * 4 + 1]) <= 2);
++                CHECK(abs((int)result[i * 4] - result[i * 4 + 2]) <= 2);
++                u32 x = i % dw, y = i / dw;
++                if (x > dw / 4 && x < 3 * dw / 4 && y > dh / 4 && y < 3 * dh / 4 &&
++                    abs((int)result[i * 4] - result[bytes + i * 4]) > 2) differs++;
++            }
 +            CHECK(result[i * 4 + 3] == 255);
 +        }
++        CHECK(!edge || (differs > 2 && dark > 2 && light > 2)); /* Reconstruct a nonconstant edge, not a linear blit. */
 +        for (int i = 0; i < src.nsv; i++) vkDestroyImageView(g_vk.dev, src.sv[i].v, NULL);
 +        vk_image_destroy(src.img, src.mem); vk_image_destroy(output, output_mem);
 +    }
 +    vk_upscale_destroy(); vk_finish();
-+    puts("PASS FSR 1: EASU + RCAS on GPU, odd extents, cropped edges, sRGB round-trip, resize, no host wait, standard-scaling fallbacks");
++    puts("PASS FSR 1: EASU + RCAS differs from linear on diagonal edges; odd extents, cropped edges, sRGB round-trip, resize, no host wait, standard-scaling fallbacks");
 +    return 0;
 +}
 +
  int main(int argc, char** argv) {
      const u32 w = 32, h = 16;
      const u64 address = HEAP_BASE;
-@@ -811,9 +880,13 @@ int main(int argc, char** argv) {
+@@ -811,9 +907,13 @@ int main(int argc, char** argv) {
      CHECK(mem_map(HEAP_BASE, 0x800000, MS_NORMAL, PERM_RW) == 0);
      nv_init(); /* color targets may import guest memory through the GPU page table */
      g_settings.vulkan_video_decode = 1; /* a Vulkan Video decode queue where the device has one (lavapipe has none) */
@@ -6161,7 +6223,7 @@ index 25f0af2..9c57172 100644
      CHECK(!check_packed_depth());
      CHECK(!check_depth_array());
      CHECK(!check_srgb_write());
-@@ -826,7 +899,7 @@ int main(int argc, char** argv) {
+@@ -826,7 +926,7 @@ int main(int argc, char** argv) {
      CHECK(!check_blit());
      CHECK(!check_rt_overlap());
      /* the pipeline workers: pipeline_threads when given, else a quarter of the CPUs, two to six */

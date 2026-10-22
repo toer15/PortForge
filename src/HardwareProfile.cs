@@ -175,7 +175,7 @@ namespace PortForge
         }
 
         /// <summary>The settings this tier can afford. Frame limit, VSync, display mode and everything else the player chose are kept.</summary>
-        public GraphicsProfile Recommended(GraphicsProfile current)
+        public GraphicsProfile Recommended(GraphicsProfile current, bool protectGraphics = false)
         {
             var r = current == null ? new GraphicsProfile() : current.Copy();
             switch (Tier)
@@ -185,6 +185,11 @@ namespace PortForge
                 case PcTier.High: r.Resolution = 1.5m; r.Anisotropy = 8; r.Shadows = true; break;
                 case PcTier.Enthusiast: r.Resolution = 2m; r.Anisotropy = 16; r.Shadows = true; break;
                 default: break;
+            }
+            if (protectGraphics)
+            {
+                r.Resolution = 1;
+                if (Tier == PcTier.Entry) { r.Docked = false; r.Upscaler = 1; }
             }
             return r;
         }

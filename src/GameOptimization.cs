@@ -37,15 +37,21 @@ namespace PortForge
                 {"anisotropy", Anisotropy.ToString(CultureInfo.InvariantCulture)}, {"upscaler", Upscaler.ToString(CultureInfo.InvariantCulture)}, {"shadows", Shadows ? "1" : "0"},
                 {"vsync", VSync ? "1" : "0"}, {"docked", Docked ? "1" : "0"}, {"fullscreen", Fullscreen ? "1" : "0"} };
         }
-        public static GraphicsProfile Preset(string name, GraphicsProfile previous)
+        public static GraphicsProfile Preset(string name, GraphicsProfile previous, bool protectGraphics = false)
         {
             var p = previous.Copy();
-            // Keep the player's timing, display mode and VSync choices when changing image quality.
+            // Keep timing, fullscreen and VSync. Protected engines use the game's own rendering modes.
             p.Shadows = true;
             if (name == "Performance") { p.Resolution = .75m; p.Anisotropy = 2; }
             else if (name == "Balanced") { p.Resolution = 1; p.Anisotropy = 8; }
             else if (name == "Quality") { p.Resolution = 1.5m; p.Anisotropy = 16; }
             else throw new ArgumentException("Choose Performance, Balanced or Quality.");
+            if (protectGraphics)
+            {
+                p.Resolution = 1;
+                p.Docked = name != "Performance";
+                if (name == "Performance") p.Upscaler = 1;
+            }
             return p;
         }
     }
@@ -355,7 +361,7 @@ namespace PortForge
                 // Treat sub-half-millisecond differences as measurement noise; prefer image quality within that band.
                 samples = samples.Where(x => x.P99FrameMs <= best + .5m).ToList();
             }
-            return samples.OrderByDescending(x => x.Profile.Resolution).ThenByDescending(x => x.Profile.Anisotropy).ThenBy(x => x.SlowFrames).First();
+            return samples.OrderByDescending(x => x.Profile.Resolution).ThenByDescending(x => x.Profile.Docked).ThenByDescending(x => x.Profile.Anisotropy).ThenBy(x => x.SlowFrames).First();
         }
         private static string FrameTimeSummary(BenchmarkSample sample)
         {
@@ -393,26 +399,27 @@ namespace PortForge
                 log.WriteLine("PortForge measured " + (gameplay ? "gameplay" : "startup") + " tuning | " + DateTime.UtcNow.ToString("u"));
                 log.WriteLine("Game: " + exe + "\r\nTarget: " + target + " FPS. " + (gameplay ? "Each sample plays the first minute of the game with scripted button presses (A) from a backed-up save. Other areas can still differ." : "Samples include loading and menus, not a gameplay guarantee."));
                 log.WriteLine("Samples render offscreen. Display upscaling and presentation costs are excluded; these measurements do not establish FSR speedups or displayed 1% lows.");
-                if(cap.ProtectsRenderScale)log.WriteLine("Graphics protection keeps internal rendering at 100%; these samples do not test reduced internal resolution.");
+                if(cap.ProtectsRenderScale)log.WriteLine("Graphics protection keeps internal scaling at 100%. Handheld and TV samples ask the game to choose its own rendering layout; some games use the same resolution in both modes. Display FSR cost is excluded.");
                 try
                 {
                     progress.Report(gameplay ? "Warming the shader cache by playing the opening of the game (" + seconds + " seconds). Your settings and save will be restored." : "Warming the startup scene and shader cache (8 seconds). Your original settings will be restored.");
                     log.WriteLine(RunProtectedSample(exe, "-H --seconds=" + (gameplay ? seconds : 8) + " --log=1 --fullscreen=0 --fps_limit=" + testLimit + " --vsync=" + testVsync + workload, (gameplay ? seconds : 8) + 45, token, gameplay));
-                    string[] names = preferSmoothness ? new[] {"Current", "Lower", "Half"} : new[] {"Current", "Performance", "Balanced", "Quality"};
+                    string[] names = preferSmoothness ? (cap.ProtectsRenderScale ? new[] {"Current", "Handheld", "TV"} : new[] {"Current", "Lower", "Half"}) : new[] {"Current", "Performance", "Balanced", "Quality"};
                     var testedScales = new HashSet<string>();
                     foreach (string name in names)
                     {
                         token.ThrowIfCancellationRequested(); EnsureStopped(exe);
-                        var p = name == "Current" || preferSmoothness ? desired.Copy() : GraphicsProfile.Preset(name, desired);
+                        var p = name == "Current" || preferSmoothness ? desired.Copy() : GraphicsProfile.Preset(name, desired, cap.ProtectsRenderScale);
                         if (preferSmoothness)
                         {
-                            p.Resolution = Math.Max(.25m, desired.Resolution * (name == "Lower" ? .75m : name == "Half" ? .5m : 1m));
+                            if (cap.ProtectsRenderScale) { if (name != "Current") p.Docked = name == "TV"; }
+                            else p.Resolution = Math.Max(.25m, desired.Resolution * (name == "Lower" ? .75m : name == "Half" ? .5m : 1m));
                         }
                         if (cap.ProtectsRenderScale) {
                             p.Resolution = 1;
-                            if (!testedScales.Add("native|" + p.Anisotropy.ToString(Invariant))) continue;
+                            if (!testedScales.Add("native|" + p.Anisotropy.ToString(Invariant) + "|" + p.Docked)) continue;
                         } else if (preferSmoothness && !testedScales.Add(p.Resolution.ToString(Invariant))) continue;
-                        progress.Report("Testing " + name + " at " + (p.Resolution * 100).ToString("0") + "% render scale (" + seconds + " seconds, " + (gameplay ? "playing the opening of the game" : "startup scene") + ").");
+                        progress.Report("Testing " + name + ": " + (p.Docked ? "TV" : "handheld") + " mode, " + (p.Resolution * 100).ToString("0") + "% internal scale (" + seconds + " seconds, " + (gameplay ? "playing the opening of the game" : "startup scene") + ").");
                         // CLI overrides do not change the player's chosen limiter. Test the chosen target only for this run.
                         string args = "-H --seconds=" + seconds + " --log=1 --fullscreen=0 --fps_limit=" + testLimit + " --vsync=" + testVsync + " --resolution=" + p.Resolution.ToString(Invariant) + " --anisotropy=" + p.Anisotropy + " --shadows=" + (p.Shadows ? "1" : "0") + " --docked=" + (p.Docked ? "1" : "0") + workload;
                         try
@@ -427,7 +434,7 @@ namespace PortForge
                     token.ThrowIfCancellationRequested();
                     var best = preferSmoothness ? SelectSmooth(result.Samples, target, desired.Resolution) : Select(result.Samples, target, desired.Resolution);
                     result.Profile = best.Profile.Copy();
-                    result.Summary = best.Name + " chosen: " + best.Fps.ToString("F1") + " FPS average in the " + (gameplay ? "gameplay" : "startup") + " sample at " + (best.Profile.Resolution * 100).ToString("0") + "% scale" + FrameTimeSummary(best) + ". " +
+                    result.Summary = best.Name + " chosen: " + (best.Profile.Docked ? "TV" : "handheld") + " mode, " + best.Fps.ToString("F1") + " FPS average in the " + (gameplay ? "gameplay" : "startup") + " sample at " + (best.Profile.Resolution * 100).ToString("0") + "% internal scale" + FrameTimeSummary(best) + ". " +
                         (!gameplay && best.Fps < target * .95 ? "The test did not reach the target. " : "") + (gameplay ? "Measured while playing the first scenes, including loading. Later areas can be heavier. " : "Includes loading/menus; test demanding gameplay before raising quality. ") + " Your FPS and VSync choices are preserved. Select Save settings to apply.";
                     result.ReportPath = report; log.WriteLine("\r\n" + result.Summary);
                     if (preferSmoothness) log.WriteLine("Automatic PC matching prioritized measured FPS and freezes before resolution. Scripted inputs may stay in a menu in some games; these are samples, not proof of later gameplay. Each sample starts from the original backed-up save.");

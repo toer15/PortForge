@@ -34,6 +34,12 @@ namespace PortForge
     }
     public static class GameDiagnostics
     {
+        public static string UpscalingStatus(string log)
+        {
+            var records = Regex.Matches(log ?? "", @"vulkan: FSR 1 (?:active:|inactive:|upscaled )[^\r\n]*");
+            return records.Count == 0 ? "FSR: no upscaled frame recorded. A selected option or GPU-ready message does not confirm active upscaling."
+                : "Latest recorded FSR status: " + records[records.Count - 1].Value.Substring("vulkan: ".Length);
+        }
         private static readonly Regex StallLine=new Regex(@"a (\d+) ms frame: (\d+) shaders translated \((\d+) ms\), (\d+) pipelines made \((\d+) ms waited for\)(?:, (\d+) render targets made, (\d+) texture uploads \((\d+) KB(?:, \d+ ms)?\))?",RegexOptions.Compiled);
         public static List<StallFrame> StallFrames(string log)
         {

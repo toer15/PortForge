@@ -132,8 +132,11 @@ internal static class NativeInterfaceTests
                 var protectionCap = new RuntimeCapabilities(); protectionCap.Keys.Add("render_scale_safety");
                 typeof(GameSettingsWindow).GetField("capabilities",protectionBinding).SetValue(settingsForm,protectionCap);
                 settingsButton("Performance").PerformClick();
-                Check(scale.Value == 100 && scale.Minimum == 100 && scale.Maximum == 100 && scale.ReadOnly && fps.Value == 240,
-                    "Performance on a protected engine keeps native image sizes and readable controls without changing game timing");
+                Check(scale.Value == 100 && scale.Minimum == 100 && scale.Maximum == 100 && scale.ReadOnly && fps.Value == 240 && !settingsControls.OfType<CheckBox>().Single(c=>c.Text=="TV mode (off = handheld)").Checked,
+                    "Protected Performance shows handheld rendering with safe native image sizes and unchanged game timing");
+                settingsButton("Balanced").PerformClick();
+                Check(settingsControls.OfType<CheckBox>().Single(c=>c.Text=="TV mode (off = handheld)").Checked && scale.Value==100,
+                    "Balanced restores TV quality without unlocking unsafe intermediate scaling");
                 typeof(GameSettingsWindow).GetField("capabilities",protectionBinding).SetValue(settingsForm,null);
                 settingsButton("Clear FPS limit").PerformClick(); settingsButton("Clear Render scale (%)").PerformClick();
                 Check(fpsMode.SelectedIndex == 0 && !fps.Enabled && scale.Value == 100, "Clear restores safe defaults for frame timing and resolution");

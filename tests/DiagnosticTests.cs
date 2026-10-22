@@ -90,6 +90,9 @@ internal static class DiagnosticTests
             Check(ai.needs_engine_fix&&ai.recommended_rules.SequenceEqual(new[]{"reduce_upscale"})&&File.Exists(ai.ReportPath),"The AI process receives restricted flags and returns validated structured diagnostics");
             source.Issues.Add(new GameIssue("wait","wait-fixture","test cancellation"));
             using(var cts=new CancellationTokenSource(500)){bool stopped=false;try{CodexDiagnosis.Review(source,Path.Combine(root,"cancelled-ai"),cts.Token,args[1]);}catch(OperationCanceledException){stopped=true;}Check(stopped,"Cancelling AI review stops its owned process without applying a repair");}
+            Check(GameDiagnostics.UpscalingStatus("vulkan: AMD FSR 1 EASU + RCAS ready (FP32 spatial upscaling)").Contains("no upscaled frame recorded"), "GPU setup alone is not presented as active FSR");
+            Check(GameDiagnostics.UpscalingStatus("vulkan: FSR 1 active: EASU + RCAS dispatched, source 1280x720, output 2560x1440, handheld mode\n").Contains("source 1280x720, output 2560x1440, handheld mode"), "Recorded FSR status includes actual dispatch sizes and the game's mode");
+            Check(GameDiagnostics.UpscalingStatus("vulkan: FSR 1 upscaled 600 frames, latest 1280x720 to 2560x1440\nvulkan: FSR 1 inactive: no enlargement needed; maximize the window to upscale, source 1280x720, output 1280x720, handheld mode\n").Contains("inactive: no enlargement needed"), "A later bypass replaces an earlier active FSR message");
             Console.WriteLine(checks+" diagnostic checks passed. Evidence: "+root);return 0;
         }
         catch(Exception e){Console.Error.WriteLine(e);return 1;}

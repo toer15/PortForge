@@ -38,8 +38,11 @@ internal static class TuningFixture
             Console.WriteLine("vulkan: 10 pipelines made (4 from the cache, 3 ms making, 0 ms waited for)");
             if (pcTest)
             {
+                bool handheldTest = originalConfig.Contains("fixture_graphics_protection=1") && Array.IndexOf(args, "--docked=0") >= 0;
                 string resolution = Array.Find(args, a => a.StartsWith("--resolution="));
                 decimal scale = resolution == null ? 1 : Decimal.Parse(resolution.Substring(13), System.Globalization.CultureInfo.InvariantCulture);
+                if (handheldTest) scale = .75m;
+                Console.WriteLine("tested_mode=" + (Array.IndexOf(args, "--docked=0") >= 0 ? "handheld" : "TV"));
                 int slow = scale >= 1 ? 8 : scale >= .75m ? 1 : 0, worst = scale >= 1 ? 400 : scale >= .75m ? 60 : 0;
                 Console.WriteLine("vulkan: " + slow + " frames over 50 ms in the last 600, the slowest " + worst + " ms");
                 decimal p99 = scale >= 1 ? 28m : scale >= .75m ? 16.7m : 16.4m;

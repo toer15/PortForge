@@ -24,7 +24,10 @@ namespace PortForge
         {
             if (cap == null || !cap.SupportsGraphics) throw new InvalidOperationException("This engine does not expose the required graphics settings.");
             var settings = pc.AutomaticBaseline(current).Values();
-            if (cap.ProtectsRenderScale) { settings["resolution"] = "1"; settings["render_scale_safety"] = "1"; }
+            if (cap.ProtectsRenderScale) {
+                settings["resolution"] = "1"; settings["render_scale_safety"] = "1";
+                if (pc.Tier == PcTier.Entry) { settings["docked"] = "0"; settings["upscaler"] = "1"; }
+            }
             if (!cap.Keys.Contains("upscaler")) settings.Remove("upscaler");
             if (pc.LogicalCpus > 0)
             {
@@ -72,7 +75,7 @@ namespace PortForge
                     }
                 }
                 else report.AppendLine("\r\nMeasurement is switched off. Settings are hardware estimates, not game performance measurements.");
-                result.Summary = "Matched to this PC at " + (result.Profile.Resolution * 100).ToString("0.#", CultureInfo.InvariantCulture) + "% scale" + (result.Measured ? "; measured settings saved." : "; hardware baseline saved (unmeasured).");
+                result.Summary = "Matched to this PC: " + (result.Profile.Docked ? "TV" : "handheld") + " mode at " + (result.Profile.Resolution * 100).ToString("0.#", CultureInfo.InvariantCulture) + "% internal scale" + (result.Measured ? "; measured settings saved." : "; hardware baseline saved (unmeasured).");
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception e)
@@ -83,7 +86,7 @@ namespace PortForge
             }
             report.AppendLine("\r\n" + result.Summary);
             report.AppendLine("Engine 1.4 and newer use frame_guard=1 by default and resolve automatic worker counts on the PC running the game. A copied game can therefore adapt its workers on each launch.");
-            report.AppendLine("Engine 1.6 and newer keep speed_lock=1: no FPS cap can make the game run faster or slower than its own pace, so this PC's power goes into render scale and filtering instead.");
+            report.AppendLine("Engine 1.6 and newer use speed_lock=1 for the game's pace. Protected engines keep internal image scaling native; entry-level PC matching requests the game's handheld layout. Measurement compares TV and handheld layouts and retains TV when handheld brings no measured benefit. Some games render identically in both modes. FSR scales the finished image and adds GPU work; it does not remove CPU/loading stalls or create frames.");
             report.AppendLine("Engine 1.7 and newer report measured p99 frame time/1% low and GPU wait details, and reuse shader caches across compatible engine updates. These diagnostics and measurements do not guarantee future scenes will run without stutter.");
             report.AppendLine("Local hardware rules and measured samples; no AI account or hardware upload is needed. FPS, VSync, controllers and experimental shader preferences are preserved. The game selects its Vulkan device; the highest-rated Windows adapter is not proof of the active GPU. Later areas can behave differently; zero lag and universal compatibility are not guaranteed.");
             try { File.WriteAllText(result.ReportPath, report.ToString(), new UTF8Encoding(false)); }

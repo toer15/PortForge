@@ -1,4 +1,8 @@
-# PortForge 0.26
+# PortForge 0.27
+
+**Performance + FSR:** on a protected engine, Performance selects handheld mode and AMD FSR 1. The game chooses its own rendering layout; FSR then reconstructs and sharpens it to a larger window. This can reduce rendering work in games that use a lighter handheld layout. Some games use identical layouts in both modes. FSR itself adds GPU work; it cannot double FPS or remove loading stalls. Balanced and Quality restore TV mode. The graphics window shows the latest recorded FSR status, not a promise that a selected option is active. Maximize the game window or use fullscreen for upscaling to the display.
+
+**Auto tune** now compares protected native rendering in TV and handheld modes. TV quality wins when handheld brings no measured benefit. It uses an isolated save and restores settings after each sample. Its offscreen measurements exclude FSR and presentation cost.
 
 **Play game** opens the game or returns to its existing window. Background engine-settings probes do not count as gameplay. Play starts from the local save immediately; to fetch another PC's progress first, use **Cloud saves** before playing. Automatic cloud saving resumes after the game closes. If a game exits during startup, the status shows the exit and available log details.
 
@@ -99,11 +103,11 @@ Select **Graphics and FPS** at the top of PortForge. Browse to a generated game'
 - **VSync:** reduces tearing, but can cap presentation at your display's refresh rate. Turn it off when deliberately testing higher FPS.
 - **Render scale:** 100% keeps the game's original 3D resolution. 75% reduces GPU work; 150% improves sharpness with more GPU work. Supported range: 25% to 400%.
 - **Texture detail at angles:** higher filtering values can sharpen floors and surfaces. **Draw shadows**, **TV mode** and **Start fullscreen** offer further control.
-- **Performance**, **Balanced** and **Quality** are starting points. They preserve your chosen FPS, VSync and display mode. **Clear** beside a settings control resets that control to its default. **Reset defaults** resets the graphics controls together.
+- **Performance**, **Balanced** and **Quality** preserve FPS, VSync and fullscreen. Protected Performance selects handheld + FSR; Balanced and Quality select TV mode. **Clear** beside a control resets it to its default. **Reset defaults** resets the graphics controls together.
 
 Select **Save settings**, then launch the game. Settings live beside its executable, so launching that executable directly also uses them. A dated backup of the previous INI is kept beside it. Close the game before saving settings or testing; PortForge does not close your running game.
 
-**Auto tune** warms the startup scene for eight seconds, then runs four 20-second tests: your current graphics, Performance, Balanced and Quality. It uses temporary graphics and pacing overrides, records rendered frames, and recommends the highest tested detail close to the requested target or measured ceiling, at or below your chosen render scale. Set a higher render scale first if you want to test higher detail. Your selected FPS and VSync remain unchanged. For an existing game, select **Save settings** to apply the recommendation. **Open test report** shows the measurements and runtime diagnostics.
+**Auto tune** warms the game, then compares the current settings and supported presets using scripted opening scenes from a backed-up save. Duplicate profiles are skipped. Protected engines compare TV and handheld rendering with internal scaling kept at 100%; older engines also test experimental internal scales. It considers average FPS and p99 frame time. Your selected FPS and VSync remain unchanged. Select **Save settings** to apply a recommendation, and **Open test report** to review its measurements and limits. A script may remain in a menu in some games; later areas can be heavier.
 
 The tests include loading and menus. They do not measure every level, verify game speed, or guarantee smooth gameplay. Shader caches are retained for later runs, but new scenes may still stutter while new shaders or missing game code compile. The tuner uses local measurements and rules; it does not contain an AI model, rewrite game logic, add an FPS patch, or certify every ROM.
 

@@ -16,6 +16,7 @@ namespace PortForge
         private readonly TextBox game = new TextBox { AccessibleName = "Windows game executable", Dock = DockStyle.Fill };
         private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (recommended)", "Custom limit", "Unlimited"), filtering = Filtering();
         private readonly ComboBox upscaler = Choice("Upscaler", "Linear", "AMD FSR 1 (automatic)");
+        private readonly Label upscaleActivity = Label("FSR: no game session checked yet.", 9, Muted);
         private readonly NumericUpDown fps = Number("Custom FPS limit", 10, 1000, 120, 10), scale = Number("Render scale percent", 25, 400, 100, 25);
         private readonly CheckBox vsync = Toggle("VSync (reduce tearing)", true), shadows = Toggle("Draw shadows", true), docked = Toggle("TV mode (off = handheld)", true), fullscreen = Toggle("Start fullscreen", false);
         private readonly Label badge = Label("READY", 9, Mint), status = Label("Choose a Windows game", 16, Color.White), message = Label("Browse to a generated game .exe, then load its settings.", 10, Muted);
@@ -113,7 +114,7 @@ namespace PortForge
             {
                 var b = Button(text, false); b.AutoSize = true; b.Height = 32;
                 string preset = text;
-                b.Click += delegate { try { ShowProfile(preset == "Reset defaults" ? new GraphicsProfile() : preset == "Match my PC" ? HardwareProfile.Detect().Recommended(ReadProfile()) : GraphicsProfile.Preset(preset, ReadProfile())); SetStatus("READY", "Settings changed", "Select Save settings to apply them next time you start the game.", Mint); } catch (Exception e) { Error(e); } };
+                b.Click += delegate { try { ShowProfile(preset == "Reset defaults" ? new GraphicsProfile() : preset == "Match my PC" ? HardwareProfile.Detect().Recommended(ReadProfile(), capabilities != null && capabilities.ProtectsRenderScale) : GraphicsProfile.Preset(preset, ReadProfile(), capabilities != null && capabilities.ProtectsRenderScale)); SetStatus("READY", "Settings changed", (preset == "Performance" && capabilities != null && capabilities.ProtectsRenderScale ? "Handheld rendering + AMD FSR 1 selected. The game chooses a lighter layout where supported; FSR scales it to a larger window. " : "") + "Select Save settings to apply them next time you start the game.", Mint); } catch (Exception e) { Error(e); } };
                 presets.Controls.Add(b);
             }
             options.Controls.Add(presets); var pcLine = Label("Checking this PC...", 9, Muted); pcLine.MaximumSize = new Size(700, 0); options.Controls.Add(pcLine); Shown += async delegate { var pc = await Task.Run(() => HardwareProfile.Detect()); pcLine.Text = "Your PC: " + pc.TierName + " (" + pc.Summary + "). " + pc.Why + " " + pc.Estimate + " Match my PC applies the settings this class of PC can afford; Auto tune measures the real game."; };
@@ -130,13 +131,15 @@ namespace PortForge
             AddHint("Speed lock: with PortForge Engine 1.6 or newer, a game always runs at its own speed, whatever the cap. A higher cap can't speed up a 30 or 60 FPS game, and a lower cap shows fewer frames instead of slowing the game down. Your PC's power goes into sharper graphics instead. VSync may also limit FPS to your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
             AddOption("Upscaler", upscaler, delegate { upscaler.SelectedIndex = 1; });
-            AddHint("AMD FSR 1 upscales and sharpens the finished image when the game window is larger. Engine 1.9 keeps internal rendering at 100% to protect game data and geometry. FSR 4, DLSS and frame generation are not included.");
+            upscaleActivity.AccessibleName = "Recorded upscaling status"; options.Controls.Add(upscaleActivity);
+            options.SizeChanged += delegate { upscaleActivity.MaximumSize = new Size(Math.Max(200, options.ClientSize.Width - 24), 0); };
+            AddHint("FSR 1 improves scaling to a larger window; it adds GPU work and cannot boost FPS by itself. Performance selects handheld mode so the game can render a lighter scene before FSR upscales it. Some games use the same resolution in both modes. Maximize the game or use fullscreen to upscale to your display.");
             AddHint("100% = the game's original resolution. Protected engines keep this at 100% because changing intermediate image sizes can break the world and lighting. Older engines expose experimental scaling. FSR still scales the finished picture to your display.");
             AddOption("Texture detail at angles", filtering, delegate { filtering.SelectedIndex = 0; });
             var checks = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
             checks.Controls.AddRange(new Control[] { vsync, shadows, docked, fullscreen }); options.Controls.Add(checks);
             options.Controls.Add(Label("Automatic tuning", 12, Mint));
-            AddHint("Auto tune uses the custom FPS limit above as its target (60 in Game speed or Unlimited mode). It compares average FPS, freezes and the 99th-percentile frame time (1% low), then favors higher image quality when results are within measurement noise. It plays the first minute from a backed-up save; later areas can be heavier. FSR 4 and DLSS need supported hardware and game-provided motion data, so this engine does not claim to provide them.");
+            AddHint("Auto tune compares average FPS, freezes and p99 frame time from a backed-up save. Protected engines compare the game's handheld and TV modes, retaining TV quality when handheld brings no measured benefit. Tests run offscreen and exclude FSR and display cost. Later areas can be heavier. FSR 4, DLSS and frame generation are not included.");
             details.Height = 105; details.MinimumSize = new Size(0, 100); details.BackColor = Surface; details.ForeColor = Color.WhiteSmoke; options.Controls.Add(details);
             report.AutoSize = true; report.Enabled = false; report.Click += delegate { if (File.Exists(reportPath)) Process.Start("notepad.exe", GameManifest.Quote(reportPath)); };
             options.Controls.Add(report);
@@ -229,6 +232,8 @@ namespace PortForge
                 var health = await Task.Run(() => GameDiagnostics.Scan(exe, cap, backendPath));
                 if (IsDisposed || Disposing || loadedGame != exe || cancellation != null || enginePanel.IsWorking) return;
                 string text = health.Text();
+                string activity = GameDiagnostics.UpscalingStatus(health.Log);
+                if (upscaleActivity.Text != activity) upscaleActivity.Text = activity;
                 if (lastHealth != text)
                 {
                     int start = findings.SelectionStart, length = findings.SelectionLength;
