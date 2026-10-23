@@ -1,4 +1,6 @@
-# PortForge 0.30
+# PortForge 0.31
+
+**Startup fixes:** Engine 1.14 selects the game's requested memory layout automatically and avoids opening every game asset before play. New conversions also receive the corrected atomic-instruction translation. An existing affected game-code DLL needs rebuilding once to receive a translator fix; installing a new runtime alone does not rewrite compiled game code.
 
 **Controllers:** open Controllers to choose Xbox, DualSense, DualShock 4, Switch Pro, Joy-Cons, another controller, or Automatic. The controller picture stays still while buttons light up, triggers fill and sticks move with live input. Save for all my games applies the button layout to known closed games and future conversions. Custom game button maps are preserved. The chart translates Switch prompts to your controller's buttons; it does not replace graphics drawn inside games.
 

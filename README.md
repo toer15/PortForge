@@ -1,4 +1,6 @@
-# PortForge 0.30 / Engine 1.13
+# PortForge 0.31 / Engine 1.14
+
+Startup compatibility: the engine reads each game's NPDM memory layout before allocating guest memory, including the 36-bit layout required by older games. Startup file mappings have a fixed budget, with read-on-demand fallback. The translator also supports the narrowing exclusive-store sequence used by older Tegra game code. Existing native modules containing the old translation must be rebuilt for that translator correction to take effect.
 
 The Controllers window includes automatic detection, controller family selection, live buttons/triggers/sticks on a fixed picture, and a saved layout for converted games. It shows a Switch-to-controller button chart; game artwork and embedded button prompts are unchanged.
 
