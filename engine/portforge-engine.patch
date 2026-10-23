@@ -1,3 +1,29 @@
+diff --git a/src/3ds/runtime/process.c b/src/3ds/runtime/process.c
+index 5e113bb..bdb6ab1 100644
+--- a/src/3ds/runtime/process.c
++++ b/src/3ds/runtime/process.c
+@@ -255,7 +255,7 @@ static bool mount(SnxCtrProcess* p, const char* directory, const SnxCtrCia* cia)
+     for (unsigned i = 0; i < 2 && ok && !cia; ++i) {
+         FsNode* node = NULL;
+         if (!fs_tree_lookup(tree, NULL, i ? "exefs" : "romfs", &node))
+-            ok = !fs_tree_share(tree, node, &shared, &failed);
++            ok = !fs_tree_share(tree, node, ~0u, &shared, &failed);
+     }
+     pm_unlock(&tree->lock);
+     if (cia) {
+diff --git a/src/3ds/services/romfs.c b/src/3ds/services/romfs.c
+index b08cfa1..10bba92 100644
+--- a/src/3ds/services/romfs.c
++++ b/src/3ds/services/romfs.c
+@@ -219,7 +219,7 @@ bool snx_ctr_romfs_open(FsTree* tree, SnxCtrRomfs** out) {
+     r->files = m.files;
+     r->meta_size = (size_t)meta_size;
+     unsigned shared = 0, failed = 0;
+-    if (fs_tree_share(tree, root, &shared, &failed)) {
++    if (fs_tree_share(tree, root, ~0u, &shared, &failed)) {
+         free(r);
+         goto fail;
+     }
 diff --git a/src/common/cpu/aarch64/cpu.h b/src/common/cpu/aarch64/cpu.h
 index c33b962..bc7a530 100644
 --- a/src/common/cpu/aarch64/cpu.h
@@ -157,6 +183,114 @@ index f6a4f52..b5e3454 100644
      add_executable(snx-test-shader-direct "${PROJECT_SOURCE_DIR}/tests/shader_direct.c")
      snx_test_target(snx-test-shader-direct 11)
      target_link_libraries(snx-test-shader-direct PRIVATE snx_shader)
+diff --git a/src/nx/gpu/gpu.c b/src/nx/gpu/gpu.c
+index d7caa73..2dcd82d 100644
+--- a/src/nx/gpu/gpu.c
++++ b/src/nx/gpu/gpu.c
+@@ -567,6 +567,8 @@ struct GpuItem {
+     u64 id; /* a job's */
+     u32 chan, incs, wait_id, wait_val, expect;
+     u32 n, pf;        /* the entries, and those before the first SYNC entry, fetched at submission into words */
++    u32 sp;           /* PortForge: [pf, sp) were also copied at submission, for fetch_late (job_off: where to) */
++    u32 start;        /* PortForge: the fence of the channel's submission before, where this one's increments begin */
+     u32 entry, word;  /* where the stream goes on */
+     int started;
+     u32* late;        /* the entries the GPU thread fetched: [late_first, late_end) */
+@@ -601,10 +603,19 @@ static u64 entry_addr(u64 e) { return e & 0xFFFFFFFFFCull; }
+ static const u32* job_words(const GpuItem* j, u32 e) {
+     return (e < j->pf ? job_prefetched(j) : j->late) + job_off(j)[e];
+ }
++/* PortForge: the game stopped waiting for one of the values the submission's increments make, (start, expect], or for
++   a later one. Its stream may make some of them itself (SUBMIT_GPFIFO's 0x100), so incs alone doesn't say where they
++   begin */
++static int job_given_up(const GpuItem* j) { return syncpt_given_up(j->chan, j->start); }
+ /* the entry e the GPU thread reached was not fetched at submission: it and those after it up to the next SYNC entry
+-   are fetched now, before any of their methods can hand memory back to the CPU */
++   are fetched now, before any of their methods can hand memory back to the CPU.
++   PortForge: a game waits for its submissions' fences with a timeout (one waits 100 ms for each frame's), which a
++   console's GPU never runs into. When the GPU thread is seconds behind (pipelines made on a cold driver cache), the
++   game's wait times out, it takes the work as done and writes its next commands over these: read now, they were
++   methods of another frame, and that game ran at 3 FPS on fences that never came. Such an entry runs the words it was
++   submitted with, copied then, once the game has given up on the submission's fence and the memory has changed */
+ static int fetch_late(GpuItem* j, u32 e) {
+-    u32 end = e + 1, k;
++    u32 end = e + 1, k, replaced = 0;
+     u64 total = entry_words(job_ent(j)[e]);
+     while (end < j->n && !(job_ent(j)[end] >> 63)) total += entry_words(job_ent(j)[end++]);
+     if (total > j->late_cap) {
+@@ -619,11 +630,19 @@ static int fetch_late(GpuItem* j, u32 e) {
+     total = 0;
+     for (k = e; k < end; k++) {
+         u32 n = entry_words(job_ent(j)[k]);
++        const u32* sub = k < j->sp ? job_prefetched(j) + job_off(j)[k] : NULL; /* as submitted */
+         job_off(j)[k] = (u32)total;
+         gmem_read(entry_addr(job_ent(j)[k]), j->late + total, (u64)n * 4);
+         snx_le32_array(j->late + total, n); /* the stream's words, read as numbers from here on */
++        if (sub && memcmp(sub, j->late + total, (size_t)n * 4) && job_given_up(j)) {
++            memcpy(j->late + total, sub, (size_t)n * 4);
++            replaced++;
++        }
+         total += n;
+     }
++    if (replaced)
++        WARN_LIMIT(4, "gpu: channel %u's commands were written over after the game stopped waiting for them (the GPU "
++                      "thread was behind): %u entries run as submitted\n", j->chan, replaced);
+     j->late_first = e;
+     j->late_end = end;
+     return 1;
+@@ -897,6 +916,8 @@ typedef struct {
+ } GpuScan;
+ static GpuScan g_scan[128];
+ static PMutex g_submit_lk = PMUTEX_INIT; /* the scans in queue order */
++static u32 g_fence_last[128];            /* PortForge, under g_submit_lk: each syncpoint's last submission's fence */
++static u8 g_fence_known[128];
+ /* 0 when the scan stops at this method */
+ static int scan_method(GpuScan* s, u32 chan, u64 job, u32* launches, u32 sub, u32 m, u32 v) {
+     int eng;
+@@ -940,7 +961,7 @@ static void scan_job(GpuScan* s, const GpuItem* j) {
+    guest may reuse its command ring once the ioctl returns */
+ static GpuItem* job_new(const void* entries, u32 n, u32 wait_id) {
+     u64 words = 0, size;
+-    u32 e, pf = 0;
++    u32 e, pf = 0, sp;
+     GpuItem* j;
+     const u8* src = (const u8*)entries;
+     if (wait_id == ~0u)
+@@ -950,6 +971,12 @@ static GpuItem* job_new(const void* entries, u32 n, u32 wait_id) {
+             if (words + entry_words(en) > (64u << 20) / 4) break; /* the rest is fetched when reached */
+             words += entry_words(en);
+         }
++    /* PortForge: the rest as submitted too, within the same bound, in case the game gives up on them (fetch_late) */
++    for (sp = pf; sp < n; sp++) {
++        u64 en = snx_ld_le64(src + (size_t)sp * 8);
++        if (words + entry_words(en) > (64u << 20) / 4) break;
++        words += entry_words(en);
++    }
+     /* the item, the entries (8-byte aligned after it), their offsets, the words */
+     size = sizeof(GpuItem) + (u64)n * 8 + (u64)n * 4 + words * 4;
+     if (size > SIZE_MAX || !(j = (GpuItem*)calloc(1, (size_t)size)))
+@@ -958,8 +985,9 @@ static GpuItem* job_new(const void* entries, u32 n, u32 wait_id) {
+     if (n) memcpy(job_ent(j), entries, (size_t)n * 8);
+     snx_le64_array(job_ent(j), n); /* the entries are guest words, the stream's words below too */
+     j->pf = pf;
++    j->sp = sp;
+     words = 0;
+-    for (e = 0; e < pf; e++) {
++    for (e = 0; e < sp; e++) {
+         u32 k = entry_words(job_ent(j)[e]);
+         job_off(j)[e] = (u32)words;
+         gmem_read_raw(entry_addr(job_ent(j)[e]), job_prefetched(j) + words, (u64)k * 4);
+@@ -981,6 +1009,10 @@ void gpu_submit(const void* entries, u32 n, u32 channel, u32 incs, u32 wait_id,
+     j->wait_id = wait_id;
+     j->wait_val = wait_val;
+     j->expect = expect;
++    /* a syncpoint's promises only grow, whichever channel holds its id: the last one is where this one's begin */
++    j->start = g_fence_known[channel] ? g_fence_last[channel] : expect - incs;
++    g_fence_last[channel] = expect;
++    g_fence_known[channel] = 1;
+     pm_lock(&g_qlk);
+     queue_init();
+     stale = !g_gpu.chan[channel] || g_scan_stale[channel];
 diff --git a/src/nx/gpu/shader/shader.c b/src/nx/gpu/shader/shader.c
 index 43d443b..5866e24 100644
 --- a/src/nx/gpu/shader/shader.c
@@ -230,10 +364,10 @@ index 8579250..f3ffe2c 100644
                                    .preferredLargeHeapBlockSize = g_vk.alloc_cap < (256ull << 20) ? g_vk.alloc_cap : 0,
 diff --git a/src/nx/gpu/vk/frame_policy.h b/src/nx/gpu/vk/frame_policy.h
 new file mode 100644
-index 0000000..147ff8e
+index 0000000..a298fde
 --- /dev/null
 +++ b/src/nx/gpu/vk/frame_policy.h
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,31 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#ifndef PF_FRAME_POLICY_H
 +#define PF_FRAME_POLICY_H
@@ -253,6 +387,13 @@ index 0000000..147ff8e
 +    if (cpus > 0 && cpus <= 4) return 1;
 +    int n = cpus / 4;
 +    return n < 2 ? 2 : n > 6 ? 6 : n;
++}
++/* With the host's physical cores known (cores > 0): half of them from 6 on. A driver makes each pipeline on one core,
++   and the game's own threads (its cores, the GPU and recording threads) keep about four busy. An 8-core CPU without
++   SMT, counted as 8 threads, had 2 workers and froze about 7 s on a cold driver cache; 4 cut that by about 15% */
++static inline int pf_shader_workers_on(int setting, int cpus, int cores) {
++    if (setting > 0 || cores < 6) return pf_shader_workers(setting, cpus);
++    return cores / 2 > 6 ? 6 : cores / 2;
 +}
 +static inline int pf_background_workers(int workers, int guard) {
 +    return guard && workers > 1 ? workers - 1 : workers;
@@ -4212,7 +4353,7 @@ index 0000000..8ac3788
 +extern const u32 smooth_spv[];
 +extern const u64 smooth_spv_size;
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..a67a5eb 100644
+index 33f94b6..ca80c7e 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
 @@ -16,6 +16,7 @@
@@ -4393,7 +4534,7 @@ index 33f94b6..a67a5eb 100644
          e->p = p;
          __atomic_store_n(&e->ready, 1, __ATOMIC_RELEASE);
          pc_broadcast(&g_pj_done);
-@@ -818,13 +899,7 @@ static void pipe_worker(void* arg) {
+@@ -818,23 +899,22 @@ static void pipe_worker(void* arg) {
      }
  }
  int vk_pipeline_worker_count(int setting, int cpus) {
@@ -4408,17 +4549,23 @@ index 33f94b6..a67a5eb 100644
  }
  /* the workers, started the first time one is needed: how many there are (g_pj_lock) */
  static int pipe_workers(void) {
-@@ -835,6 +910,9 @@ static int pipe_workers(void) {
+     if (!g_pj_started) {
+-        int ids[256], n = vk_pipeline_worker_count(g_settings.pipeline_threads, plat_cpus(ids, 256));
++        int ids[256], cpus = plat_cpus(ids, 256), n;
++        if (!cpus) cpus = plat_cpu_threads(); /* Windows: the runtime doesn't pin threads, but the count still sizes */
++        n = pf_shader_workers_on(g_settings.pipeline_threads, cpus, plat_cpu_cores());
+         g_pj_started = 1;
+         pc_init(&g_pj_work);
          pc_init(&g_pj_done);
          for (int i = 0; i < n; i++)
              if (!plat_thread(pipe_worker, NULL, (size_t)1 << 20)) g_pj_threads++;
-+        LOG("vulkan: %d shader workers, at most %d warming cached pipelines; frame guard %s\n",
-+            g_pj_threads, pf_background_workers(g_pj_threads, g_settings.frame_guard),
++        LOG("vulkan: %d shader workers (%d CPU threads, %d cores), at most %d warming cached pipelines; frame guard %s\n",
++            g_pj_threads, cpus, plat_cpu_cores(), pf_background_workers(g_pj_threads, g_settings.frame_guard),
 +            g_settings.frame_guard ? "on (1.5 ms shared optional wait budget)" : "off");
      }
      return g_pj_threads;
  }
-@@ -848,7 +926,33 @@ static void pipe_queue(Pipe* e, int queue) {
+@@ -848,7 +928,33 @@ static void pipe_queue(Pipe* e, int queue) {
          *head = e;
      *tail = e;
      e->queued = queue;
@@ -4453,7 +4600,7 @@ index 33f94b6..a67a5eb 100644
  }
  /* a pipeline of the file that a draw asks for before a worker took it goes to the draws' queue: 1 when it did */
  static int pipe_promote(Pipe* e) {
-@@ -862,7 +966,7 @@ static int pipe_promote(Pipe* e) {
+@@ -862,7 +968,7 @@ static int pipe_promote(Pipe* e) {
          else
              g_pw_head = e->job;
          if (g_pw_tail == e) g_pw_tail = before;
@@ -4462,7 +4609,7 @@ index 33f94b6..a67a5eb 100644
          moved = 1;
      }
      pm_unlock(&g_pj_lock);
-@@ -880,11 +984,174 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+@@ -880,11 +986,174 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
      pm_unlock(&g_pj_lock);
      return __atomic_load_n(&e->ready, __ATOMIC_ACQUIRE) ? e->p : VK_NULL_HANDLE;
  }
@@ -4637,7 +4784,7 @@ index 33f94b6..a67a5eb 100644
  #define PSTAND_PAGE    1024
  static Pipe** g_pstand[1024];
  static u32 g_npstand;
-@@ -964,7 +1231,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -964,7 +1233,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
          pf_pipe_record(&p->k);
          pm_lock(&g_pj_lock);
          if (pipe_workers()) {
@@ -4646,7 +4793,7 @@ index 33f94b6..a67a5eb 100644
              queued = 1;
          }
          pm_unlock(&g_pj_lock);
-@@ -981,17 +1248,45 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -981,17 +1250,45 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
  }
  /* on the recording thread: the pipeline a handle from vk_pipeline_get_deferred names, waited for while a worker makes
     it. VK_NULL_HANDLE when it couldn't be made */
@@ -4696,7 +4843,7 @@ index 33f94b6..a67a5eb 100644
  void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms) {
      *pipes = g_pipes_new;
      *hits = __atomic_load_n(&g_pipe_hits, __ATOMIC_RELAXED);
-@@ -1157,15 +1452,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
+@@ -1157,15 +1454,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
      g_pf.npipe++;
  }
  
@@ -4717,7 +4864,7 @@ index 33f94b6..a67a5eb 100644
      u32 caps[] = {(u32)g_vk.has_divisor,
                    (u32)g_vk.has_dynamic_stride,
                    (u32)g_vk.has_shader_draw_parameters,
-@@ -1187,20 +1480,9 @@ static void pf_key(char* out, size_t n) {
+@@ -1187,20 +1482,9 @@ static void pf_key(char* out, size_t n) {
                    g_vk_buffer_image_slots,
                    d->limits.maxPerStageDescriptorStorageImages,
                    d->limits.maxDescriptorSetStorageImages};
@@ -5755,6 +5902,69 @@ index fd64ad4..2845a4a 100644
  /* all zero: fs_init sets the tree up */
 +void hle_fs_stats(u64* reads, u64* bytes, u64* ms); /* the game's file reads so far: how many, their bytes, the time they took */
  #endif
+diff --git a/src/nx/hle/services/nvdrv.c b/src/nx/hle/services/nvdrv.c
+index ebff4f0..29a1c84 100644
+--- a/src/nx/hle/services/nvdrv.c
++++ b/src/nx/hle/services/nvdrv.c
+@@ -368,6 +368,19 @@ int syncpt_wait(u32 id, u32 thresh, i64 timeout_ns) {
+     pm_unlock(&g_hle.nvdrv.sync_lk);
+     return reached;
+ }
++/* a game's wait ioctl on id timed out short of thresh: its later values count as given up too */
++static void syncpt_give_up(u32 id, u32 thresh) {
++    if (id >= SYNCPT_IDS) return;
++    pm_lock(&g_hle.nvdrv.sync_lk);
++    if (!g_hle.nvdrv.syncpt_gave_up_any[id] || (i32)(thresh - g_hle.nvdrv.syncpt_gave_up[id]) > 0)
++        __atomic_store_n(&g_hle.nvdrv.syncpt_gave_up[id], thresh, __ATOMIC_RELAXED);
++    __atomic_store_n(&g_hle.nvdrv.syncpt_gave_up_any[id], 1, __ATOMIC_RELEASE);
++    pm_unlock(&g_hle.nvdrv.sync_lk);
++}
++int syncpt_given_up(u32 id, u32 after) {
++    if (id >= SYNCPT_IDS || !__atomic_load_n(&g_hle.nvdrv.syncpt_gave_up_any[id], __ATOMIC_ACQUIRE)) return 0;
++    return (i32)(__atomic_load_n(&g_hle.nvdrv.syncpt_gave_up[id], __ATOMIC_RELAXED) - after) > 0;
++}
+ /* every syncpoint user (GPU channels here, host1x channels in host1x.c) allocates here, so ids stay unique and low.
+    NVIDIA's stream library sizes its per-syncpoint tables at 128 (NvRmChannelNumSyncPoints is a stub that fails), and an
+    id past them writes into the game's heap: running out is fatal, and a closed channel (GPU or host1x) gives its ids
+@@ -824,6 +837,7 @@ static u32 ctrl_event_wait(u32 fd, u8* d, int async) {
+             wr32(d, 12, syncpt_read(id));
+             return 0;
+         }
++        syncpt_give_up(id, thresh);
+         return 5;
+     }
+     nvev_lock();
+@@ -854,6 +868,7 @@ static u32 ioctl_ctrl(u32 fd, u32 cmd, u8* d, u32 n) {
+         case 0x19: {                                      /* SYNCPT_WAITEX, with the value back at 12 */
+             i32 timeout = (i32)rd32(d, 8);
+             int ok = syncpt_wait(id, rd32(d, 4), timeout < 0 ? -1 : (i64)timeout * 1000000);
++            if (!ok && timeout) syncpt_give_up(id, rd32(d, 4));
+             if (n >= 16) wr32(d, 12, syncpt_read(id));
+             return ok ? 0 : 5;
+         }
+diff --git a/src/nx/hle/services/nvdrv.h b/src/nx/hle/services/nvdrv.h
+index c42fc3d..f6be192 100644
+--- a/src/nx/hle/services/nvdrv.h
++++ b/src/nx/hle/services/nvdrv.h
+@@ -38,6 +38,9 @@ void syncpt_add(u32 id, u32 n); /* n increments, one wakeup */
+ u32 syncpt_promise(u32 id, u32 n);
+ /* 1 once id reaches thresh (across the 32-bit wrap), 0 when the time runs out. 0 looks once, negative waits for good */
+ int syncpt_wait(u32 id, u32 thresh, i64 timeout_ns);
++/* PortForge: 1 when a game's own wait on id timed out (an nvhost-ctrl wait ioctl) for a value past after. The game then
++   takes that work as finished and may write over its command memory, as no console GPU is that late */
++int syncpt_given_up(u32 id, u32 after);
+ /* Runs fn(arg) on the GPU thread after the submissions that promised the fences (id[i], val[i]), i < n <= 4. A fence
+    nothing queued has promised is waited for here instead, for at most 1 s, and its id[i] is set to ~0 */
+ void nv_gpu_call_after(u32 n, u32* id, const u32* val, void (*fn)(void*), void* arg);
+@@ -120,6 +123,8 @@ typedef struct {
+     int va_ready; /* the free ranges hold the whole region at first (va_init) */
+     u32 syncpt[SYNCPT_IDS];
+     u32 syncpt_max[SYNCPT_IDS];
++    u32 syncpt_gave_up[SYNCPT_IDS]; /* PortForge: the latest value a game's wait ioctl stopped waiting for (atomic), */
++    u8 syncpt_gave_up_any[SYNCPT_IDS]; /* set once one did */
+     PCond sync_cv;
+     PMutex sync_lk;
+     u8 syncpt_used[SYNCPT_N];
 diff --git a/src/nx/memory/layout.h b/src/nx/memory/layout.h
 new file mode 100644
 index 0000000..3a4d381
@@ -5937,10 +6147,22 @@ index 408db9e..0439f39 100644
  /* ldn, read: local wireless over the LAN (ldn_mitm's protocol), through an Eden room, or off
     (hle/services/network/ldn.c) */
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
-index ac4acd5..f99ca1f 100644
+index ac4acd5..55ab33d 100644
 --- a/src/nx/runtime/platform/backend/gamepad.c
 +++ b/src/nx/runtime/platform/backend/gamepad.c
-@@ -485,3 +485,84 @@ void gamepad_rumble_slot(int slot, u32 left, u32 right) {
+@@ -370,6 +370,11 @@ u64 gamepad_button(u32 id, int button) {
+     map_of(slot < SNX_GAMEPADS ? slot : -1, &map);
+     return map.bit[control] < 0 ? 0 : 1ull << map.bit[control];
+ }
++int gamepad_menu_button(u32 id, int button) {
++    SDL_Gamepad* g = SDL_GetGamepadFromID(id);
++    return g && (button == SDL_GAMEPAD_BUTTON_GUIDE ||
++                 (button == SDL_GAMEPAD_BUTTON_START && SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_BACK)));
++}
+ int gamepad_slot_type(int slot) {
+     if (slot < 0 || slot >= SNX_GAMEPADS || !g_pads[slot]) return SDL_GAMEPAD_TYPE_UNKNOWN;
+     return SDL_GetGamepadType(g_pads[slot]);
+@@ -485,3 +490,84 @@ void gamepad_rumble_slot(int slot, u32 left, u32 right) {
      hi = hi * strength(slot) / 100;
      SDL_RumbleGamepad(g_pads[slot], (Uint16)lo, (Uint16)hi, 100);
  }
@@ -6026,9 +6248,18 @@ index ac4acd5..f99ca1f 100644
 +    return 0;
 +}
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
-index 87dfdc6..aae2f4c 100644
+index 87dfdc6..bc546a8 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
 +++ b/src/nx/runtime/platform/backend/sdl3.c
+@@ -342,7 +342,7 @@ static const char* HELP = "Controller: A, B, X and Y where the console's are (ga
+                           "  Q = L   E = R   1 = ZL   3 = ZR   Enter = +   Backspace = -\n\n"
+                           "F1 = this help   F2 = the game's menu   F3 = screenshot   F4 = FPS limit on / off\n"
+                           "F5 = thread dump   F6 = showcase on / off   F11 / Alt+Enter = fullscreen\n"
+-                          "Esc = quit";
++                          "Esc / right-click = game menu or back   Controller: Home, or hold Back/Share and press Start/Options";
+ 
+ static PadKind gamepad_kind(int type) {
+     switch (type) {
 @@ -713,7 +713,8 @@ static void hotkey(SDL_Keycode k) {
              else if (g_opt_fps)
                  LOG("FPS limit: %d\n", g_opt_fps);
@@ -6039,11 +6270,103 @@ index 87dfdc6..aae2f4c 100644
              break;
          }
          case SDLK_F5: kernel_dump_threads(); break;
+@@ -731,8 +732,8 @@ static void hotkey(SDL_Keycode k) {
+     }
+ }
+ 
+-/* The game's menu takes the keys, the buttons, the fingers and the mouse while it is open. Back, Home and F2 open
+-   and close it, and they and Esc end the on-screen controls' edit mode. Under ui_lock: the renderer draws them on its
++/* The game's menu takes the keys, the buttons, the fingers and the mouse while it is open. Esc and right-click open
++   it or go back; Home and F2 toggle it. These also end the controls' edit mode. Under ui_lock: the renderer draws them on its
+    thread */
+ /* a finger's id, the pen's apart: SDL gives a pen's touch the id 1 on every platform, the id Android and Wayland
+    give a first finger and any finger may have, and no real finger's id sets bit 63 */
+@@ -740,7 +741,18 @@ static u64 finger_id(const SDL_TouchFingerEvent* f) {
+     return (u64)f->fingerID | (f->touchID == SDL_PEN_TOUCHID ? 1ull << 63 : 0);
+ }
+ static void menu_open(int open) {
+-    if (overlay_shown() != open) overlay_toggle();
++    if (overlay_shown() != open) {
++        if (open) {
++            u64 buttons;
++            i32 sticks[4];
++            /* Prime the menu while closed: a shortcut remapped to A/B or a held stick must not select an item
++               on the same poll that opens it. It must first be released. */
++            gamepad_state(&buttons, sticks);
++            overlay_controls(buttons, sticks, SDL_GetTicks());
++        }
++        overlay_toggle();
++        LOG("menu: %s\n", open ? "opened" : "closed");
++    }
+     vpad_release();
+     keys_held = 0;
+     /* a finger or button down before this (Home on the on-screen controls opened it) lifts without a tap */
+@@ -757,18 +769,29 @@ static void overlay_do(int action) {
+ static int menu_event(const SDL_Event* e) {
+     int w, h;
+     float d;
++    /* Esc never quits. Consume repeats even with the menu closed, and the mouse's release as well, so a held
++       shortcut cannot reopen the menu or reach the game's input after dismissing it. */
++    if ((e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE) ||
++        ((e->type == SDL_EVENT_MOUSE_BUTTON_DOWN || e->type == SDL_EVENT_MOUSE_BUTTON_UP) &&
++         e->button.which != SDL_TOUCH_MOUSEID && e->button.button == SDL_BUTTON_RIGHT)) {
++        if ((e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) || e->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
++            if (vpad_editing())
++                vpad_edit(0);
++            else if (overlay_shown())
++                overlay_do(overlay_back());
++            else
++                menu_open(1);
++        }
++        return 1;
++    }
+     if ((e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && (e->key.key == SDLK_AC_BACK || e->key.key == SDLK_F2)) ||
+-        (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE)) {
++        (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && gamepad_menu_button(e->gbutton.which, e->gbutton.button))) {
+         if (vpad_editing())
+             vpad_edit(0);
+         else
+             menu_open(!overlay_shown());
+         return 1;
+     }
+-    if (vpad_editing() && e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE) {
+-        vpad_edit(0);
+-        return 1;
+-    }
+     if (!overlay_shown()) return 0;
+     if (e->type == SDL_EVENT_KEY_DOWN) {
+         switch (e->key.key) {
+@@ -780,7 +803,6 @@ static int menu_event(const SDL_Event* e) {
+             case SDLK_SPACE:
+                 if (!e->key.repeat) overlay_do(overlay_select());
+                 break;
+-            case SDLK_ESCAPE:
+             case SDLK_BACKSPACE:
+                 if (!e->key.repeat) overlay_do(overlay_back());
+                 break;
+@@ -946,10 +968,6 @@ void video_poll(void) {
+                 wsafe_set();
+                 break;
+             case SDL_EVENT_KEY_DOWN:
+-                if (e.key.key == SDLK_ESCAPE) { /* a fresh press: the repeats of the Esc that closed the menu don't */
+-                    if (!e.key.repeat) g_quit = 1;
+-                    break;
+-                }
+                 if (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT)) {
+                     if (!e.key.repeat) set_fullscreen(!g_fullscreen);
+                     break;
 diff --git a/src/nx/runtime/platform/gamepad.h b/src/nx/runtime/platform/gamepad.h
-index 0821ef7..881b14c 100644
+index 0821ef7..c440b93 100644
 --- a/src/nx/runtime/platform/gamepad.h
 +++ b/src/nx/runtime/platform/gamepad.h
-@@ -29,6 +29,8 @@ u64 gamepad_button(u32 id, int button);
+@@ -25,10 +25,15 @@ u32 gamepad_slot_id(int slot); /* SDL joystick instance ID, 0 for an empty slot
+ void gamepad_motion(int slot, PadMotion out[2]);
+ /* the HidNpadButton bit one of a gamepad's buttons (an SDL_GamepadButton) is, as the game reads it; 0 for none */
+ u64 gamepad_button(u32 id, int button);
++/* A physical button-down opens the engine menu: Home/Guide, or Start with Back held on that same pad.
++   Independent of custom game mappings; only Start's event fires the chord, even when both presses arrive together. */
++int gamepad_menu_button(u32 id, int button);
+ /* legacy combined rumble, played on every open gamepad that can vibrate */
  void gamepad_rumble(u32 left, u32 right);
  /* one guest player's vibration (hid.h's PadState.rumble), played on that slot's gamepad each frame */
  void gamepad_rumble_slot(int slot, u32 left, u32 right);
@@ -6052,11 +6375,84 @@ index 0821ef7..881b14c 100644
  /* the settings are g_settings' (settings.txt: swap_a_b, stick_dead_zone, vibration, background_input, pair_joy_cons,
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
+diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
+index 441a8c2..24adebc 100644
+--- a/src/nx/runtime/platform/overlay.c
++++ b/src/nx/runtime/platform/overlay.c
+@@ -481,24 +481,30 @@ int overlay_pad(u64 button) {
+     return OVERLAY_NONE;
+ }
+ int overlay_controls(u64 buttons, const i32 sticks[4], u64 ms) {
+-    static u64 seen, next;       /* the buttons of the last call; when a held direction moves again */
++    static struct {
++        u64 seen, next, blocked; /* previous input, next direction repeat, and controls held before opening */
++    } controls;
+     const u64 dirs = 0xFF000ull; /* the D-pad's and the left stick's: bits 12 to 19 */
+     u64 now = buttons | (sticks[0] < -16384 ? 1ull << 16 : 0) | (sticks[1] > 16384 ? 1ull << 17 : 0) |
+               (sticks[0] > 16384 ? 1ull << 18 : 0) | (sticks[1] < -16384 ? 1ull << 19 : 0),
+-        pressed = shown ? now & ~seen : 0;
++        pressed;
+     int bit, did = OVERLAY_NONE;
++    if (!shown) controls.blocked = now;
++    controls.blocked &= now;
++    now &= ~controls.blocked;
++    pressed = shown ? now & ~controls.seen : 0;
+     if (map_swallow) { /* the press the button map page took */
+         map_swallow = 0;
+-        seen = now;
++        controls.seen = now;
+         return OVERLAY_NONE;
+     }
+     if (pressed & dirs)
+-        next = ms + SNX_OVERLAY_REPEAT_DELAY;
+-    else if (shown && (now & dirs) && ms >= next) { /* held: the lowest direction again */
++        controls.next = ms + SNX_OVERLAY_REPEAT_DELAY;
++    else if (shown && (now & dirs) && ms >= controls.next) { /* held: the lowest direction again */
+         pressed |= now & dirs & (~(now & dirs) + 1);
+-        next = ms + SNX_OVERLAY_REPEAT_MS;
++        controls.next = ms + SNX_OVERLAY_REPEAT_MS;
+     }
+-    seen = now;
++    controls.seen = now;
+     for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
+         if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
+     return did;
+@@ -523,7 +529,7 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
+                         size_t size) {
+     static const char* const titles[] = {"SCARLETNX  /  MENU", "SCARLETNX  /  CONTROLS", "SCARLETNX  /  BUTTONS",
+                                          "SCARLETNX  /  CONTROLLERS"};
+-    static const char* const hints[] = {"Back or Home: back to the game.", "Back: the menu.",
++    static const char* const hints[] = {"Esc / right-click / Home: return to game.", "Esc / Back: the menu.",
+                                         "Tap one to show or hide it."};
+     int r, n = items();
+     memset(d, 0, sizeof *d);
+diff --git a/src/nx/runtime/platform/overlay.h b/src/nx/runtime/platform/overlay.h
+index 8e29f7b..777d7d6 100644
+--- a/src/nx/runtime/platform/overlay.h
++++ b/src/nx/runtime/platform/overlay.h
+@@ -1,6 +1,6 @@
+ /* SPDX-License-Identifier: GPL-3.0-or-later
+    Copyright 2026 the ScarletNX contributors */
+-/* The game's menu: Android's back button, a gamepad's Home, the on-screen Home or F2 opens it over the game, in the
++/* The game's menu: Esc, right-click, Android Back, a gamepad's Home or Back+Start, on-screen Home or F2 opens it, in the
+    menu's look (src/gui, the YoRHa theme), drawn by the renderer as quads (ui.h). The same on every platform: the
+    on-screen controls' options (vpad.h), the touch screen's, and Exit */
+ #ifndef SNX_OVERLAY_H
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
-index d3e4e35..064dffe 100644
+index d3e4e35..b50e68e 100644
 --- a/src/nx/runtime/platform/plat.h
 +++ b/src/nx/runtime/platform/plat.h
-@@ -173,6 +173,8 @@ void plat_install_crash_handler(void);
+@@ -42,6 +42,9 @@ int plat_thread(PThreadFn fn, void* arg, size_t stack);
+ void plat_thread_exit(void); /* ends the calling thread (one plat_thread started) */
+ /* the host CPUs the process may run on, at most max of them, into ids; 0 where the runtime doesn't choose them */
+ int plat_cpus(int* ids, int max);
++/* PortForge: the host's CPU threads and physical cores, for sizing worker pools; 0 where the host doesn't tell */
++int plat_cpu_threads(void);
++int plat_cpu_cores(void);
+ /* the calling thread runs only on the n host CPUs in ids */
+ void plat_thread_cpus(const int* ids, int n);
+ /* the host for the log's header, so a report needn't describe it: "<OS and version>, <CPU>, <n> threads, <n> GB RAM",
+@@ -173,6 +176,8 @@ void plat_install_crash_handler(void);
  void plat_prof_start(void); /* starts the sampling profiler (the profile option): Windows only */
  #if defined(_WIN32)
  void plat_prof_add_thread(HANDLE h); /* a thread to sample; the profiler keeps its own handle */
@@ -6065,6 +6461,52 @@ index d3e4e35..064dffe 100644
  #endif
  
  #endif
+diff --git a/src/nx/runtime/platform/plat_posix.c b/src/nx/runtime/platform/plat_posix.c
+index cd639e4..0502a88 100644
+--- a/src/nx/runtime/platform/plat_posix.c
++++ b/src/nx/runtime/platform/plat_posix.c
+@@ -219,6 +219,9 @@ void plat_thread_cpus(const int* ids, int n) {
+     (void)n;
+ }
+ #endif
++/* plat_cpus says what pins threads here; the physical cores aren't looked up */
++int plat_cpu_threads(void) { return 0; }
++int plat_cpu_cores(void) { return 0; }
+ #if defined(__linux__) && !defined(__ANDROID__)
+ /* the text after "key" (and a '=' or ':' with the spaces around it) on the first line of path that starts with it,
+    unquoted; out empty when there's none */
+diff --git a/src/nx/runtime/platform/plat_win32.c b/src/nx/runtime/platform/plat_win32.c
+index 1f9eebc..e9cbd58 100644
+--- a/src/nx/runtime/platform/plat_win32.c
++++ b/src/nx/runtime/platform/plat_win32.c
+@@ -112,6 +112,27 @@ void plat_thread_cpus(const int* ids, int n) {
+     (void)ids;
+     (void)n;
+ }
++int plat_cpu_threads(void) { return (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS); }
++int plat_cpu_cores(void) {
++    DWORD len = 0, at = 0;
++    int cores = 0;
++    u8* buf;
++    if (GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &len) || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
++        return 0;
++    buf = (u8*)malloc(len);
++    if (!buf) return 0;
++    if (GetLogicalProcessorInformationEx(RelationProcessorCore, (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(void*)buf,
++                                         &len))
++        while (at < len) {
++            const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* e =
++                (const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(const void*)(buf + at);
++            if (!e->Size) break;
++            if (e->Relationship == RelationProcessorCore) cores++;
++            at += e->Size;
++        }
++    free(buf);
++    return cores;
++}
+ typedef LONG(WINAPI* RtlGetVersionFn)(RTL_OSVERSIONINFOW*);
+ void plat_system_info(char* out, size_t cap) {
+     static const char key[] = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
 diff --git a/src/nx/runtime/platform/profiler_win32.c b/src/nx/runtime/platform/profiler_win32.c
 index ebfd9c6..dc8cc1f 100644
 --- a/src/nx/runtime/platform/profiler_win32.c
@@ -6436,7 +6878,7 @@ index be57ac5..0a6af92 100644
      key jit_threads
      int 0 8
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 64bdd9b..5aa3387 100644
+index 64bdd9b..e493dd1 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -64,7 +64,11 @@ endif()
@@ -6476,6 +6918,15 @@ index 64bdd9b..5aa3387 100644
  add_executable(snx-test-ipc-message ipc_message.c)
  snx_test_target(snx-test-ipc-message 23)
  add_test(NAME ipc_message COMMAND snx-test-ipc-message)
+@@ -1321,7 +1335,7 @@ add_test(NAME draw_texture COMMAND snx-test-draw-texture)
+ 
+ # gpu.c's queue over the real puller, 3D engine and macros: a channel waiting on a semaphore, a syncpoint, a fence or
+ # inside a macro lets the others run, and goes on where it stopped (its platform stand-ins are pthreads)
+-if(UNIX)
++if(UNIX OR MINGW)
+     add_executable(snx-test-gpu-park gpu_park.c "${PROJECT_SOURCE_DIR}/src/nx/gpu/gpu.c"
+         "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/engines.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/maxwell3d.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/write_pages.c"
+         "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/mme.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/mme_hle.c"
 diff --git a/tests/astc_vulkan.c b/tests/astc_vulkan.c
 index fda0dea..488b8dd 100644
 --- a/tests/astc_vulkan.c
@@ -6573,10 +7024,10 @@ index 2329b11..7253c07 100644
      CHECK(fs_tree_create(&other, dir, "new.bin", 0, 1, NULL) == FS_TREE_READONLY);
 diff --git a/tests/frame_policy.c b/tests/frame_policy.c
 new file mode 100644
-index 0000000..335b027
+index 0000000..8404f8a
 --- /dev/null
 +++ b/tests/frame_policy.c
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,36 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#include "nx/gpu/vk/frame_policy.h"
 +#include <assert.h>
@@ -6604,6 +7055,10 @@ index 0000000..335b027
 +    assert(pf_shader_workers(0, 64) == 6 && pf_shader_workers(0, 0) == 2);
 +    assert(pf_shader_workers(1, 64) == 1 && pf_shader_workers(32, 2) == 32);
 +    assert(pf_shader_workers(100, 8) == 32);
++    assert(pf_shader_workers_on(0, 8, 8) == 4 && pf_shader_workers_on(0, 16, 8) == 4);
++    assert(pf_shader_workers_on(0, 12, 6) == 3 && pf_shader_workers_on(0, 32, 16) == 6);
++    assert(pf_shader_workers_on(0, 8, 4) == 2 && pf_shader_workers_on(0, 4, 4) == 1 && pf_shader_workers_on(0, 0, 0) == 2);
++    assert(pf_shader_workers_on(3, 16, 8) == 3);
 +    assert(pf_background_workers(1, 1) == 1 && pf_background_workers(2, 1) == 1);
 +    assert(pf_background_workers(6, 1) == 5 && pf_background_workers(6, 0) == 6);
 +    puts("frame policy: burst budget, reset, oversleep, CPU counts and demand reservation passed");
@@ -6636,6 +7091,112 @@ index 0000000..17e9fa2
 +    puts("frame time p99: PASS");
 +    return 0;
 +}
+diff --git a/tests/gamepad.c b/tests/gamepad.c
+index 685599a..63836f9 100644
+--- a/tests/gamepad.c
++++ b/tests/gamepad.c
+@@ -247,6 +247,33 @@ int main(void) {
+     CHECK(gamepad_button(SDL_GetJoystickID(xbox), SDL_GAMEPAD_BUTTON_DPAD_UP) == UP);
+     CHECK(gamepad_button(SDL_GetJoystickID(xbox), SDL_GAMEPAD_BUTTON_GUIDE) == 0);
+ 
++    /* Engine-menu shortcuts use physical controls even when game mappings change. The chord belongs to one
++       controller, fires only on Start's down event, and leaves ordinary Start and Back presses to the game. */
++    {
++        u32 id = SDL_GetJoystickID(xbox), other = SDL_GetJoystickID(sony);
++        CHECK(gamepad_menu_button(id, SDL_GAMEPAD_BUTTON_GUIDE));
++        CHECK(!gamepad_menu_button(0, SDL_GAMEPAD_BUTTON_GUIDE));
++        CHECK(!gamepad_menu_button(id, SDL_GAMEPAD_BUTTON_START));
++        SDL_SetJoystickVirtualButton(xbox, SDL_GAMEPAD_BUTTON_BACK, true);
++        pump();
++        CHECK(gamepad_menu_button(id, SDL_GAMEPAD_BUTTON_START));
++        CHECK(!gamepad_menu_button(id, SDL_GAMEPAD_BUTTON_BACK));
++        CHECK(!gamepad_menu_button(other, SDL_GAMEPAD_BUTTON_START));
++        CHECK(!gamepad_menu_button(id, SDL_GAMEPAD_BUTTON_SOUTH));
++        CHECK(gamepad_ini("gamepad_map", "start:None back:A"));
++        CHECK(gamepad_menu_button(id, SDL_GAMEPAD_BUTTON_START));
++        CHECK(gamepad_ini("gamepad_map", ""));
++        SDL_SetJoystickVirtualButton(xbox, SDL_GAMEPAD_BUTTON_BACK, false);
++        pump();
++        CHECK(!gamepad_menu_button(id, SDL_GAMEPAD_BUTTON_START));
++        SDL_SetJoystickVirtualButton(sony, SDL_GAMEPAD_BUTTON_BACK, true);
++        pump();
++        CHECK(gamepad_menu_button(other, SDL_GAMEPAD_BUTTON_START));
++        CHECK(!gamepad_menu_button(id, SDL_GAMEPAD_BUTTON_START));
++        SDL_SetJoystickVirtualButton(sony, SDL_GAMEPAD_BUTTON_BACK, false);
++        pump();
++    }
++
+     /* gamepad_swap_ab=1: A and B swapped, X and Y where the console's are; a key that is none of these is no gamepad
+        key, and gamepad_buttons is one no longer (docs/DEPRECATIONS.md) */
+     CHECK(gamepad_ini("gamepad_swap_ab", "1"));
+diff --git a/tests/gpu_park.c b/tests/gpu_park.c
+index b1bebd4..631ab1e 100644
+--- a/tests/gpu_park.c
++++ b/tests/gpu_park.c
+@@ -104,6 +104,11 @@ void syncpt_add(u32 id, u32 n) {
+     gpu_kick();
+ }
+ void syncpt_incr(u32 id) { syncpt_add(id, 1); }
++static int gave_up; /* the game's fence wait on channel 20 timed out */
++int syncpt_given_up(u32 id, u32 after) {
++    (void)after;
++    return id == 20 && __atomic_load_n(&gave_up, __ATOMIC_SEQ_CST);
++}
+ static int dma_on_cpu(const GpuDmaOp* o) { /* the renderer's copy as its CPU reference does it */
+     dma_copy_ref(o);
+     return 1;
+@@ -142,6 +147,17 @@ u64 plat_ns(void) {
+     clock_gettime(CLOCK_MONOTONIC, &ts);
+     return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+ }
++#ifdef _WIN32 /* MinGW: the platform's locks are SRW locks and condition variables (plat_win32.c's) */
++void pm_init(PMutex* m) { InitializeSRWLock(&m->l); }
++void pm_lock(PMutex* m) { AcquireSRWLockExclusive(&m->l); }
++void pm_unlock(PMutex* m) { ReleaseSRWLockExclusive(&m->l); }
++void pc_init(PCond* c) { InitializeConditionVariable(&c->c); }
++void pc_broadcast(PCond* c) { WakeAllConditionVariable(&c->c); }
++int pc_wait(PCond* c, PMutex* m, i64 ns) {
++    DWORD ms = ns < 0 ? INFINITE : (DWORD)((ns + 999999) / 1000000);
++    return !SleepConditionVariableSRW(&c->c, &m->l, ms, 0);
++}
++#else
+ void pm_init(PMutex* m) { pthread_mutex_init(&m->l, NULL); }
+ void pm_lock(PMutex* m) { pthread_mutex_lock(&m->l); }
+ void pm_unlock(PMutex* m) { pthread_mutex_unlock(&m->l); }
+@@ -164,6 +180,7 @@ int pc_wait(PCond* c, PMutex* m, i64 ns) {
+     struct timespec ts = {(time_t)(t / 1000000000ull), (long)(t % 1000000000ull)};
+     return pthread_cond_timedwait(&c->c, &m->l, &ts) != 0;
+ }
++#endif
+ static PThreadFn thread_fn;
+ static void* thread_main(void* arg) {
+     thread_fn(arg);
+@@ -343,6 +360,25 @@ int main(void) {
+     }
+     cpu_store(SEM, 0);
+ 
++    /* PortForge: a game whose fence wait timed out while the GPU thread was behind takes the submission as done and
++       writes its next commands over the entries after SYNC. Those run as submitted, with a warning */
++    {
++        int warned_before = __atomic_load_n(&warned, __ATOMIC_SEQ_CST);
++        u64 entries[3] = {sem_then(SEM, 1, 4, 53), mark(54) | (1ull << 63), mark(55)};
++        submit(entries, 3, 20);
++        cpu_store(entries[1] & 0xfffffffffcull, imm(CLEAR, 63));
++        cpu_store(entries[2] & 0xfffffffffcull, imm(CLEAR, 64));
++        __atomic_store_n(&gave_up, 1, __ATOMIC_SEQ_CST);
++        cpu_store(SEM, 1);
++        wait_marks(3);
++        expect(marks_are((u32[]){53, 54, 55}, 3), "entries after SYNC run as submitted once the game gave up on them");
++        expect(__atomic_load_n(&warned, __ATOMIC_SEQ_CST) == warned_before + 1, "the overwrite is reported once");
++        __atomic_store_n(&warned, warned_before, __ATOMIC_SEQ_CST);
++        __atomic_store_n(&gave_up, 0, __ATOMIC_SEQ_CST);
++        forget_marks();
++        cpu_store(SEM, 0);
++    }
++
+     /* Reaching SYNC resumes prefetch up to the next SYNC. Executing the first command may release memory
+        the CPU immediately reuses; a later fetched entry survives, while a second SYNC sees the new bytes. */
+     for (u32 barrier = 0; barrier < 2; barrier++) {
 diff --git a/tests/jit_service.c b/tests/jit_service.c
 index a91eb5f..13f12cc 100644
 --- a/tests/jit_service.c
@@ -6725,6 +7286,35 @@ index 0000000..130c79d
 +    puts("36-bit SDK stack/TLS pointers round-trip; 39-bit layout remains compatible");
 +    return 0;
 +}
+diff --git a/tests/overlay.c b/tests/overlay.c
+index 03330d3..0703e36 100644
+--- a/tests/overlay.c
++++ b/tests/overlay.c
+@@ -768,6 +768,24 @@ int main(void) {
+         for (i = 0, pictures = 0; i < list.n; ++i) pictures += list.q[i].v == SNX_CONTROLS_ATLAS_HEIGHT;
+         assert(!pictures && !shows("Player"));
+     }
++    /* A controller shortcut can be mapped to confirm, with the stick already pushed. Neither may select or move
++       the freshly opened menu, even after its normal repeat delay. Releasing then pressing works as usual. */
++    {
++        static const i32 still[4], down[4] = {0, -20000, 0, 0};
++        if (overlay_shown()) overlay_toggle();
++        assert(overlay_controls(1, down, 10000) == OVERLAY_NONE);
++        overlay_toggle();
++        assert(overlay_controls(1, down, 12000) == OVERLAY_NONE);
++        assert(overlay_select() == OVERLAY_NONE);
++        draw();
++        assert(text_at(1, 0, "SCARLETNX  /  CONTROLS")); /* still on the first root item */
++        assert(overlay_back() == OVERLAY_NONE);
++        assert(overlay_controls(0, still, 12001) == OVERLAY_NONE);
++        assert(overlay_controls(0, down, 12002) == OVERLAY_NONE);
++        assert(overlay_controls(1, still, 12003) == OVERLAY_NONE);
++        draw();
++        assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS")); /* a fresh down and confirm */
++    }
+     puts("overlay: placing, pages, taps, keys, values, scrolling, look, the error's panel, the atlas and the user "
+          "passed");
+     return 0;
 diff --git a/tests/render_scale.c b/tests/render_scale.c
 new file mode 100644
 index 0000000..98d5ba0
@@ -6852,6 +7442,18 @@ index 53c5e45..3c043fc 100644
      test_renderer.present_buffer = test_present;
      vi_show_buffer(7, 0x40, 1, 1, 4, 1, 0, 1, crop, 0);
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
+diff --git a/tests/tex_upload_rows.c b/tests/tex_upload_rows.c
+index a9d357a..6d09d89 100644
+--- a/tests/tex_upload_rows.c
++++ b/tests/tex_upload_rows.c
+@@ -130,6 +130,7 @@ VkState g_vk;
+ _Atomic int g_cs_any;
+ u32 g_vk_present;
+ void logf_(int lvl, const char* fmt, ...) { (void)lvl, (void)fmt; }
++u64 plat_ns(void) { return 0; } /* the stall line's upload timing (texture.c) */
+ int vk_ok_(VkResult r, const char* what, const char* file, int line) {
+     (void)what, (void)file, (void)line;
+     return r == VK_SUCCESS;
 diff --git a/tests/vulkan_headless.c b/tests/vulkan_headless.c
 index 25f0af2..e079e58 100644
 --- a/tests/vulkan_headless.c

@@ -1,4 +1,8 @@
-# PortForge 0.31
+# PortForge 0.33
+
+**Smoother first plays:** if a game dropped to a few frames per second right after its first loading screens and never recovered, Engine 1.16 fixes the cause. Expect a few short loading pauses the first time a game builds its shaders, then normal speed. Existing games get Engine 1.16 from the Doctor when they are closed.
+
+**Game menu:** press Esc or right-click inside the game. Esc/right-click goes back through menu pages and returns to the game; it no longer quits. On a controller use Home/Guide, or hold Back/Share/Minus and press Start/Options/Plus. Use the D-pad or stick and the controller's mapped confirm/back buttons; keyboard arrows and Enter work too, and you can click items with the mouse. Select Exit to close the game. Existing games need Engine 1.15 or later, installed automatically by the Doctor when the game is closed. The menu captures game controls while open; it does not freeze the game's simulation.
 
 **Startup fixes:** Engine 1.14 selects the game's requested memory layout automatically and avoids opening every game asset before play. New conversions also receive the corrected atomic-instruction translation. An existing affected game-code DLL needs rebuilding once to receive a translator fix; installing a new runtime alone does not rewrite compiled game code.
 
