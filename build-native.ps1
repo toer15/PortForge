@@ -77,6 +77,11 @@ if ($Test) {
     & (Join-Path $projectRoot 'build\EngineTests.exe') (Join-Path $projectRoot 'build\TuningFixture.exe') (Join-Path $errorBackendRoot 'scarletnx.exe') (Join-Path $projectRoot 'build\DiagnosisFixture.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Engine tests failed.' }
 
+    & $compiler /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /r:System.Core.dll (('/out:' + (Join-Path $projectRoot 'build\FgCadenceTests.exe'))) (Join-Path $projectRoot 'tests\FgCadenceTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'FG cadence tests compilation failed.' }
+    & (Join-Path $projectRoot 'build\FgCadenceTests.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'FG cadence tests failed.' }
+
 }
 Write-Output ('Built native frontend: ' + (Join-Path $nativeRoot 'PortForge.exe'))
 

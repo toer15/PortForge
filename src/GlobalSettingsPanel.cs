@@ -27,7 +27,7 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.30 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. The game always runs at its own speed. The FPS limit and PortForge FSR 3 only change how many pictures are shown. Esc shows Engine version, Display FPS and Limit on one line — Play updates the game Engine when it is older than the app; you can also use Doctor → Engine.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.31 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. The game always runs at its own speed. The FPS limit and PortForge FSR 3 only change how many pictures are shown — with FSR 3 On, Display FPS can rise toward your Limit (up to 4× the game). Esc shows Engine version, Display FPS and Limit — Play updates the game Engine when it is older than the app; you can also use Doctor → Engine.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             AddText(layout, "720p through 4K size the window/swapchain; FSR / PortForge FSR 3 enlarge the finished image. Internal game buffers stay native (scaling them broke titles like Breath of the Wild). Auto keeps the game's layout.", 10);

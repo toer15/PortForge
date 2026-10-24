@@ -1,6 +1,8 @@
-# PortForge 0.47 / Engine 1.30
+# PortForge 0.49 / Engine 1.31
 
-**New in 0.47:** Stops PortForge FSR 3 / present crashes from a bookkeeping path that left GPU commands unsubmitted. **Play** updates the game's Engine from `PortForge\Engine\` before launch when it is older. Esc still shows `Engine X.Y | Display FPS: N | Limit: L`. Speed lock and ~2× display with FSR 3 On are unchanged. See [VALIDATION-0.47.md](VALIDATION-0.47.md).
+**New in 0.49:** PortForge FSR 3 can raise **Display FPS** toward your Limit — not only classic 2×. A 30 FPS title with FSR 3 On and Limit 120 shows ~**120** (multi-mid FG) without speeding the guest. Esc: `Engine 1.31 | Display FPS: N (4x game 30) | Limit: 120`. Play / Doctor still install the app Engine. See [VALIDATION-0.49.md](VALIDATION-0.49.md).
+
+**0.47:** Stops PortForge FSR 3 / present crashes from a bookkeeping path that left GPU commands unsubmitted. **Play** updates the game's Engine from `PortForge\Engine\` before launch when it is older. See [VALIDATION-0.47.md](VALIDATION-0.47.md).
 
 **0.46:** Esc shows Engine version, held Display FPS and live Limit. See [VALIDATION-0.46.md](VALIDATION-0.46.md).
 
