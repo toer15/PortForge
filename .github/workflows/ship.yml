@@ -47,6 +47,7 @@ jobs:
             mingw-w64-clang-x86_64-ccache
 
       - name: Engine source (ScarletNX at engine/BASE + the PortForge patch)
+        id: src
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -69,6 +70,7 @@ jobs:
           restore-keys: engine-${{ hashFiles('engine/BASE') }}-
 
       - name: Build the Engine
+        id: engine
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -76,6 +78,7 @@ jobs:
           ./build-engine.sh 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-engine.log"
 
       - name: Engine pacing tests
+        id: tests
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -86,6 +89,7 @@ jobs:
           } 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-tests.log"
 
       - name: Package the Engine
+        id: package
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -95,6 +99,7 @@ jobs:
           ls -la package
 
       - name: Build the app and the release files
+        id: app
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -115,7 +120,9 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          for f in ci-engine.log ci-tests.log ci-package.log ci-app.log; do
+          echo "::error title=steps::source ${{ steps.src.outcome }}, engine ${{ steps.engine.outcome }}, tests ${{ steps.tests.outcome }}, package ${{ steps.package.outcome }}, app ${{ steps.app.outcome }}"
+          ls -la ci-*.log || true
+          for f in ci-app.log ci-package.log ci-tests.log ci-engine.log; do
             [ -f "$f" ] || continue
             body=$(grep -v '^[[:space:]]*$' "$f" | tail -n 45 | cut -c1-300 | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}')
             echo "::error title=$f::$body"
