@@ -659,7 +659,7 @@ new file mode 100644
 index 0000000..ad5980a
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
-@@ -0,0 +1,433 @@
+@@ -0,0 +1,469 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* PortForge FSR 3 (from scratch, shaders/fg.comp): optical-flow frame generation inspired by AMD FSR 3 / AFMF
 +   (luma pyramid, hierarchical SAD search, median filter, bidirectional disocclusion, HUD lock, hole inpaint).
@@ -6296,7 +6296,7 @@ index f3ac2e2..ac092d1 100644
      }
      if (recreate && !g_lost && !g_vk.sc_lost) { /* not when this frame's create found the surface lost */
          vk_finish();
-@@ -544,6 +722,212 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -544,5 +722,264 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
@@ -7531,7 +7531,7 @@ index db13c2d..931f27c 100644
  VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
-@@ -888,6 +928,26 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
+@@ -888,6 +928,29 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
     safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
  void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
  void vk_ui_swapchain_gone(void); /* its images' views go before the swapchain does */
@@ -8907,7 +8907,7 @@ index 441a8c2..17ec665 100644
      for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
          if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
      return did;
-@@ -523,15 +614,41 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
+@@ -523,15 +614,46 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
                          size_t size) {
      static const char* const titles[] = {"SCARLETNX  /  MENU", "SCARLETNX  /  CONTROLS", "SCARLETNX  /  BUTTONS",
                                           "SCARLETNX  /  CONTROLLERS"};
@@ -9304,7 +9304,7 @@ diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
 index 2bd6181..61a20a9 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
-@@ -31,14 +31,98 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +31,112 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -10141,7 +10141,7 @@ diff --git a/tests/overlay.c b/tests/overlay.c
 index 03330d3..09edfb8 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
-@@ -10,11 +10,41 @@
+@@ -10,11 +10,52 @@
  #include "nx/runtime/platform/vpad.h"
  #include "nx/runtime/platform/controls_atlas.h"
  #include "nx/runtime/platform/plat.h"
@@ -10427,7 +10427,7 @@ index 53c5e45..f837735 100644
  static u64 now_ns, slept_ns;
  static unsigned checks, failures;
  #define CHECK(c, ...)                                                                                                  \
-@@ -84,12 +86,130 @@ static void pacing(void) {
+@@ -84,12 +86,138 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
