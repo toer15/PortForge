@@ -29,7 +29,7 @@ Copy-Item -Path (Join-Path $NativeFolder '*') -Destination $app -Recurse -Force
 $excludeDirNames = @(
     '.git', '.svn', '.hg', '.cache', '.claude',
     'build', 'obj', 'bin', 'node_modules',
-    'package', 'package-candidate'
+    'package', 'package-candidate', 'package-*'
 )
 
 function Copy-SourceTree([string]$dest) {
