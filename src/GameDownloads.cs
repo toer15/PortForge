@@ -52,9 +52,10 @@ namespace PortForge
         private static string HashBytes(byte[] bytes) { using (var h = SHA256.Create()) return BitConverter.ToString(h.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant(); }
         public static string HashFile(string path, CancellationToken token)
         {
-            using (var h = SHA256.Create()) using (var file = File.OpenRead(path))
+            using (var h = SHA256.Create())
+            using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4 * 1024 * 1024, FileOptions.SequentialScan))
             {
-                byte[] buffer = new byte[1024 * 1024]; int n;
+                byte[] buffer = new byte[4 * 1024 * 1024]; int n;
                 while ((n = file.Read(buffer, 0, buffer.Length)) > 0) { token.ThrowIfCancellationRequested(); h.TransformBlock(buffer, 0, n, buffer, 0); }
                 h.TransformFinalBlock(new byte[0], 0, 0); return BitConverter.ToString(h.Hash).Replace("-", "").ToLowerInvariant();
             }
@@ -176,7 +177,7 @@ namespace PortForge
             var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path)));
             if (drive.IsReady && drive.AvailableFreeSpace < needed + 16L * 1024 * 1024) throw new IOException("Not enough free space for the download and its temporary copy. Free space or choose a different drive; completed parts are kept.");
         }
-        private static void Transfer(Uri uri, Metadata m, string work, int index, CancellationToken token, IProgress<DownloadProgress> progress, Action update)
+        private static void Transfer(Uri uri, Metadata m, string work, int index, CancellationToken token, IProgress<DownloadProgress> progress, Action<long> added)
         {
             long begin = m.Parts == 1 ? 0 : m.Length * index / m.Parts;
             long end = m.Length < 0 ? -1 : m.Parts == 1 ? m.Length - 1 : m.Length * (index + 1) / m.Parts - 1;
@@ -187,9 +188,9 @@ namespace PortForge
                 long local = File.Exists(file) ? new FileInfo(file).Length : 0;
                 long size = end < 0 ? -1 : end - begin + 1;
                 if (size >= 0 && local == size) return;
-                if (local > size && size >= 0) { File.Delete(file); local = 0; }
+                if (local > size && size >= 0) { File.Delete(file); added(-local); local = 0; }
                 bool ranged = m.Ranges && (m.Parts > 1 || (local > 0 && m.ETag.Length > 0));
-                if (!ranged && local > 0) { File.Delete(file); local = 0; }
+                if (!ranged && local > 0) { File.Delete(file); added(-local); local = 0; }
                 var req = Request(uri, ranged ? (long?)(begin + local) : null, ranged && end >= 0 ? (long?)end : null, ranged ? m.ETag : null);
                 using (token.Register(req.Abort))
                 try
@@ -202,14 +203,15 @@ namespace PortForge
                             if (response.StatusCode != HttpStatusCode.PartialContent || response.Headers["Content-Range"] != expected || (m.ETag.Length > 0 && Validator(response) != m.ETag)) throw new RangeFailure();
                         }
                         else if (response.StatusCode != HttpStatusCode.OK) throw new SourceFailure("The source did not return a complete file.");
-                        using (var source = response.GetResponseStream()) using (var dest = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.Read))
+                        using (var source = response.GetResponseStream())
+                        using (var dest = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.Read, 1024 * 1024, FileOptions.SequentialScan))
                         {
-                            byte[] buffer = new byte[256 * 1024]; int n;
+                            byte[] buffer = new byte[1024 * 1024]; int n;
                             while ((n = source.Read(buffer, 0, buffer.Length)) > 0)
                             {
                                 token.ThrowIfCancellationRequested();
                                 if (size >= 0 && local + n > size) throw new RangeFailure();
-                                dest.Write(buffer, 0, n); local += n; update();
+                                dest.Write(buffer, 0, n); local += n; added(n);
                             }
                         }
                         if (size >= 0 && local != size) throw new EndOfStreamException("The connection ended before the complete file arrived.");
@@ -267,15 +269,15 @@ namespace PortForge
                 WriteMetadata(manifest, meta, null);
                 long existing = Enumerable.Range(0, meta.Parts).Sum(i => File.Exists(Part(work, i)) ? new FileInfo(Part(work, i)).Length : 0);
                 Space(destination, meta.Length < 0 ? -1 : checked(meta.Length * 2 - Math.Min(existing, meta.Length)));
-                var watch = Stopwatch.StartNew(); long lastTick = 0, previousBytes = existing; double previousTime = 0;
+                var watch = Stopwatch.StartNew(); long lastTick = 0, previousBytes = existing, received = existing; double previousTime = 0;
                 var progressLock = new object();
-                Action update = delegate
+                Action<long> added = delegate(long n)
                 {
+                    long bytes = Interlocked.Add(ref received, n);
                     lock (progressLock)
                     {
-                        if (watch.ElapsedMilliseconds - lastTick < 300) return;
+                        if (watch.ElapsedMilliseconds - lastTick < 250) return;
                         lastTick = watch.ElapsedMilliseconds;
-                        long bytes = Enumerable.Range(0, meta.Parts).Sum(i => File.Exists(Part(work, i)) ? new FileInfo(Part(work, i)).Length : 0);
                         double now = watch.Elapsed.TotalSeconds, speed = Math.Max(0, (bytes - previousBytes) / Math.Max(.01, now - previousTime));
                         previousBytes = bytes; previousTime = now;
                         Tell(progress, "Downloading with " + meta.Parts + " connection(s).", bytes, meta.Length, speed);
@@ -283,11 +285,11 @@ namespace PortForge
                 };
                 for (int integrityAttempt = 0; ; integrityAttempt++)
                 {
-                    Tell(progress, "Downloading with " + meta.Parts + " connection(s). " + (meta.Ranges && meta.ETag.Length > 0 ? "Completed parts can resume after an interruption." : "This server cannot safely resume; interrupted attempts restart."), existing, meta.Length);
+                    Tell(progress, "Downloading with " + meta.Parts + " connection(s). " + (meta.Ranges && meta.ETag.Length > 0 ? "Completed parts can resume after an interruption." : "This server cannot safely resume; interrupted attempts restart."), Interlocked.Read(ref received), meta.Length);
                     using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token))
                     {
                         Exception failure = null;
-                        var tasks = Enumerable.Range(0, meta.Parts).Select(i => Task.Run(() => { try { Transfer(uri, meta, work, i, linked.Token, progress, update); } catch (Exception e) { Interlocked.CompareExchange(ref failure, e, null); linked.Cancel(); } })).ToArray();
+                        var tasks = Enumerable.Range(0, meta.Parts).Select(i => Task.Run(() => { try { Transfer(uri, meta, work, i, linked.Token, progress, added); } catch (Exception e) { Interlocked.CompareExchange(ref failure, e, null); linked.Cancel(); } })).ToArray();
                         Task.WaitAll(tasks); token.ThrowIfCancellationRequested();
                         if (failure != null)
                         {
@@ -295,6 +297,7 @@ namespace PortForge
                             {
                                 Tell(progress, "The source refused ranges or changed its file. Falling back to one complete connection.");
                                 meta = Probe(uri,token,progress); meta.Parts = 1; meta.Ranges = false; ClearParts(work);
+                                Interlocked.Exchange(ref received, 0); previousBytes = 0;
                                 Space(destination,meta.Length < 0 ? -1 : checked(meta.Length * 2)); WriteMetadata(manifest, meta, null); integrityAttempt--; continue;
                             }
                             throw new IOException("Download paused after a connection or source error. Completed parts were kept. " + failure.Message, failure);
@@ -306,14 +309,15 @@ namespace PortForge
                     // One pass: the parts are joined and hashed as they are copied, instead of copying and then reading the whole file again.
                     using (var hasher = SHA256.Create())
                     {
-                        using (var output = new FileStream(assembled, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024))
-                        foreach (int i in Enumerable.Range(0, meta.Parts)) using (var part = new FileStream(Part(work, i), FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024))
+                        using (var output = new FileStream(assembled, FileMode.Create, FileAccess.Write, FileShare.None, 4 * 1024 * 1024, FileOptions.SequentialScan))
+                        foreach (int i in Enumerable.Range(0, meta.Parts))
+                        using (var part = new FileStream(Part(work, i), FileMode.Open, FileAccess.Read, FileShare.Read, 4 * 1024 * 1024, FileOptions.SequentialScan))
                         { byte[] buffer = new byte[4 * 1024 * 1024]; int n; while ((n = part.Read(buffer, 0, buffer.Length)) > 0) { token.ThrowIfCancellationRequested(); output.Write(buffer, 0, n); hasher.TransformBlock(buffer, 0, n, null, 0); } }
                         hasher.TransformFinalBlock(new byte[0], 0, 0); actual = BitConverter.ToString(hasher.Hash).Replace("-", "").ToLowerInvariant();
                     }
                     if (expectedHash.Length > 0 && expectedHash != actual)
                     {
-                        if (integrityAttempt < 1) { Tell(progress, "Checksum mismatch. Automatically downloading a fresh copy once."); ClearParts(work); continue; }
+                        if (integrityAttempt < 1) { Tell(progress, "Checksum mismatch. Automatically downloading a fresh copy once."); ClearParts(work); Interlocked.Exchange(ref received, 0); previousBytes = 0; continue; }
                         throw new InvalidDataException("SHA-256 still does not match after a fresh download. The source file or supplied checksum needs checking; no completed game file was published.");
                     }
                     string kind;
@@ -324,7 +328,7 @@ namespace PortForge
                     }
                     catch (InvalidDataException e)
                     {
-                        if (integrityAttempt < 1) { Tell(progress,"The game header or ZIP structure is damaged. Automatically trying a fresh download once."); ClearParts(work); continue; }
+                        if (integrityAttempt < 1) { Tell(progress,"The game header or ZIP structure is damaged. Automatically trying a fresh download once."); ClearParts(work); Interlocked.Exchange(ref received, 0); previousBytes = 0; continue; }
                         throw new InvalidDataException("The source still returns an unrecognized game or damaged ZIP after a fresh download. Check the source file or direct link. " + e.Message,e);
                     }
                     if ((Path.GetExtension(destination).Equals(".zip", StringComparison.OrdinalIgnoreCase)) != (kind == "ZIP")) throw new InvalidDataException("The file type does not match the Save as extension. Use .zip for archives, or the correct game extension for an unpacked game.");
@@ -342,8 +346,8 @@ namespace PortForge
         public static string HostCacheFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PortForge", "download-hosts.txt");
         private static readonly object HostLock = new object();
 
-        /// <summary>Bytes a second from n connections reading different parts of the file for a couple of seconds, the start-up of the connections left out. 0 when the server refused.</summary>
-        private static double Trial(Uri uri, Metadata m, int n, CancellationToken token, int milliseconds = 2600)
+        /// <summary>Bytes a second from n connections reading different parts of the file for about a second, the start-up of the connections left out. 0 when the server refused.</summary>
+        private static double Trial(Uri uri, Metadata m, int n, CancellationToken token, int milliseconds = 1100)
         {
             long total = 0, warm = 0; var clock = Stopwatch.StartNew();
             var tasks = Enumerable.Range(0, n).Select(i => Task.Run(() =>
@@ -358,7 +362,7 @@ namespace PortForge
                         if (response.StatusCode != HttpStatusCode.PartialContent) return;
                         using (var source = response.GetResponseStream())
                         {
-                            byte[] buffer = new byte[256 * 1024]; int k;
+                            byte[] buffer = new byte[1024 * 1024]; int k;
                             while (clock.ElapsedMilliseconds < milliseconds && (k = source.Read(buffer, 0, buffer.Length)) > 0) Interlocked.Add(ref total, k);
                         }
                         req.Abort();
@@ -366,9 +370,9 @@ namespace PortForge
                 }
                 catch (Exception) { }
             })).ToArray();
-            token.WaitHandle.WaitOne(milliseconds / 4); warm = Interlocked.Read(ref total); double from = clock.Elapsed.TotalSeconds;
+            token.WaitHandle.WaitOne(Math.Max(200, milliseconds / 5)); warm = Interlocked.Read(ref total); double from = clock.Elapsed.TotalSeconds;
             Task.WaitAll(tasks); token.ThrowIfCancellationRequested();
-            double seconds = Math.Max(.2, clock.Elapsed.TotalSeconds - from);
+            double seconds = Math.Max(.15, clock.Elapsed.TotalSeconds - from);
             return Math.Max(0, Interlocked.Read(ref total) - warm) / seconds;
         }
 
@@ -389,10 +393,18 @@ namespace PortForge
                     }
             }
             catch (IOException) { }
-            Tell(progress, "Testing how many connections this server serves fastest (about 8 seconds).");
-            double one = Trial(uri, m, 1, token), four = Trial(uri, m, 4, token), best = one; int parts = 1;
-            if (four >= one * 1.2 && four > 0) { parts = 4; best = four; double eight = Trial(uri, m, 8, token); if (eight >= four * 1.2) { parts = 8; best = eight; } }
-            Tell(progress, "Fastest for this server: " + parts + " connection(s), about " + (best / 1048576).ToString("F0", CultureInfo.InvariantCulture) + " MB/s (one connection reached " + (one / 1048576).ToString("F0", CultureInfo.InvariantCulture) + " MB/s).");
+            // Large game files almost always benefit from several connections. Start at 8 and only spend ~2 s confirming
+            // the server does not prefer fewer; full 1→4→8 ladders used to burn about 8 s before the first byte of the game.
+            Tell(progress, "Testing how many connections this server serves fastest (about 2 seconds).");
+            double eight = Trial(uri, m, 8, token), four = 0, one = 0, best = eight; int parts = eight > 0 ? 8 : 4;
+            if (eight <= 0) { four = Trial(uri, m, 4, token); if (four > 0) { parts = 4; best = four; } else { one = Trial(uri, m, 1, token); parts = 1; best = one; } }
+            else
+            {
+                four = Trial(uri, m, 4, token);
+                if (four > eight * 1.15) { parts = 4; best = four; one = Trial(uri, m, 1, token); if (one > four * 1.15) { parts = 1; best = one; } }
+                else one = four > 0 ? four / 3.5 : eight / 6; // approximate single-connection rate for the status line only
+            }
+            Tell(progress, "Fastest for this server: " + parts + " connection(s), about " + (best / 1048576).ToString("F0", CultureInfo.InvariantCulture) + " MB/s (one connection reached about " + (Math.Max(one, best / Math.Max(1, parts)) / 1048576).ToString("F0", CultureInfo.InvariantCulture) + " MB/s).");
             try
             {
                 lock (HostLock)
@@ -428,8 +440,9 @@ namespace PortForge
                     token.ThrowIfCancellationRequested(); string path = Path.GetFullPath(Path.Combine(root, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
                     if (entry.FullName.EndsWith("/") || entry.FullName.EndsWith("\\")) { Directory.CreateDirectory(path); continue; }
                     Directory.CreateDirectory(Path.GetDirectoryName(path));
-                    using (var input = entry.Open()) using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                    { byte[] buffer = new byte[1024 * 1024]; int n; while ((n = input.Read(buffer, 0, buffer.Length)) > 0) { token.ThrowIfCancellationRequested(); output.Write(buffer, 0, n); } }
+                    using (var input = entry.Open())
+                    using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4 * 1024 * 1024, FileOptions.SequentialScan))
+                    { byte[] buffer = new byte[4 * 1024 * 1024]; int n; while ((n = input.Read(buffer, 0, buffer.Length)) > 0) { token.ThrowIfCancellationRequested(); output.Write(buffer, 0, n); } }
                 }
             }
             var games = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(p => new[] {".nro", ".nsp", ".xci", ".dnsp", ".dxci"}.Contains(Path.GetExtension(p).ToLowerInvariant())).Where(p => NativeConversion.DetectInput(p) != null).ToList();

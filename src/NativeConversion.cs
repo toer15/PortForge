@@ -105,8 +105,12 @@ namespace PortForge
                         input = extracted;
                     }
                     string compiled = Path.Combine(stage, "compiled");
-                    ReportStatus(status, "Converting the game", "Creating Windows game code. You can follow the details below or cancel at any time.");
-                    Run(r.Backend, new[] { "--repo", repo, "-r", input, r.Name, "--outdir", compiled, "--runtime", Path.GetFullPath(r.Backend), "--jobs", "2", "--keep-ir" }, stage, log, progress, token);
+                    int jobs = HardwareProfile.CompilerJobsFor(Environment.ProcessorCount);
+                    ReportStatus(status, "Converting the game", "Creating Windows game code with " + jobs + " CPU workers. You can follow the details below or cancel at any time.");
+                    log.WriteLine("Compiler jobs: " + jobs + " (logical CPUs: " + Environment.ProcessorCount + ")");
+                    // Scale --jobs with the PC instead of a hard-coded 2. Do not pass --keep-ir: writing IR for every
+                    // function multiplies disk I/O and is not needed for a finished game folder.
+                    Run(r.Backend, new[] { "--repo", repo, "-r", input, r.Name, "--outdir", compiled, "--runtime", Path.GetFullPath(r.Backend), "--jobs", jobs.ToString() }, stage, log, progress, token);
                     ReportStatus(status, "Finishing up", "Checking the result and saving the files to your game folder.");
                     string game = Path.Combine(compiled, r.Name);
                     compiledGame = game;

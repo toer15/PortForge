@@ -48,7 +48,7 @@ namespace PortForge
             var toggles = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true };
             foreach (var check in new[] {parallel,unpack,convertAfter}) { check.Margin = new Padding(0,3,15,3); toggles.Controls.Add(check); }
             fields.Controls.Add(toggles);
-            var hint = Caption("Use a direct link to a game file or ZIP. Resume and parallel downloads depend on the server. Speed is limited by your connection and the source.",9,Muted);
+            var hint = Caption("Use a direct link to a game file or ZIP. Resume and parallel downloads depend on the server. Automatic mode picks a fast connection count in about 2 seconds (remembered for 12 hours). Speed is limited by your connection and the source.",9,Muted);
             hint.MaximumSize = new Size(800,0); fields.Controls.Add(hint); root.Controls.Add(fields,0,1);
             var card = Stack(); card.Dock = DockStyle.Fill; card.BackColor = Surface; card.Padding = new Padding(12); card.Controls.Add(badge); card.Controls.Add(title); card.Controls.Add(message);
             card.SizeChanged += delegate { message.MaximumSize = new Size(Math.Max(200,card.ClientSize.Width-28),0); }; root.Controls.Add(card,0,2);

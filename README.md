@@ -2,7 +2,9 @@
 
 **New in 0.50:** the FPS limit works at every setting with PortForge FSR 3 off and on. Off, games always keep their own speed (0.49 ran a 30 FPS game four times too fast with a 120 limit). On, the screen shows twice the limit, using up to 4 pictures per real frame when the game makes fewer (Zelda BotW: Limit 30 → 60, Limit 60 or more → 120). Frame generation artifacts are reduced: every generated picture has its own point in time, edges no longer tear into the newer frame, and vsync no longer tears generated pictures. Esc shows `Engine 1.32 | Display FPS: 120 (game 30 x4) | Limit: 60`. Also includes 0.48's faster conversion and downloads. See [VALIDATION-0.50.md](VALIDATION-0.50.md).
 
-**New in 0.49:** PortForge FSR 3 can raise **Display FPS** toward your Limit — not only classic 2×. A 30 FPS title with FSR 3 On and Limit 120 shows ~**120** (multi-mid FG) without speeding the guest. Esc: `Engine 1.31 | Display FPS: N (4x game 30) | Limit: 120`. Play / Doctor still install the app Engine. See [VALIDATION-0.49.md](VALIDATION-0.49.md).
+**0.49:** PortForge FSR 3 can raise **Display FPS** toward your Limit — not only classic 2×. A 30 FPS title with FSR 3 On and Limit 120 shows ~**120** (multi-mid FG) without speeding the guest. Esc: `Engine 1.31 | Display FPS: N (4x game 30) | Limit: 120`. Play / Doctor still install the app Engine. See [VALIDATION-0.49.md](VALIDATION-0.49.md).
+
+**0.48:** ROM → native conversion and Downloads are faster: AOT uses almost every CPU core instead of two jobs, skips writing unused IR, and Downloads use larger buffers and a ~2 s connection probe. See [VALIDATION-0.48.md](VALIDATION-0.48.md).
 
 **0.47:** Stops PortForge FSR 3 / present crashes from a bookkeeping path that left GPU commands unsubmitted. **Play** updates the game's Engine from `PortForge\Engine\` before launch when it is older. See [VALIDATION-0.47.md](VALIDATION-0.47.md).
 

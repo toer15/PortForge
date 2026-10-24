@@ -21,10 +21,10 @@ namespace PortForge
                 string temporary = library + ".pf-" + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
-                    using (var input = File.OpenRead(library))
-                    using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    using (var input = new FileStream(library, FileMode.Open, FileAccess.Read, FileShare.Read, 4 * 1024 * 1024, FileOptions.SequentialScan))
+                    using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4 * 1024 * 1024, FileOptions.SequentialScan))
                     {
-                        var buffer = new byte[1024 * 1024];
+                        var buffer = new byte[4 * 1024 * 1024];
                         int count;
                         while ((count = input.Read(buffer, 0, buffer.Length)) > 0)
                         { token.ThrowIfCancellationRequested(); output.Write(buffer, 0, count); }

@@ -122,6 +122,7 @@ internal static class DoctorTests
             var discreteAndIntegrated = HardwareProfile.Classify("cpu", 16, 32, new[] { new GpuInfo { Name = "AMD Radeon(TM) Graphics", VramMb = 512 }, new GpuInfo { Name = "NVIDIA GeForce RTX 4070", VramMb = 12288 } }, true);
             Check(discreteAndIntegrated.BestGpu.Name.Contains("4070"), "With two graphics chips the discrete one is the one rated");
             Check(HardwareProfile.PipelineThreadsFor(16) == 6 && HardwareProfile.PipelineThreadsFor(4) == 2 && HardwareProfile.PipelineThreadsFor(64) == 8, "Pipeline workers scale with the CPU between two and eight");
+            Check(HardwareProfile.CompilerJobsFor(2) == 2 && HardwareProfile.CompilerJobsFor(8) == 7 && HardwareProfile.CompilerJobsFor(16) == 15 && HardwareProfile.CompilerJobsFor(64) == 32, "Conversion compiler jobs use almost every CPU thread, capped at thirty-two");
             var chosen = new GraphicsProfile { FpsLimit = "120", VSync = false, Fullscreen = true };
             var matched = HardwareProfile.Classify("cpu", 16, 32, one("AMD Radeon RX 9070 XT", 16304), true).Recommended(chosen);
             Check(matched.Resolution == 2m && matched.Anisotropy == 16 && matched.FpsLimit == "120" && !matched.VSync && matched.Fullscreen, "Matching the PC changes quality only and keeps the player's frame limit, VSync and display mode");

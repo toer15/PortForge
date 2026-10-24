@@ -38,15 +38,19 @@ Timed CLI overrides temporarily disable VSync and use the requested test target.
 
 Automatic selection never raises render scale above the player's current choice based on startup performance. No AI model, game-specific timing patch or binary optimization pass is included. Raising a presentation limiter can alter game speed or leave an intrinsic game cap intact. Menu performance does not certify gameplay. See [USERGUIDE.md](USERGUIDE.md) for the controls and limitations.
 
-## Downloads and recovery in 0.6
+## Downloads and recovery in 0.6 / 0.48
 
-HTTP transfers use the framework's HTTP stack with normal certificate validation. Metadata is probed using a one-byte range with a normal-request fallback. Parallel transfers require a known size, byte ranges and a strong ETag. Each range must have the exact requested Content-Range and validator. Interrupted parts resume using If-Range; changed validators discard only the fixed temporary part files and restart. These rules follow [HTTP range and validator semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-range-requests).
+HTTP transfers use the framework's HTTP stack with normal certificate validation. Metadata is probed using a one-byte range with a normal-request fallback. Parallel transfers require a known size, byte ranges and a strong ETag. Each range must have the exact requested Content-Range and validator. Interrupted parts resume using If-Range; changed validators discard only the fixed temporary part files and restart. These rules follow [HTTP range and validator semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-range-requests). From 0.48, automatic connection choice starts at eight connections with ~1 s samples (~2 s total) and remembers the winner for twelve hours; transfer and assemble use multi-megabyte sequential buffers.
 
 The app stores fixed part filenames plus XML metadata in a destination-specific work folder, protected with an exclusive file lock. URLs are represented by hashes in metadata so signed query strings are not persisted there. Request failures have bounded retries and cancellation aborts active requests. Servers rejecting ranges fall back to a single complete transfer; unsafe resume without a validator is avoided. Final files are assembled separately, hashed, checked for supported headers/ZIP directory structure and moved into place without overwriting existing files. Local checksum receipts enable verified reuse. Source checksum or structural failures get at most one fresh download per attempt. Without a source checksum, content authentication is limited to headers/structure and transport behavior.
 
 ZIP extraction preflights total uncompressed size and every target path. Absolute paths, traversal, alternate-stream names, duplicate targets and symlinks are rejected. The original ZIP is preserved and a unique folder receives the unpacked files. No archive scripts or included installers are executed. RAR/7z extraction, authenticated browser sessions, source discovery and arbitrary source/engine repair are not implemented.
 
 Publication and atomic settings/metadata replacement retry selected Windows sharing/replacement errors for a bounded period. Cancellation interrupts retry waits. Disk exhaustion and permanent errors still get actionable failures; completed compiler output remains recoverable. Download and interface tests use a local controlled HTTP fixture, with no commercial ROM downloads.
+
+## Conversion speed in 0.48
+
+Native conversion asks ScarletNX for `HardwareProfile.CompilerJobsFor` workers (logical CPUs minus one, two to thirty-two) instead of a fixed `--jobs 2`, and no longer passes `--keep-ir`. The finished game folder and correctness checks are unchanged; build logs record the job count.
 
 ## Path handling in 0.4
 
