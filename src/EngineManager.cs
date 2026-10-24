@@ -87,6 +87,44 @@ namespace PortForge
         {
             return package != null && File.Exists(gameExe) && !IsInstalled(gameExe, package);
         }
+        /// <summary>
+        /// Before Play: copy the app Engine into the game folder when it does not match. Games that already have
+        /// ENGINE.txt get a fast copy (no 15s prove). First-time installs still use Install's startup check.
+        /// Returns null when nothing was needed; otherwise a short status line.
+        /// </summary>
+        public static string EnsureForPlay(string gameExe, IProgress<string> progress, CancellationToken token)
+        {
+            var package = Find();
+            if (package == null || !File.Exists(gameExe) || IsInstalled(gameExe, package) || Declined(gameExe) != null)
+                return null;
+            gameExe = Path.GetFullPath(gameExe);
+            GameOptimization.ValidateGame(gameExe);
+            GameOptimization.EnsureStopped(gameExe);
+            string folder = Path.GetDirectoryName(gameExe);
+            if (!File.Exists(Path.Combine(folder, "ENGINE.txt")))
+                return Install(gameExe, package, progress, token);
+            using (PlayFirst.Begin(gameExe))
+            {
+                if (progress != null) progress.Report("Updating this game to the " + package.Name + " before launch.");
+                string backup = Path.Combine(folder, BackupFolderName);
+                if (!File.Exists(Path.Combine(backup, Path.GetFileName(gameExe))))
+                {
+                    Directory.CreateDirectory(backup);
+                    File.Copy(gameExe, Path.Combine(backup, Path.GetFileName(gameExe)), false);
+                    foreach (string lib in package.Libraries)
+                    {
+                        string own = Path.Combine(folder, lib);
+                        if (File.Exists(own)) File.Copy(own, Path.Combine(backup, lib), false);
+                    }
+                    File.WriteAllLines(Path.Combine(backup, "added.txt"), package.Libraries.Where(lib => !File.Exists(Path.Combine(folder, lib))));
+                }
+                foreach (string lib in package.Libraries) CopyVerified(Path.Combine(package.Folder, lib), Path.Combine(folder, lib), token);
+                CopyLicenses(package.Folder, folder, token);
+                CopyEngineInfo(package, folder, token);
+                CopyVerified(package.Exe, gameExe, token);
+            }
+            return "Updated this game to the " + package.Name + " for this launch.";
+        }
         private static void CopyEngineInfo(EnginePackage package, string folder, CancellationToken token)
         {
             string info = Path.Combine(package.Folder, "ENGINE.txt");

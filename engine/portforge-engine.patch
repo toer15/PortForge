@@ -663,7 +663,7 @@ index 0000000..ad5980a
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* PortForge FSR 3 (from scratch, shaders/fg.comp): optical-flow frame generation inspired by AMD FSR 3 / AFMF
 +   (luma pyramid, hierarchical SAD search, median filter, bidirectional disocclusion, HUD lock, hole inpaint).
-+   Not the AMD FidelityFX SDK — Switch games do not give host motion vectors. When FSR 1 is also on (the Settings
++   Not the AMD FidelityFX SDK � Switch games do not give host motion vectors. When FSR 1 is also on (the Settings
 +   "PortForge FSR 3" package), each real frame is upscaled once and the midpoint is warped from those images so
 +   FSR never runs on an interpolated picture. Display only. Under vk_lock. */
 +#include <string.h>
@@ -969,7 +969,7 @@ index 0000000..ad5980a
 +    return 1;
 +}
 +
-+/* Warp hist[p]→hist[c] through the motion field already in med[0] into dst at dw x dh. */
++/* Warp hist[p]?hist[c] through the motion field already in med[0] into dst at dw x dh. */
 +static Surf* fg_warp(VkCommandBuffer cb, Pic* a, Pic* b, Pic* dst, u32 dw, u32 dh) {
 +    if (!pic(dst, g_fg.fmt, dw, dh)) return NULL;
 +    cb = vk_cmd(); /* a resize inside pic() waits out the buffer that was recording */
@@ -5874,7 +5874,7 @@ index 0000000..e9e61a1
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..d0eb644 100644
+index f3ac2e2..ac092d1 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -6,8 +6,9 @@
@@ -5976,10 +5976,10 @@ index f3ac2e2..d0eb644 100644
 +                "intermediate game data remains native-sized, presentation upscaling stays available\n",
 +                100.0f * g_settings.resolution_scale);
 +        if (display_h > 0 && g_settings.protect_game_graphics)
-+            LOG("vulkan: display_resolution=%s — window/swapchain target %dp; internals stay native, FSR enlarges\n",
++            LOG("vulkan: display_resolution=%s � window/swapchain target %dp; internals stay native, FSR enlarges\n",
 +                g_settings.display_resolution, display_h);
 +        else if (display_h > 0 && !g_settings.protect_game_graphics)
-+            LOG("vulkan: display_resolution=%s with render_scale_safety=0 — using experimental full RT scale\n",
++            LOG("vulkan: display_resolution=%s with render_scale_safety=0 � using experimental full RT scale\n",
 +                g_settings.display_resolution);
 +    }
      g_vk_anisotropy = g_settings.anisotropic_filtering; /* the sampler table keeps what it makes: anisotropy applies at start */
@@ -6002,17 +6002,16 @@ index f3ac2e2..d0eb644 100644
  /* the window's surface: lost while the app is in the background (Android), made anew when it comes back */
  static u32 g_generation;
  static int g_lost;
-@@ -307,13 +383,48 @@ static void flip_src(VkImageBlit* b, u32 transform) {
+@@ -307,13 +383,47 @@ static void flip_src(VkImageBlit* b, u32 transform) {
      }
  }
  
 -/* The window's image: src's g_last_ rectangle (a frame of fw x fh, flipped by transform) letterboxed on black, or
-+/* Frame generation keeps a game frame's own present off the display (its copy is shown later): bookkeeping only */
++/* Frame generation keeps a game frame's own present off the display (its copy is shown later): bookkeeping only.
++   Always retire the frame ring (submit + frame_next). Skipping that left capture/interpolate commands unsubmitted
++   when the midpoint failed or was null, which crashed. Mailbox/immediate + a waited acquire lets the midpoint
++   still get a swapchain image after that bookkeeping submit. */
 +static int g_show_hidden;
-+/* Set with g_show_hidden on the FG bookkeeping present. Do not submit or advance the frame ring: that burned the
-+   only spare slot (VK_FRAMES is 2) before the midpoint acquire, and the zero-timeout acquire then failed. The
-+   midpoint's show() submits this buffer. Not used when a lower cap drops the frame — that show is the only one. */
-+static int g_show_keep_slot;
 +/* Pictures handed to the swapchain, including generated frames. Guest frames a lower cap keeps off the display
 +   do not increment this. The HUD window restarts when the limit or frame generation changes, so it cannot stay
 +   on the previous 60. */
@@ -6054,7 +6053,7 @@ index f3ac2e2..d0eb644 100644
      backend_window_size(&ww, &wh);
      if (shown && (g_lost || backend_window_generation() != g_generation)) {
          vk_finish();
-@@ -322,14 +433,20 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -322,14 +432,20 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      }
      shown = shown && !g_lost;
      int tried = 0; /* a create already ran this frame: one that failed waits for the next frame */
@@ -6083,7 +6082,7 @@ index f3ac2e2..d0eb644 100644
      }
      VkSemaphore wait = VK_NULL_HANDLE, signal = VK_NULL_HANDLE;
      u32 idx = 0;
-@@ -337,12 +454,25 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -337,12 +453,25 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      if (shown && (src || !game) && (g_vk.swapchain || (!tried && vk_swapchain_create(srgb)))) {
          VkCommandBuffer cb = vk_cmd(); /* waits for this frame slot, so its acquire semaphore is free */
          VkSemaphore acq = g_acquired[vk_frame_id() % VK_FRAMES];
@@ -6091,7 +6090,7 @@ index f3ac2e2..d0eb644 100644
 -           Every image still on the display or queued for it (FIFO behind) leaves this frame unshown */
 -        VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, 0, acq, VK_NULL_HANDLE, &idx);
 +        /* The guest present does not wait: vk_lock is held, and the game's pace is present_pace's (speed lock).
-+           A generated picture is not a guest frame — present_show_due is not called (game == 0) and present_pace is
++           A generated picture is not a guest frame � present_show_due is not called (game == 0) and present_pace is
 +           not called. A zero timeout dropped it whenever the previous present still held the images, so Display FPS
 +           stayed at the game's 60 no matter which limit was chosen. Wait up to ~16 ms twice (not the game's pace). */
 +        int fg_pic = !game && (__atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
@@ -6113,7 +6112,7 @@ index f3ac2e2..d0eb644 100644
              if (game && ++dropped % 600 == 1)
                  LOG("vulkan: %llu frames not shown, the display had every swapchain image\n",
                      (unsigned long long)dropped);
-@@ -372,8 +502,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -372,8 +501,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
              u32 sw = g_vk.sc_extent.width, sh = g_vk.sc_extent.height, cx = 0, cy = 0, cw = sw, ch = sh, dw, dh;
              int sx, sy, sww, swh;
              backend_window_safe(&sx, &sy, &sww, &swh);
@@ -6125,7 +6124,7 @@ index f3ac2e2..d0eb644 100644
                  cx = (u32)((u64)sw * (u32)sx / (u32)g_vk.sc_win_w);
                  cy = (u32)((u64)sh * (u32)sy / (u32)g_vk.sc_win_h);
                  cw = (u32)((u64)sw * (u32)sww / (u32)g_vk.sc_win_w);
-@@ -388,12 +520,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -388,12 +519,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  }
                  i32 dx = (i32)(cx + (cw - dw) / 2), dy = (i32)(cy + (ch - dh) / 2);
                  VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
@@ -6146,7 +6145,7 @@ index f3ac2e2..d0eb644 100644
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
              }
              {
-@@ -411,24 +548,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -411,24 +547,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
@@ -6196,7 +6195,7 @@ index f3ac2e2..d0eb644 100644
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -441,6 +598,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -441,6 +597,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          vk_buf_frame();
          vk_mem_trim(0, 0);
          if (g_vk_present % 600 == 0) {
@@ -6209,7 +6208,7 @@ index f3ac2e2..d0eb644 100644
              char cs_why[256];
              u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
              LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
-@@ -467,6 +630,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +629,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -6223,18 +6222,13 @@ index f3ac2e2..d0eb644 100644
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -516,10 +686,18 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -516,10 +685,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  (unsigned long long)own_landings(), (unsigned long long)g_vk_rt_readbacks);
          }
      }
 -    /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
-+    /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback.
-+       FG bookkeeping does not: the midpoint records into this buffer and submits it. Advancing here left the
-+       midpoint acquire with no free image, so the extra picture never counted and the HUD stayed at 60. */
-+    if (g_show_keep_slot && !signal) {
-+        if (game) vk_renderdoc_present(g_vk_present);
-+        return 0; /* present_frame marks the frame boundary after the midpoint submit */
-+    }
++    /* Offscreen and FG bookkeeping frames still submit and advance the frame ring. g_last remains available for
++       readback. Skipping that for FG left the capture buffer unsubmitted when the midpoint was skipped. */
      vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
 +    if (game) vk_rec_frame_boundary(); /* ordered with the draws, even when the GPU producer runs ahead */
      if (game) vk_renderdoc_present(g_vk_present);
@@ -6244,7 +6238,7 @@ index f3ac2e2..d0eb644 100644
      if (signal) {
          VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                                 .waitSemaphoreCount = 1,
-@@ -528,7 +706,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -528,13 +700,19 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                                 .pSwapchains = &g_vk.swapchain,
                                 .pImageIndices = &idx};
          vk_rec_queue(g_vk.gfx); /* the present waits on the frame's submission's semaphore */
@@ -6254,8 +6248,19 @@ index f3ac2e2..d0eb644 100644
 +        g_present_ns += plat_ns() - t0;
          if (r == VK_ERROR_OUT_OF_DATE_KHR || (r == VK_SUBOPTIMAL_KHR && !g_vk.sc_turned))
              recreate = 1;
-         else if (r == VK_ERROR_SURFACE_LOST_KHR)
-@@ -544,6 +725,201 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+-        else if (r == VK_ERROR_SURFACE_LOST_KHR)
++        else if (r == VK_ERROR_SURFACE_LOST_KHR || r == VK_ERROR_DEVICE_LOST)
+             g_lost = 1;
+-        else
++        else if (r < 0) {
++            /* FG double-present races must not abort the process; recreate next frame. */
+             VK_OK(r);
++            recreate = 1;
++        }
+     }
+     if (recreate && !g_lost && !g_vk.sc_lost) { /* not when this frame's create found the surface lost */
+         vk_finish();
+@@ -544,6 +722,212 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
@@ -6401,27 +6406,30 @@ index f3ac2e2..d0eb644 100644
 +        return;
 +    }
 +    /* FG pair: honor fps_limit once, before mid+real. present_show_due is not called again on the generated
-+       picture, and present_pace is not called for it — that would step the game at the display rate. */
++       picture, and present_pace is not called for it � that would step the game at the display rate. */
 +    if (!present_show_due()) {
 +        g_show_hidden = 1;
-+        show(src, rect, fw, fh, transform, 1); /* bookkeeping only; this is the frame's only show, so it retires */
++        show(src, rect, fw, fh, transform, 1); /* bookkeeping only; retires capture + guest counters */
 +        g_show_hidden = 0;
 +        return;
 +    }
++    /* Guest bookkeeping without putting this frame on the display. Retires the ring (submit + boundary +
++       frame_next) so capture work is never left hanging if the midpoint is skipped. */
 +    g_show_hidden = 1;
-+    g_show_keep_slot = 1;
-+    show(src, rect, fw, fh, transform, 1); /* bookkeeping; midpoint submits this buffer */
-+    g_show_keep_slot = 0;
++    show(src, rect, fw, fh, transform, 1);
 +    g_show_hidden = 0;
 +    present_dest_size(fw, fh, &dw, &dh);
 +    mid = vk_fg_interpolate_present(vk_cmd(), dw, dh, &cur);
-+    if (!mid) { /* its copy instead, at once (or FSR'd current after a resize) */
-+        if (cur) {
++    if (!mid || !mid->sw || !mid->sh) {
++        /* No midpoint: display-only present (guest bookkeeping already ran above). */
++        if (cur && cur->sw && cur->sh) {
 +            const u32 all[4] = {0, 0, cur->sw, cur->sh};
-+            if (show(cur, all, fw, fh, transform, 0) || show(cur, all, fw, fh, transform, 0))
++            if (show(cur, all, cur->sw, cur->sh, transform, 0) || show(cur, all, cur->sw, cur->sh, transform, 0))
++                fg_note_display(0);
++        } else if (src) {
++            if (show(src, rect, fw, fh, transform, 0) || show(src, rect, fw, fh, transform, 0))
 +                fg_note_display(0);
 +        }
-+        vk_rec_frame_boundary();
 +        return;
 +    }
 +    const u32 whole[4] = {0, 0, mid->sw, mid->sh};
@@ -6440,13 +6448,21 @@ index f3ac2e2..d0eb644 100644
 +    }
 +    /* Aspect from the image we are showing (already letterbox-sized when FSR ran), not the guest crop alone.
 +       game=0: present_show_due does not run, so a cap at or above the game cannot drop the midpoint.
-+       One retry: the first acquire can still lose the race with the previous real frame's present. */
-+    if (show(mid, whole, mid->sw, mid->sh, transform, 0) || show(mid, whole, mid->sw, mid->sh, transform, 0))
-+        fg_note_display(1);
-+    vk_rec_frame_boundary(); /* guest frame, after the midpoint's submit (bookkeeping show did not advance) */
++       Guest boundary already ran in the bookkeeping show. Retry once if the image is still busy. */
++    if (!(show(mid, whole, mid->sw, mid->sh, transform, 0) || show(mid, whole, mid->sw, mid->sh, transform, 0))) {
++        /* Midpoint could not acquire: show the real frame now so the player still sees motion. */
++        if (cur && cur->sw && cur->sh) {
++            const u32 all[4] = {0, 0, cur->sw, cur->sh};
++            if (show(cur, all, cur->sw, cur->sh, transform, 0) || show(cur, all, cur->sw, cur->sh, transform, 0))
++                fg_note_display(0);
++        }
++        return;
++    }
++    fg_note_display(1);
++    if (!cur || !cur->sw || !cur->sh) return;
 +    pm_lock(&g_fg_lock);
-+    g_fg_fw = cur && cur->sw && cur->sh ? cur->sw : fw;
-+    g_fg_fh = cur && cur->sw && cur->sh ? cur->sh : fh;
++    g_fg_fw = cur->sw;
++    g_fg_fh = cur->sh;
 +    g_fg_transform = transform;
 +    g_fg_pending_src = cur; /* already filtered when FSR ran before interpolate */
 +    /* Time from the submitted midpoint, not from before an expensive interpolation/driver stall. */
@@ -6457,7 +6473,7 @@ index f3ac2e2..d0eb644 100644
  }
  
  /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
-@@ -583,7 +959,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+@@ -583,7 +967,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
          g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
          g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
      }
@@ -6469,7 +6485,7 @@ index f3ac2e2..d0eb644 100644
      __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
      vk_unlock();
  }
-@@ -600,7 +979,10 @@ static void vkr_refresh(void) {
+@@ -600,7 +987,10 @@ static void vkr_refresh(void) {
      if (!vk_trylock()) return;
      last = now;
      vk_render_end();
@@ -6493,7 +6509,7 @@ index 0000000..56cee6b
 +// Switch titles do not expose MVs/depth to the host, so this is not the AMD FidelityFX SDK plugin.
 +// Passes:
 +//   FG_LUMA    luminance pyramid (FSR 3 Optical Flow preparation)
-+//   FG_SEARCH  hierarchical block matching / SAD (AFMF-style 8x8 family, refined coarse→fine)
++//   FG_SEARCH  hierarchical block matching / SAD (AFMF-style 8x8 family, refined coarse?fine)
 +//   FG_MEDIAN  3x3 vector median (FSR 3 OF filtering)
 +//   FG_INTERP  bidirectional warp, disocclusion, HUD lock, hole inpainting from the current frame
 +#version 450
@@ -6954,7 +6970,7 @@ index e32e8bd..936b4e9 100644
      atlas_upload(cb);
      vpad_draw(&list, safe);
 -    vpad_showcase_draw(&list, safe, vpad_showcase_fps(g_vk_present, plat_ns()));
-+    /* Display presents, including generated frames (60 game + FSR 3 → ~120, 120 game + FSR 3 → ~240).
++    /* Display presents, including generated frames (60 game + FSR 3 ? ~120, 120 game + FSR 3 ? ~240).
 +       Esc reads the same sample and keeps updating while the menu is open. */
 +    {
 +        int display_fps = vk_display_fps_now();
@@ -8061,6 +8077,18 @@ index 408db9e..1f9e98b 100644
  /* ldn, read: local wireless over the LAN (ldn_mitm's protocol), through an Eden room, or off
     (hle/services/network/ldn.c) */
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
+diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
+new file mode 100644
+index 0000000..ad7cafd
+--- /dev/null
++++ b/src/nx/runtime/pf_engine_version.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#ifndef PF_ENGINE_VERSION_H
++#define PF_ENGINE_VERSION_H
++/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
++#define PF_ENGINE_VERSION "1.30"
++#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5..55ab33d 100644
 --- a/src/nx/runtime/platform/backend/gamepad.c
@@ -8187,7 +8215,7 @@ index 87dfdc6..7bcd768 100644
 +        else if (!strcmp(g_settings.display_resolution, "2160")) dh = 2160;
 +        if (dh > 0) {
 +            wsize_set(dh * 16 / 9, dh);
-+            LOG("video: display_resolution=%s → window %dx%d\n", g_settings.display_resolution, dh * 16 / 9, dh);
++            LOG("video: display_resolution=%s ? window %dx%d\n", g_settings.display_resolution, dh * 16 / 9, dh);
 +        }
 +    }
      backend_window_size(&w, &h);
@@ -8690,7 +8718,7 @@ index 441a8c2..17ec665 100644
 +            return OVERLAY_NONE;
 +        }
 +        if (i == M_FPS) {
-+            /* Session cycle: Game → 30 → 60 → 120 → 144 → 240 → Unlimited → Game. Survives global re-apply. */
++            /* Session cycle: Game ? 30 ? 60 ? 120 ? 144 ? 240 ? Unlimited ? Game. Survives global re-apply. */
 +            static const int cycle[] = {SNX_FPS_GAME, 30, 60, 120, 144, 240, 0};
 +            enum { N = (int)(sizeof cycle / sizeof cycle[0]) };
 +            int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED), at = 0, next, dir = step ? step : 1;
@@ -8712,7 +8740,7 @@ index 441a8c2..17ec665 100644
  int overlay_shown(void) { return __atomic_load_n(&shown, __ATOMIC_ACQUIRE); }
 +void overlay_note_display_fps(int fps) {
 +    /* Live display presents. While Esc is open the sample is held so a mid-menu limit change does not look like the
-+       old 60 until the half-second window refills — Limit on the status line still updates immediately. A negative
++       old 60 until the half-second window refills � Limit on the status line still updates immediately. A negative
 +       sample (not measured yet) leaves the last good reading. */
 +    if (fps < 0 || __atomic_load_n(&g_display_fps_hold, __ATOMIC_RELAXED)) return;
 +    __atomic_store_n(&g_display_fps, fps, __ATOMIC_RELAXED);
@@ -9245,7 +9273,7 @@ index 2bd6181..61a20a9 100644
 +/* Expected on-screen rate. Speed lock keeps a swap-interval game at its own pace, so a cap above that pace does not
 +   raise the guest rate. Without frame generation the display follows the frames present_show_due actually shows
 +   (the game's pace, or a lower cap). With frame generation each shown guest frame can contribute one generated
-+   picture, about twice that shown rate (a 60 FPS game → ~120, a 30 FPS game → ~60) — not twice a cap above the
++   picture, about twice that shown rate (a 60 FPS game ? ~120, a 30 FPS game ? ~60) � not twice a cap above the
 +   game. 0 when unlimited or the pace is not known yet. */
 +int present_expected_display_fps(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit);
@@ -9321,10 +9349,10 @@ index be57ac5..fe392fc 100644
 +    words Off|On
 +    set options_frame_generation_set
 +    help PortForge optical-flow frame generation (part of PortForge FSR 3): a picture between each two of the game's
-+    help frames. Built from scratch from FSR 3 / AFMF ideas (luma pyramid, block search, disocclusion, HUD lock) —
++    help frames. Built from scratch from FSR 3 / AFMF ideas (luma pyramid, block search, disocclusion, HUD lock) �
 +    help not the AMD FidelityFX SDK (Switch games have no host motion vectors). With Upscaler=FSR 1 this is the full
 +    help PortForge FSR 3 package. Esc/Home toggles PortForge FSR 3 for the session. The game keeps the pace it
-+    help asked for. Frame generation only adds display pictures (about twice that pace: 30 → ~60, 60 → ~120). A
++    help asked for. Frame generation only adds display pictures (about twice that pace: 30 ? ~60, 60 ? ~120). A
 +    help numeric fps_limit drops pictures when it is lower; it does not speed the game up. Display FPS counts them.
 +setting Frame generation dump
 +    key fg_dump
@@ -10076,7 +10104,7 @@ index 03330d3..09edfb8 100644
 -    overlay_place(500, 120, &x, &y, &sc);
 -    assert(sc == 1 && x == (500 - 46 * 8) / 2 && y == 4);
 +    overlay_place(500, 152, &x, &y, &sc);
-+    /* six main items: 11 rows × 16px exceeds 152, so the panel sits slightly off the top */
++    /* six main items: 11 rows � 16px exceeds 152, so the panel sits slightly off the top */
 +    assert(sc == 1 && x == (500 - 46 * 8) / 2 && y == (152 - 11 * 16) / 2);
      /* a phone's display scale: the Poco F8 (408 dpi, 2510x1156) and the Pixel 9 (420 dpi) at 3x, where half the
         picture gave 2x; a 4K picture at 100% keeps the 4x half of it gives */
@@ -10095,7 +10123,7 @@ index 03330d3..09edfb8 100644
 -    assert(text_at(1, 0, "SCARLETNX  /  MENU") && text_at(1, 3, "\xFE On-screen controls") &&
 -           text_at(1, 4, "\xFE Controllers") && text_at(1, 5, "\xFE Exit"));
 +    assert(text_at(C - 2, 4, ">") && text_at(C - 2, 5, ">")); /* a page under each */
-+    assert(text_at(1, 0, "SCARLETNX  /  MENU") && shows("Engine 1.29 | Display FPS: 118 | Limit:") &&
++    assert(text_at(1, 0, "SCARLETNX  /  MENU") && shows("Engine 1.30 | Display FPS: 118 | Limit:") &&
 +           text_at(1, 4, "\xFE On-screen controls") && text_at(1, 5, "\xFE Controllers") &&
 +           text_at(1, 6, "\xFE Frame-time graph") && text_at(1, 7, "\xFE PortForge FSR 3") &&
 +           text_at(1, 8, "\xFE FPS limit") && text_at(1, 9, "\xFE Exit") && text_at(C - 4, 6, "Off"));
@@ -10808,15 +10836,3 @@ index 25f0af2..24a5377 100644
            vk_pipeline_worker_count(0, 0) == 2 && vk_pipeline_worker_count(0, 64) == 6);
      CHECK(vk_pipeline_worker_count(5, 12) == 5 && vk_pipeline_worker_count(32, 4) == 32 &&
            vk_pipeline_worker_count(1, 64) == 1);
-diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
-new file mode 100644
-index 0000000..992024a
---- /dev/null
-+++ b/src/nx/runtime/pf_engine_version.h
-@@ -0,0 +1,6 @@
-+/* SPDX-License-Identifier: GPL-3.0-or-later */
-+#ifndef PF_ENGINE_VERSION_H
-+#define PF_ENGINE_VERSION_H
-+/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.29"
-+#endif

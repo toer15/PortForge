@@ -1,6 +1,8 @@
-# PortForge 0.46 / Engine 1.29
+# PortForge 0.47 / Engine 1.30
 
-**New in 0.46:** Esc shows `Engine X.Y | Display FPS: N | Limit: L` so you can see whether the game is actually on Engine 1.29. App updates replace `PortForge\Engine\`; each game still needs that binary copied into its folder (**Doctor → Engine**, or close the game so Doctor installs it). Limit on Esc updates immediately; Display FPS is held while Esc is open and moves again after you return to play. See [VALIDATION-0.46.md](VALIDATION-0.46.md).
+**New in 0.47:** Stops PortForge FSR 3 / present crashes from a bookkeeping path that left GPU commands unsubmitted. **Play** updates the game's Engine from `PortForge\Engine\` before launch when it is older. Esc still shows `Engine X.Y | Display FPS: N | Limit: L`. Speed lock and ~2× display with FSR 3 On are unchanged. See [VALIDATION-0.47.md](VALIDATION-0.47.md).
+
+**0.46:** Esc shows Engine version, held Display FPS and live Limit. See [VALIDATION-0.46.md](VALIDATION-0.46.md).
 
 **0.45:** The FPS limit changes the pictures on screen again. Speed lock still keeps the game at its own pace. See [VALIDATION-0.45.md](VALIDATION-0.45.md).
 

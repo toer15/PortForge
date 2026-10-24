@@ -301,6 +301,14 @@ namespace PortForge
                 try{await Task.Run(()=>GameOptimization.SaveAndVerify(exe,desired,capabilities));}
                 catch(Exception e){history.AppendText("Settings could not be saved ("+e.Message+"). Starting with the last saved settings."+Environment.NewLine);}
                 ShowProfile(GameOptimization.Load(exe));
+                // Copy the app Engine into the game folder when it is older, so Esc shows the current Engine and FPS/FG fixes run.
+                try
+                {
+                    string synced=await Task.Run(()=>EngineManager.EnsureForPlay(exe,new Progress<string>(m=>SetStatus("STARTING","Updating Engine",m,Mint)),token));
+                    if(synced!=null)history.AppendText(synced+Environment.NewLine);
+                }
+                catch(OperationCanceledException){throw;}
+                catch(Exception e){history.AppendText("Engine update before Play skipped ("+e.Message+"). Starting with the game's current scarletnx.exe."+Environment.NewLine);}
                 // Settings were saved once above. Do not repeat a stopped-game check after starting.
                 using(var process=GameOptimization.StartForPlayer(exe))
                 {
