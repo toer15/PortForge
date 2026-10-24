@@ -1,5 +1,5 @@
 diff --git a/src/3ds/runtime/process.c b/src/3ds/runtime/process.c
-index 5e113bb..bdb6ab1 100644
+index 5e113bb..45ad2dc 100644
 --- a/src/3ds/runtime/process.c
 +++ b/src/3ds/runtime/process.c
 @@ -255,7 +255,7 @@ static bool mount(SnxCtrProcess* p, const char* directory, const SnxCtrCia* cia)
@@ -12,7 +12,7 @@ index 5e113bb..bdb6ab1 100644
      pm_unlock(&tree->lock);
      if (cia) {
 diff --git a/src/3ds/services/romfs.c b/src/3ds/services/romfs.c
-index b08cfa1..10bba92 100644
+index b08cfa1..64e648b 100644
 --- a/src/3ds/services/romfs.c
 +++ b/src/3ds/services/romfs.c
 @@ -219,7 +219,7 @@ bool snx_ctr_romfs_open(FsTree* tree, SnxCtrRomfs** out) {
@@ -25,7 +25,7 @@ index b08cfa1..10bba92 100644
          goto fail;
      }
 diff --git a/src/common/cpu/aarch64/cpu.h b/src/common/cpu/aarch64/cpu.h
-index c33b962..bc7a530 100644
+index c33b962..49299f0 100644
 --- a/src/common/cpu/aarch64/cpu.h
 +++ b/src/common/cpu/aarch64/cpu.h
 @@ -426,8 +426,9 @@ SNX_INLINE void dc_zva(u8* M, u64 a) { memset(MP(a & ~(u64)63), 0, 64); }
@@ -52,7 +52,7 @@ index c33b962..bc7a530 100644
              stored = snx_cas8((u8*)MP(a), (u8)c->excl_val, (u8)v);
          else if (sz == 1)
 diff --git a/src/common/cpu/recompiler/llvm/ir_helpers.c b/src/common/cpu/recompiler/llvm/ir_helpers.c
-index 8a0f8b1..81007a0 100644
+index 8a0f8b1..e97f91c 100644
 --- a/src/common/cpu/recompiler/llvm/ir_helpers.c
 +++ b/src/common/cpu/recompiler/llvm/ir_helpers.c
 @@ -400,10 +400,13 @@ static LLVMValueRef exclusive_match(SnxIr* ir, LLVMValueRef a, LLVMValueRef size
@@ -71,7 +71,7 @@ index 8a0f8b1..81007a0 100644
  /* stx(c,M,a,sz,v) */
  static void build_stx(SnxIr* ir, LLVMValueRef function) {
 diff --git a/src/common/cpu/recompiler/llvm/jit_service.c b/src/common/cpu/recompiler/llvm/jit_service.c
-index 07e8b78..83d6a75 100644
+index 07e8b78..bff47bf 100644
 --- a/src/common/cpu/recompiler/llvm/jit_service.c
 +++ b/src/common/cpu/recompiler/llvm/jit_service.c
 @@ -581,7 +581,8 @@ static char* cache_key(const SnxJitService* s) {
@@ -85,7 +85,7 @@ index 07e8b78..83d6a75 100644
                  (unsigned long long)fnv(snx_rtlib_object, snx_rtlib_object_size, 0xCBF29CE484222325ULL), cpu,
                  s->config.opt, s->config.hook_direct_calls, s->config.direct_svc, features);
 diff --git a/src/common/filesystem/tree.c b/src/common/filesystem/tree.c
-index cf4fe32..c596635 100644
+index cf4fe32..e05db5a 100644
 --- a/src/common/filesystem/tree.c
 +++ b/src/common/filesystem/tree.c
 @@ -675,17 +675,18 @@ FsTreeResult fs_tree_mtime(FsTree* tree, const FsNode* node, uint64_t* unix_ms)
@@ -110,7 +110,7 @@ index cf4fe32..c596635 100644
      FsTreeResult rc = fs_tree_path(tree, node, path, sizeof path);
      if (rc) return rc;
 diff --git a/src/common/filesystem/tree.h b/src/common/filesystem/tree.h
-index 9d34b9e..e13b5cb 100644
+index 9d34b9e..cf09b08 100644
 --- a/src/common/filesystem/tree.h
 +++ b/src/common/filesystem/tree.h
 @@ -79,9 +79,9 @@ FsTreeResult fs_tree_rename(FsTree* tree, FsNode* scope, const char* src, const
@@ -127,7 +127,7 @@ index 9d34b9e..e13b5cb 100644
  void fs_tree_release(FsNode* node);
  
 diff --git a/src/nx/CMakeLists.txt b/src/nx/CMakeLists.txt
-index f6a4f52..819cfaa 100644
+index f6a4f52..dcd4eb6 100644
 --- a/src/nx/CMakeLists.txt
 +++ b/src/nx/CMakeLists.txt
 @@ -71,7 +71,7 @@ target_link_libraries(snx_gpu PRIVATE snx_llvm)
@@ -198,7 +198,7 @@ index f6a4f52..819cfaa 100644
      snx_test_target(snx-test-shader-direct 11)
      target_link_libraries(snx-test-shader-direct PRIVATE snx_shader)
 diff --git a/src/nx/gpu/gpu.c b/src/nx/gpu/gpu.c
-index d7caa73..2dcd82d 100644
+index d7caa73..76aa267 100644
 --- a/src/nx/gpu/gpu.c
 +++ b/src/nx/gpu/gpu.c
 @@ -567,6 +567,8 @@ struct GpuItem {
@@ -306,7 +306,7 @@ index d7caa73..2dcd82d 100644
      queue_init();
      stale = !g_gpu.chan[channel] || g_scan_stale[channel];
 diff --git a/src/nx/gpu/shader/shader.c b/src/nx/gpu/shader/shader.c
-index 43d443b..5866e24 100644
+index 43d443b..9835fe1 100644
 --- a/src/nx/gpu/shader/shader.c
 +++ b/src/nx/gpu/shader/shader.c
 @@ -14,7 +14,7 @@
@@ -319,7 +319,7 @@ index 43d443b..5866e24 100644
  const u64* shader_words(const u8* code, u32 bytes, u64** copy) {
      u32 i, n = bytes / 8;
 diff --git a/src/nx/gpu/shader/shader.h b/src/nx/gpu/shader/shader.h
-index 4e94d17..7cdb310 100644
+index 4e94d17..0e67068 100644
 --- a/src/nx/gpu/shader/shader.h
 +++ b/src/nx/gpu/shader/shader.h
 @@ -138,7 +138,8 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
@@ -333,7 +333,7 @@ index 4e94d17..7cdb310 100644
  int shader_brx_targets(const u64* words, u32 index, u32 count, u32* targets, int max_targets);
  /* the program's hash, and its length in bytes in out_len */
 diff --git a/src/nx/gpu/vk/cmd.c b/src/nx/gpu/vk/cmd.c
-index cd9e27e..08c51fd 100644
+index cd9e27e..3f4ebcf 100644
 --- a/src/nx/gpu/vk/cmd.c
 +++ b/src/nx/gpu/vk/cmd.c
 @@ -222,9 +222,11 @@ static void ring_reset(Ring* r, const VmaBudget* budget) {
@@ -349,7 +349,7 @@ index cd9e27e..08c51fd 100644
  /* the storage results of every submission up to value, which has finished, land in guest memory, in order */
  static void land_through(u64 value) {
 diff --git a/src/nx/gpu/vk/compute.c b/src/nx/gpu/vk/compute.c
-index e74a30c..b83c51c 100644
+index e74a30c..3a15e74 100644
 --- a/src/nx/gpu/vk/compute.c
 +++ b/src/nx/gpu/vk/compute.c
 @@ -31,8 +31,16 @@ typedef struct CsPipe {
@@ -563,7 +563,7 @@ index e74a30c..b83c51c 100644
          LOG_LIMIT(12, "vulkan: compute %016llx ready: block %ux%ux%u, %d global buffers, %d textures, %d images\n",
                    (unsigned long long)key, lx, ly, lz, p->si.ngbuf, p->si.ntex, p->si.nimg);
 diff --git a/src/nx/gpu/vk/device.c b/src/nx/gpu/vk/device.c
-index 8579250..0d6e4cd 100644
+index 8579250..c2953b2 100644
 --- a/src/nx/gpu/vk/device.c
 +++ b/src/nx/gpu/vk/device.c
 @@ -18,6 +18,13 @@ VkShaderStageFlags g_vk_subgroup_stages;
@@ -590,7 +590,7 @@ index 8579250..0d6e4cd 100644
                                    .device = g_vk.dev,
                                    .instance = g_vk.instance,
                                    .preferredLargeHeapBlockSize = g_vk.alloc_cap < (256ull << 20) ? g_vk.alloc_cap : 0,
-@@ -737,24 +746,47 @@ int vk_swapchain_create(int srgb) {
+@@ -737,24 +746,49 @@ int vk_swapchain_create(int srgb) {
          LOG_LIMIT(1, "vulkan: the window has no sRGB format: frames in sRGB show darker\n");
      }
  
@@ -635,8 +635,10 @@ index 8579250..0d6e4cd 100644
 -    u32 count = caps.minImageCount + 1;
 +    /* Two pictures in flight (mid + real) need a spare image or the second acquire times out and the counter stays
 +       at the game rate. */
-+    u32 count = caps.minImageCount + (fg ? 2 : 1);
-+    if (fg && count < 4) count = 4;
++    /* Mid + real need a spare image. Two frames in flight on top of that, or the second acquire times out and
++       Display FPS stays at the game's own rate. */
++    u32 count = caps.minImageCount + (fg ? 3 : 1);
++    if (fg && count < 5) count = 5;
      if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
      if (count > VK_SC_MAX) count = VK_SC_MAX > caps.minImageCount ? VK_SC_MAX : caps.minImageCount;
 +    if (fg && count < 3)
@@ -644,7 +646,7 @@ index 8579250..0d6e4cd 100644
      VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
      if (!(caps.supportedCompositeAlpha & alpha)) /* the lowest one it has */
          alpha = (VkCompositeAlphaFlagBitsKHR)(caps.supportedCompositeAlpha & -caps.supportedCompositeAlpha);
-@@ -812,6 +844,7 @@ int vk_swapchain_create(int srgb) {
+@@ -812,6 +846,7 @@ int vk_swapchain_create(int srgb) {
      g_vk.sc_format = fmt.format;
      g_vk.sc_turned = transform != caps.currentTransform;
      g_vk.sc_vsync = vsync;
@@ -654,7 +656,7 @@ index 8579250..0d6e4cd 100644
      memcpy(g_vk.sc_done, done, sizeof done[0] * nimg);
 diff --git a/src/nx/gpu/vk/fg.c b/src/nx/gpu/vk/fg.c
 new file mode 100644
-index 0000000..ad5980a
+index 0000000..39b0119
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
 @@ -0,0 +1,433 @@
@@ -1093,7 +1095,7 @@ index 0000000..ad5980a
 +}
 diff --git a/src/nx/gpu/vk/fg_spv.h b/src/nx/gpu/vk/fg_spv.h
 new file mode 100644
-index 0000000..457edb8
+index 0000000..5b4e29e
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg_spv.h
 @@ -0,0 +1,5 @@
@@ -1104,7 +1106,7 @@ index 0000000..457edb8
 +extern const u64 fg_luma_spv_size, fg_search_spv_size, fg_median_spv_size, fg_interp_spv_size;
 diff --git a/src/nx/gpu/vk/frame_policy.h b/src/nx/gpu/vk/frame_policy.h
 new file mode 100644
-index 0000000..a298fde
+index 0000000..f7c0808
 --- /dev/null
 +++ b/src/nx/gpu/vk/frame_policy.h
 @@ -0,0 +1,31 @@
@@ -1141,7 +1143,7 @@ index 0000000..a298fde
 +#endif
 diff --git a/src/nx/gpu/vk/frame_times.c b/src/nx/gpu/vk/frame_times.c
 new file mode 100644
-index 0000000..faec9fa
+index 0000000..57f71f4
 --- /dev/null
 +++ b/src/nx/gpu/vk/frame_times.c
 @@ -0,0 +1,35 @@
@@ -1182,7 +1184,7 @@ index 0000000..faec9fa
 +}
 diff --git a/src/nx/gpu/vk/fsr1/LICENSE.txt b/src/nx/gpu/vk/fsr1/LICENSE.txt
 new file mode 100644
-index 0000000..324cba5
+index 0000000..efd020e
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/LICENSE.txt
 @@ -0,0 +1,19 @@
@@ -1207,14 +1209,14 @@ index 0000000..324cba5
 +THE SOFTWARE.
 diff --git a/src/nx/gpu/vk/fsr1/UPSTREAM.txt b/src/nx/gpu/vk/fsr1/UPSTREAM.txt
 new file mode 100644
-index 0000000..dcb65fb
+index 0000000..08d55e1
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/UPSTREAM.txt
 @@ -0,0 +1 @@
 +AMD FidelityFX FSR 1, https://github.com/GPUOpen-Effects/FidelityFX-FSR, commit a21ffb8f6c13233ba336352bdff293894c706575
 diff --git a/src/nx/gpu/vk/fsr1/ffx_a.h b/src/nx/gpu/vk/fsr1/ffx_a.h
 new file mode 100644
-index 0000000..d04bff5
+index 0000000..3fa315b
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/ffx_a.h
 @@ -0,0 +1,2656 @@
@@ -3876,7 +3878,7 @@ index 0000000..d04bff5
 +#endif
 diff --git a/src/nx/gpu/vk/fsr1/ffx_fsr1.h b/src/nx/gpu/vk/fsr1/ffx_fsr1.h
 new file mode 100644
-index 0000000..4e0b3d5
+index 0000000..ca571c9
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/ffx_fsr1.h
 @@ -0,0 +1,1199 @@
@@ -5081,7 +5083,7 @@ index 0000000..4e0b3d5
 +#endif
 diff --git a/src/nx/gpu/vk/fsr1_spv.h b/src/nx/gpu/vk/fsr1_spv.h
 new file mode 100644
-index 0000000..8ac3788
+index 0000000..c75b1f7
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1_spv.h
 @@ -0,0 +1,7 @@
@@ -5093,7 +5095,7 @@ index 0000000..8ac3788
 +extern const u32 smooth_spv[];
 +extern const u64 smooth_spv_size;
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..539626e 100644
+index 33f94b6..a0de2f7 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
 @@ -16,6 +16,7 @@
@@ -5657,7 +5659,7 @@ index 33f94b6..539626e 100644
               (unsigned)sizeof(ShaderInfo), (unsigned)sizeof(PipeKey), (unsigned)sizeof(PfShader));
  }
 diff --git a/src/nx/gpu/vk/pipeline_file.c b/src/nx/gpu/vk/pipeline_file.c
-index 1e659d4..7b43c30 100644
+index 1e659d4..42553dc 100644
 --- a/src/nx/gpu/vk/pipeline_file.c
 +++ b/src/nx/gpu/vk/pipeline_file.c
 @@ -194,7 +194,7 @@ static size_t pf_read(PFile* pf, const u8* buf, size_t at, size_t size, const Pf
@@ -5670,7 +5672,7 @@ index 1e659d4..7b43c30 100644
                  u32 c = cap ? cap * 2 : 1024;
                  u64* a = (u64*)realloc(check, c * sizeof *a);
 diff --git a/src/nx/gpu/vk/query.c b/src/nx/gpu/vk/query.c
-index 2b46a4c..7648ada 100644
+index 2b46a4c..c1476c0 100644
 --- a/src/nx/gpu/vk/query.c
 +++ b/src/nx/gpu/vk/query.c
 @@ -131,6 +131,10 @@ static u32 msaa_samples(u32 mode) {
@@ -5685,7 +5687,7 @@ index 2b46a4c..7648ada 100644
      QCounter* c = counter(chan, 0);
      u32 mul = msaa_samples(msaa_mode);
 diff --git a/src/nx/gpu/vk/record.c b/src/nx/gpu/vk/record.c
-index b3b0e2c..305079d 100644
+index b3b0e2c..9836150 100644
 --- a/src/nx/gpu/vk/record.c
 +++ b/src/nx/gpu/vk/record.c
 @@ -155,6 +155,11 @@ void vk_rec_queue(VkQueue q) {
@@ -5710,7 +5712,7 @@ index b3b0e2c..305079d 100644
  }
  typedef struct {
 diff --git a/src/nx/gpu/vk/render.c b/src/nx/gpu/vk/render.c
-index b8247c0..f1fb7dc 100644
+index b8247c0..705900e 100644
 --- a/src/nx/gpu/vk/render.c
 +++ b/src/nx/gpu/vk/render.c
 @@ -822,6 +822,45 @@ u32 vk_gbuf_desc(int stage, u32 off, const u32* v, u64* addr) {
@@ -5833,7 +5835,7 @@ index b8247c0..f1fb7dc 100644
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/render_scale.h b/src/nx/gpu/vk/render_scale.h
 new file mode 100644
-index 0000000..e9e61a1
+index 0000000..04a02f9
 --- /dev/null
 +++ b/src/nx/gpu/vk/render_scale.h
 @@ -0,0 +1,34 @@
@@ -5872,7 +5874,7 @@ index 0000000..e9e61a1
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..54f5e6e 100644
+index f3ac2e2..2af7b7b 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -6,8 +6,9 @@
@@ -6000,13 +6002,44 @@ index f3ac2e2..54f5e6e 100644
  /* the window's surface: lost while the app is in the background (Android), made anew when it comes back */
  static u32 g_generation;
  static int g_lost;
-@@ -307,13 +383,17 @@ static void flip_src(VkImageBlit* b, u32 transform) {
+@@ -307,13 +383,48 @@ static void flip_src(VkImageBlit* b, u32 transform) {
      }
  }
  
 -/* The window's image: src's g_last_ rectangle (a frame of fw x fh, flipped by transform) letterboxed on black, or
 +/* Frame generation keeps a game frame's own present off the display (its copy is shown later): bookkeeping only */
 +static int g_show_hidden;
++/* Set with g_show_hidden on the FG bookkeeping present. Do not submit or advance the frame ring: that burned the
++   only spare slot (VK_FRAMES is 2) before the midpoint acquire, and the zero-timeout acquire then failed. The
++   midpoint's show() submits this buffer. Not used when a lower cap drops the frame — that show is the only one. */
++static int g_show_keep_slot;
++/* Pictures handed to the swapchain, including generated frames. Guest frames a lower cap keeps off the display
++   do not increment this. The HUD window restarts when the limit or frame generation changes, so it cannot stay
++   on the previous 60. */
++static u32 g_vk_display;
++static int g_disp_fps = -1;
++static void note_display(void) {
++    static u64 since_ns;
++    static u32 since;
++    static int saw_fps = 0x7fffffff, saw_fg = -1;
++    u64 now = plat_ns();
++    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
++    int fg = __atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
++             __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED);
++    g_vk_display++;
++    if (fps != saw_fps || fg != saw_fg) {
++        saw_fps = fps;
++        saw_fg = fg;
++        since_ns = 0;
++        g_disp_fps = -1;
++    }
++    if (!since_ns || now - since_ns >= 500000000ull) {
++        if (since_ns)
++            g_disp_fps = (int)(((u64)(g_vk_display - since) * 1000000000ull + (now - since_ns) / 2) / (now - since_ns));
++        since_ns = now;
++        since = g_vk_display;
++    }
++}
 +/* The window's image: src's rect (x, y, w, h: a frame of fw x fh, flipped by transform) letterboxed on black, or
     black alone, with the on-screen controls and the game's menu over it; then the frame's commands are submitted and
     the image presented. A game's frame (game) also moves the per-present bookkeeping, and without src shows nothing.
@@ -6021,7 +6054,7 @@ index f3ac2e2..54f5e6e 100644
      backend_window_size(&ww, &wh);
      if (shown && (g_lost || backend_window_generation() != g_generation)) {
          vk_finish();
-@@ -322,14 +402,20 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -322,14 +433,20 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      }
      shown = shown && !g_lost;
      int tried = 0; /* a create already ran this frame: one that failed waits for the next frame */
@@ -6050,24 +6083,27 @@ index f3ac2e2..54f5e6e 100644
      }
      VkSemaphore wait = VK_NULL_HANDLE, signal = VK_NULL_HANDLE;
      u32 idx = 0;
-@@ -337,9 +423,14 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -337,9 +454,16 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      if (shown && (src || !game) && (g_vk.swapchain || (!tried && vk_swapchain_create(srgb)))) {
          VkCommandBuffer cb = vk_cmd(); /* waits for this frame slot, so its acquire semaphore is free */
          VkSemaphore acq = g_acquired[vk_frame_id() % VK_FRAMES];
 -        /* no wait: vk_lock is held (guest threads mapping memory take it too), and the game's pace is present_pace's.
 -           Every image still on the display or queued for it (FIFO behind) leaves this frame unshown */
-+        /* no wait on the game's own present: vk_lock is held (guest threads mapping memory take it too), and the
-+           game's pace is present_pace's. A generated picture retries briefly — immediate mode usually has an image
-+           free, and dropping it is what left Display FPS at the game's 60. */
+-        VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, 0, acq, VK_NULL_HANDLE, &idx);
++        /* The guest present does not wait: vk_lock is held, and the game's pace is present_pace's (speed lock).
++           A generated picture is not a guest frame — present_show_due is not called (game == 0) and present_pace is
++           not called. A zero timeout dropped it whenever the previous present still held the images, so Display FPS
++           stayed at the game's 60 no matter which limit was chosen. Wait up to half a 60 Hz frame, then once more. */
 +        int fg_pic = !game && (__atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
 +                               __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED));
-         VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, 0, acq, VK_NULL_HANDLE, &idx);
++        u64 acq_ns = fg_pic ? 8000000ull : 0ull;
++        VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, acq_ns, acq, VK_NULL_HANDLE, &idx);
 +        if (fg_pic && (r == VK_NOT_READY || r == VK_TIMEOUT))
-+            r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, 5000000ull, acq, VK_NULL_HANDLE, &idx);
++            r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, acq_ns, acq, VK_NULL_HANDLE, &idx);
          if (r == VK_NOT_READY || r == VK_TIMEOUT) {
              /* the game faster than the display (vsync=1 with fps_limit over its refresh, or a 59.94 Hz one) */
              static u64 dropped;
-@@ -372,8 +463,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -372,8 +496,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
              u32 sw = g_vk.sc_extent.width, sh = g_vk.sc_extent.height, cx = 0, cy = 0, cw = sw, ch = sh, dw, dh;
              int sx, sy, sww, swh;
              backend_window_safe(&sx, &sy, &sww, &swh);
@@ -6079,7 +6115,7 @@ index f3ac2e2..54f5e6e 100644
                  cx = (u32)((u64)sw * (u32)sx / (u32)g_vk.sc_win_w);
                  cy = (u32)((u64)sh * (u32)sy / (u32)g_vk.sc_win_h);
                  cw = (u32)((u64)sw * (u32)sww / (u32)g_vk.sc_win_w);
-@@ -388,12 +481,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -388,12 +514,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  }
                  i32 dx = (i32)(cx + (cw - dw) / 2), dy = (i32)(cy + (ch - dh) / 2);
                  VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
@@ -6100,7 +6136,7 @@ index f3ac2e2..54f5e6e 100644
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
              }
              {
-@@ -411,24 +509,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -411,24 +542,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
@@ -6150,7 +6186,7 @@ index f3ac2e2..54f5e6e 100644
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -441,6 +559,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -441,6 +592,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          vk_buf_frame();
          vk_mem_trim(0, 0);
          if (g_vk_present % 600 == 0) {
@@ -6163,7 +6199,7 @@ index f3ac2e2..54f5e6e 100644
              char cs_why[256];
              u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
              LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
-@@ -467,6 +591,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +624,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -6177,18 +6213,28 @@ index f3ac2e2..54f5e6e 100644
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -518,8 +649,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -516,10 +680,18 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+                 (unsigned long long)own_landings(), (unsigned long long)g_vk_rt_readbacks);
+         }
      }
-     /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
+-    /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
++    /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback.
++       FG bookkeeping does not: the midpoint records into this buffer and submits it. Advancing here left the
++       midpoint acquire with no free image, so the extra picture never counted and the HUD stayed at 60. */
++    if (g_show_keep_slot && !signal) {
++        if (game) vk_renderdoc_present(g_vk_present);
++        return 0; /* present_frame marks the frame boundary after the midpoint submit */
++    }
      vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
 +    if (game) vk_rec_frame_boundary(); /* ordered with the draws, even when the GPU producer runs ahead */
      if (game) vk_renderdoc_present(g_vk_present);
-     vk_frame_next(); /* every show used this frame's slot and acquire semaphore, the menu's own too */
+-    vk_frame_next(); /* every show used this frame's slot and acquire semaphore, the menu's own too */
++    vk_frame_next(); /* every presenting show used this frame's slot and acquire semaphore, the menu's own too */
 +    int displayed = 0;
      if (signal) {
          VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                                 .waitSemaphoreCount = 1,
-@@ -528,7 +661,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -528,7 +700,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                                 .pSwapchains = &g_vk.swapchain,
                                 .pImageIndices = &idx};
          vk_rec_queue(g_vk.gfx); /* the present waits on the frame's submission's semaphore */
@@ -6199,21 +6245,20 @@ index f3ac2e2..54f5e6e 100644
          if (r == VK_ERROR_OUT_OF_DATE_KHR || (r == VK_SUBOPTIMAL_KHR && !g_vk.sc_turned))
              recreate = 1;
          else if (r == VK_ERROR_SURFACE_LOST_KHR)
-@@ -544,6 +680,193 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -544,6 +719,201 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
++    if (displayed) note_display(); /* guest frames and generated pictures, once each, never a dropped guest frame */
 +    return displayed;
 +}
 +
 +static u64 surf_save(Surf* s, u32 x, u32 y, u32 w, u32 h, u32 transform, const char* path);
-+/* Display pictures actually handed to the swapchain (includes generated frames). The overlay FPS uses this when
-+   frame generation is on so the counter matches what is on screen. */
-+static u32 g_vk_display;
 +u32 vk_display_presents(void) { return g_vk_display; }
 +/* HUD, Esc Display FPS and the frame-time graph: pictures handed to the swapchain, never guest frames.
 +   A lower cap keeps game frames off the display; those must not count. Frame generation's midpoint counts. */
 +u32 vk_fps_presents(void) { return g_vk_display; }
++int vk_display_fps_now(void) { return g_disp_fps; }
 +/* ---- frame generation (fg.c): when a game frame arrives the picture halfway between it and the one before is shown,
 +   and the frame itself half a game frame later, from fg_thread. Every displayed picture then lands between two of the
 +   game's, at twice its rate, half a frame behind it */
@@ -6228,7 +6273,6 @@ index f3ac2e2..54f5e6e 100644
 +    u64 now = plat_ns();
 +    if (!first) first = now;
 +    if (generated) ++mid; else ++real;
-+    g_vk_display++;
 +    if (generated && mid % 300 == 0) {
 +        double seconds = (double)(now - first) / 1e9;
 +        LOG("vulkan: frame generation display submissions: %llu generated, %llu real over %.3f s (%.1f/s); display scanout is not measured\n",
@@ -6278,7 +6322,10 @@ index f3ac2e2..54f5e6e 100644
 +    if (!pending || !cur) return;
 +    const u32 rect[4] = {0, 0, cur->sw, cur->sh};
 +    vk_render_end();
-+    if (show(cur, rect, g_fg_fw, g_fg_fh, g_fg_transform, 0)) fg_note_display(0);
++    /* game=0 so this is not paced and present_show_due cannot drop it. Retry once if the image is still busy. */
++    if (show(cur, rect, g_fg_fw, g_fg_fh, g_fg_transform, 0) ||
++        show(cur, rect, g_fg_fw, g_fg_fh, g_fg_transform, 0))
++        fg_note_display(0);
 +}
 +static void fg_thread(void* arg) {
 +    (void)arg;
@@ -6314,7 +6361,7 @@ index f3ac2e2..54f5e6e 100644
 +            vk_fg_reset();
 +            g_fg_active = 0;
 +        }
-+        if (show(src, rect, fw, fh, transform, 1)) g_vk_display++;
++        show(src, rect, fw, fh, transform, 1); /* counts itself when the picture is presented */
 +        return;
 +    }
 +    if (!g_fg_started) {
@@ -6326,7 +6373,7 @@ index f3ac2e2..54f5e6e 100644
 +        }
 +    }
 +    if (g_fg_started < 0) {
-+        if (show(src, rect, fw, fh, transform, 1)) g_vk_display++;
++        show(src, rect, fw, fh, transform, 1);
 +        return;
 +    }
 +    fg_flush(0); /* a frame sooner than half a frame after the last: its copy goes first */
@@ -6339,29 +6386,32 @@ index f3ac2e2..54f5e6e 100644
 +    u32 dw = 0, dh = 0;
 +    int do_fg = pair && steady;
 +    if (!do_fg) {
-+        /* ordinary present: show() applies present_show_due */
-+        if (show(src, rect, fw, fh, transform, 1)) g_vk_display++;
++        /* ordinary present: show() applies present_show_due and counts a picture only when one is queued */
++        show(src, rect, fw, fh, transform, 1);
 +        return;
 +    }
-+    /* FG pair: honor fps_limit before mid+real, or every game frame would always display. */
++    /* FG pair: honor fps_limit once, before mid+real. present_show_due is not called again on the generated
++       picture, and present_pace is not called for it — that would step the game at the display rate. */
 +    if (!present_show_due()) {
 +        g_show_hidden = 1;
-+        show(src, rect, fw, fh, transform, 1); /* bookkeeping only */
++        show(src, rect, fw, fh, transform, 1); /* bookkeeping only; this is the frame's only show, so it retires */
 +        g_show_hidden = 0;
 +        return;
 +    }
 +    g_show_hidden = 1;
-+    show(src, rect, fw, fh, transform, 1); /* bookkeeping; displayed as mid + delayed real */
++    g_show_keep_slot = 1;
++    show(src, rect, fw, fh, transform, 1); /* bookkeeping; midpoint submits this buffer */
++    g_show_keep_slot = 0;
 +    g_show_hidden = 0;
 +    present_dest_size(fw, fh, &dw, &dh);
 +    mid = vk_fg_interpolate_present(vk_cmd(), dw, dh, &cur);
 +    if (!mid) { /* its copy instead, at once (or FSR'd current after a resize) */
 +        if (cur) {
 +            const u32 all[4] = {0, 0, cur->sw, cur->sh};
-+            if (show(cur, all, fw, fh, transform, 0)) {
++            if (show(cur, all, fw, fh, transform, 0) || show(cur, all, fw, fh, transform, 0))
 +                fg_note_display(0);
-+            }
 +        }
++        vk_rec_frame_boundary();
 +        return;
 +    }
 +    const u32 whole[4] = {0, 0, mid->sw, mid->sh};
@@ -6378,8 +6428,12 @@ index f3ac2e2..54f5e6e 100644
 +            if (cur) surf_save(cur, 0, 0, cur->sw, cur->sh, 0, path);
 +        }
 +    }
-+    /* Aspect from the image we are showing (already letterbox-sized when FSR ran), not the guest crop alone. */
-+    if (show(mid, whole, mid->sw, mid->sh, transform, 0)) fg_note_display(1);
++    /* Aspect from the image we are showing (already letterbox-sized when FSR ran), not the guest crop alone.
++       game=0: present_show_due does not run, so a cap at or above the game cannot drop the midpoint.
++       One retry: the first acquire can still lose the race with the previous real frame's present. */
++    if (show(mid, whole, mid->sw, mid->sh, transform, 0) || show(mid, whole, mid->sw, mid->sh, transform, 0))
++        fg_note_display(1);
++    vk_rec_frame_boundary(); /* guest frame, after the midpoint's submit (bookkeeping show did not advance) */
 +    pm_lock(&g_fg_lock);
 +    g_fg_fw = cur && cur->sw && cur->sh ? cur->sw : fw;
 +    g_fg_fh = cur && cur->sw && cur->sh ? cur->sh : fh;
@@ -6393,7 +6447,7 @@ index f3ac2e2..54f5e6e 100644
  }
  
  /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
-@@ -583,7 +906,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+@@ -583,7 +953,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
          g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
          g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
      }
@@ -6405,7 +6459,7 @@ index f3ac2e2..54f5e6e 100644
      __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
      vk_unlock();
  }
-@@ -600,7 +926,10 @@ static void vkr_refresh(void) {
+@@ -600,7 +973,10 @@ static void vkr_refresh(void) {
      if (!vk_trylock()) return;
      last = now;
      vk_render_end();
@@ -6419,7 +6473,7 @@ index f3ac2e2..54f5e6e 100644
  
 diff --git a/src/nx/gpu/vk/shaders/fg.comp b/src/nx/gpu/vk/shaders/fg.comp
 new file mode 100644
-index 0000000..56cee6b
+index 0000000..7754dc3
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/fg.comp
 @@ -0,0 +1,162 @@
@@ -6587,7 +6641,7 @@ index 0000000..56cee6b
 +#endif
 diff --git a/src/nx/gpu/vk/shaders/fsr1.comp b/src/nx/gpu/vk/shaders/fsr1.comp
 new file mode 100644
-index 0000000..88e1851
+index 0000000..deba12b
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/fsr1.comp
 @@ -0,0 +1,60 @@
@@ -6653,7 +6707,7 @@ index 0000000..88e1851
 +}
 diff --git a/src/nx/gpu/vk/shaders/smooth.comp b/src/nx/gpu/vk/shaders/smooth.comp
 new file mode 100644
-index 0000000..9b5ef9f
+index 0000000..17d4c91
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/smooth.comp
 @@ -0,0 +1,91 @@
@@ -6749,7 +6803,7 @@ index 0000000..9b5ef9f
 +    imageStore(outputImage, p, vec4(color, 1.0));
 +}
 diff --git a/src/nx/gpu/vk/surface.c b/src/nx/gpu/vk/surface.c
-index 355bd29..cb3d42b 100644
+index 355bd29..d5cdda4 100644
 --- a/src/nx/gpu/vk/surface.c
 +++ b/src/nx/gpu/vk/surface.c
 @@ -151,22 +151,31 @@ void vk_surf_use(VkCommandBuffer cb, Surf* s, VkImageLayout layout, VkPipelineSt
@@ -6826,7 +6880,7 @@ index 355bd29..cb3d42b 100644
      if (s->in_drawn) return;
      if (g_ndrawn == g_capdrawn) {
 diff --git a/src/nx/gpu/vk/texture.c b/src/nx/gpu/vk/texture.c
-index 6096f99..ed57f58 100644
+index 6096f99..256e90e 100644
 --- a/src/nx/gpu/vk/texture.c
 +++ b/src/nx/gpu/vk/texture.c
 @@ -10,6 +10,7 @@
@@ -6861,7 +6915,7 @@ index 6096f99..ed57f58 100644
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/ui.c b/src/nx/gpu/vk/ui.c
-index e32e8bd..9c2d31a 100644
+index e32e8bd..d6c6b68 100644
 --- a/src/nx/gpu/vk/ui.c
 +++ b/src/nx/gpu/vk/ui.c
 @@ -7,8 +7,11 @@
@@ -6893,7 +6947,7 @@ index e32e8bd..9c2d31a 100644
 +    /* Display presents, including generated frames (60 game + FSR 3 → ~120, 120 game + FSR 3 → ~240).
 +       Esc reads the same sample and keeps updating while the menu is open. */
 +    {
-+        int display_fps = vpad_showcase_fps(vk_fps_presents(), plat_ns());
++        int display_fps = vk_display_fps_now();
 +        overlay_note_display_fps(display_fps);
 +        vpad_showcase_draw(&list, safe, display_fps);
 +        if (__atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED) && !overlay_shown())
@@ -6922,7 +6976,7 @@ index e32e8bd..9c2d31a 100644
      for (i = 0; i < n; ++i) {
 diff --git a/src/nx/gpu/vk/upscale.c b/src/nx/gpu/vk/upscale.c
 new file mode 100644
-index 0000000..b800061
+index 0000000..b6130fb
 --- /dev/null
 +++ b/src/nx/gpu/vk/upscale.c
 @@ -0,0 +1,312 @@
@@ -7239,7 +7293,7 @@ index 0000000..b800061
 +    g_upscale.frames = 0; g_upscale.status = 0;
 +}
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..4da67b6 100644
+index db13c2d..608f6db 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -68,12 +68,14 @@ typedef struct {
@@ -7363,7 +7417,7 @@ index db13c2d..4da67b6 100644
  VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
-@@ -888,6 +928,25 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
+@@ -888,6 +928,26 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
     safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
  void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
  void vk_ui_swapchain_gone(void); /* its images' views go before the swapchain does */
@@ -7385,12 +7439,13 @@ index db13c2d..4da67b6 100644
 +void vk_fg_reset(void);   /* the next frame starts a new history: a menu, a hitch or a scene the motion can't bridge */
 +void vk_fg_destroy(void); /* GPU idle before this */
 +u32 vk_display_presents(void); /* swapchain pictures shown, including generated frames */
-+u32 vk_fps_presents(void);     /* counter for on-screen FPS: display presents when FG is on, else g_vk_present */
++u32 vk_fps_presents(void);     /* same counter: every picture handed to the swapchain, including generated frames */
++int vk_display_fps_now(void);  /* that counter over the last half second, or -1 until measured. Restarts when the limit changes */
  void vk_render_clear(GpuChannel* ch, u32 v);
  VkViewport vk_render_viewport(const u32* r);
  int vk_render_depth_clamp(const u32* r);
 diff --git a/src/nx/hle/filesystem/fs.c b/src/nx/hle/filesystem/fs.c
-index 354a1fc..72d60bf 100644
+index 354a1fc..bcc10cc 100644
 --- a/src/nx/hle/filesystem/fs.c
 +++ b/src/nx/hle/filesystem/fs.c
 @@ -391,9 +391,9 @@ void fs_init(void) {
@@ -7475,7 +7530,7 @@ index 354a1fc..72d60bf 100644
  }
  static int nn_fssrv_sf_IFile_Flush(SvcObj* self) {
 diff --git a/src/nx/hle/filesystem/fs.h b/src/nx/hle/filesystem/fs.h
-index fd64ad4..2845a4a 100644
+index fd64ad4..b22be6b 100644
 --- a/src/nx/hle/filesystem/fs.h
 +++ b/src/nx/hle/filesystem/fs.h
 @@ -115,4 +115,5 @@ typedef struct {
@@ -7485,7 +7540,7 @@ index fd64ad4..2845a4a 100644
 +void hle_fs_stats(u64* reads, u64* bytes, u64* ms); /* the game's file reads so far: how many, their bytes, the time they took */
  #endif
 diff --git a/src/nx/hle/services/nvdrv.c b/src/nx/hle/services/nvdrv.c
-index ebff4f0..29a1c84 100644
+index ebff4f0..d8d2841 100644
 --- a/src/nx/hle/services/nvdrv.c
 +++ b/src/nx/hle/services/nvdrv.c
 @@ -368,6 +368,19 @@ int syncpt_wait(u32 id, u32 thresh, i64 timeout_ns) {
@@ -7525,7 +7580,7 @@ index ebff4f0..29a1c84 100644
              return ok ? 0 : 5;
          }
 diff --git a/src/nx/hle/services/nvdrv.h b/src/nx/hle/services/nvdrv.h
-index c42fc3d..f6be192 100644
+index c42fc3d..0ca93b3 100644
 --- a/src/nx/hle/services/nvdrv.h
 +++ b/src/nx/hle/services/nvdrv.h
 @@ -38,6 +38,9 @@ void syncpt_add(u32 id, u32 n); /* n increments, one wakeup */
@@ -7549,7 +7604,7 @@ index c42fc3d..f6be192 100644
      u8 syncpt_used[SYNCPT_N];
 diff --git a/src/nx/memory/layout.h b/src/nx/memory/layout.h
 new file mode 100644
-index 0000000..3a4d381
+index 0000000..bbd8b96
 --- /dev/null
 +++ b/src/nx/memory/layout.h
 @@ -0,0 +1,31 @@
@@ -7585,7 +7640,7 @@ index 0000000..3a4d381
 +}
 +#endif
 diff --git a/src/nx/memory/mem.c b/src/nx/memory/mem.c
-index 1753319..1145db5 100644
+index 1753319..1e62c81 100644
 --- a/src/nx/memory/mem.c
 +++ b/src/nx/memory/mem.c
 @@ -7,6 +7,7 @@
@@ -7607,7 +7662,7 @@ index 1753319..1145db5 100644
  u64 g_heap_size, g_phys_mapped, g_heap_max, g_code_memory, g_main_stack_size;
  u64 g_pool_size = 64 * GIB; /* sparse: only the pages in use take memory */
 diff --git a/src/nx/runtime/driver/hactool/nca.c b/src/nx/runtime/driver/hactool/nca.c
-index 2f956fa..23ac531 100644
+index 2f956fa..17f2495 100644
 --- a/src/nx/runtime/driver/hactool/nca.c
 +++ b/src/nx/runtime/driver/hactool/nca.c
 @@ -1420,13 +1420,15 @@ void nca_save_section_file(nca_section_ctx_t *ctx, uint64_t ofs, uint64_t total_
@@ -7630,7 +7685,7 @@ index 2f956fa..23ac531 100644
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
 diff --git a/src/nx/runtime/guest_jit.c b/src/nx/runtime/guest_jit.c
-index b259c30..e06079b 100644
+index b259c30..5ad63c2 100644
 --- a/src/nx/runtime/guest_jit.c
 +++ b/src/nx/runtime/guest_jit.c
 @@ -164,7 +164,21 @@ GuestFn jit_resolve_or_add(u64 pc) {
@@ -7657,7 +7712,7 @@ index b259c30..e06079b 100644
  const char* jit_failure(void) { return g_jit ? "the JIT could not compile it" : g_jit_error; }
  
 diff --git a/src/nx/runtime/guest_jit.h b/src/nx/runtime/guest_jit.h
-index 894d8e7..00f0695 100644
+index 894d8e7..dc7e012 100644
 --- a/src/nx/runtime/guest_jit.h
 +++ b/src/nx/runtime/guest_jit.h
 @@ -18,6 +18,8 @@ GuestFn jit_resolve(u64 pc);
@@ -7670,7 +7725,7 @@ index 894d8e7..00f0695 100644
  const char* jit_failure(void);
  /* Code the game maps while it runs (an NRO, hle/services/ldr.c), text_size bytes of text at base out of size: the
 diff --git a/src/nx/runtime/main.c b/src/nx/runtime/main.c
-index 6a667e6..5ae8e43 100644
+index 6a667e6..16e05a9 100644
 --- a/src/nx/runtime/main.c
 +++ b/src/nx/runtime/main.c
 @@ -19,6 +19,7 @@
@@ -7777,7 +7832,7 @@ index 6a667e6..5ae8e43 100644
      {
          char version[16];
 diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
-index addf082..a0aa92c 100644
+index addf082..d0f5cca 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
 @@ -38,5 +38,14 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
@@ -7796,7 +7851,7 @@ index addf082..a0aa92c 100644
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
-index a0ef76b..0a5b782 100644
+index a0ef76b..7f02e25 100644
 --- a/src/nx/runtime/options.c
 +++ b/src/nx/runtime/options.c
 @@ -58,6 +58,20 @@ void options_fps_set(const IniOpt* o, const char* v) {
@@ -7820,7 +7875,7 @@ index a0ef76b..0a5b782 100644
  void fps_limit_text(int fps, char* out, size_t n) {
      if (fps == SNX_FPS_GAME)
          snprintf(out, n, "game");
-@@ -135,6 +149,101 @@ typedef struct {
+@@ -135,6 +149,108 @@ typedef struct {
  } Override;
  static Override g_over[OVERRIDE_MAX];
  static int g_nover;
@@ -7852,18 +7907,25 @@ index a0ef76b..0a5b782 100644
 +    memcpy(g_fps_session[i].key, key, kn + 1);
 +    memcpy(g_fps_session[i].value, value, vn + 1);
 +}
++static PMutex g_poll_lock = PMUTEX_INIT;
 +void options_fps_live(int fps) {
 +    char v[16];
++    /* Same lock as ini_poll's apply_all. A reload that still sees the old "game" must not land after this store
++       and put the limiter back, which left every choice presenting at the game's 60. */
++    pm_lock(&g_poll_lock);
 +    __atomic_store_n(&g_opt_fps, fps, __ATOMIC_RELAXED);
 +    fps_limit_text(fps, v, sizeof v);
 +    session_put("fps_limit", v);
++    pm_unlock(&g_poll_lock);
 +}
 +void options_fsr3_live(int on) {
++    pm_lock(&g_poll_lock);
 +    __atomic_store_n(&g_settings.frame_generation, on ? 1 : 0, __ATOMIC_RELAXED);
 +    __atomic_store_n(&g_opt_frame_generation, on ? 1 : 0, __ATOMIC_RELAXED);
 +    if (on) __atomic_store_n(&g_settings.upscaler, 1, __ATOMIC_RELAXED);
 +    session_put("frame_generation", on ? "1" : "0");
 +    if (on) session_put("upscaler", "1");
++    pm_unlock(&g_poll_lock);
 +}
 +static void global_load(void) {
 +    static const char* const allowed[] = {"fps_limit", "resolution", "render_scale_safety", "display_resolution", "anisotropy", "upscaler",
@@ -7922,7 +7984,15 @@ index a0ef76b..0a5b782 100644
  /* the menu's, from any thread, until a write of the file has them. g_pending_lock is a leaf: nothing is called while
     it is held */
  typedef struct {
-@@ -203,6 +312,10 @@ static const char* value_of(const IniOpt* o) {
+@@ -144,7 +260,6 @@ typedef struct {
+ static Pending g_pending[PENDING_MAX];
+ static int g_npending;
+ static PMutex g_pending_lock = PMUTEX_INIT;
+-static PMutex g_poll_lock = PMUTEX_INIT;
+ 
+ static char g_path[1400];
+ static int g_started; /* ini_open is done: the startup settings are kept from now on */
+@@ -203,6 +318,10 @@ static const char* value_of(const IniOpt* o) {
      const char* v = override_of(o->key);
      const Entry* e;
      if (v) return v;
@@ -7933,7 +8003,7 @@ index a0ef76b..0a5b782 100644
      e = store_find(o->key);
      return e ? e->value : o->def;
  }
-@@ -224,7 +337,7 @@ void ini_override(const char* k, const char* v) {
+@@ -224,7 +343,7 @@ void ini_override(const char* k, const char* v) {
  void ini_set(const char* k, const char* v) {
      size_t kn = strlen(k), vn = strlen(v);
      int i;
@@ -7942,7 +8012,7 @@ index a0ef76b..0a5b782 100644
      if (kn >= KEY_MAX || vn >= PENDING_VALUE) {
          WARN_LIMIT(1, "settings: %s's value is too long to save\n", k);
          return;
-@@ -414,6 +527,7 @@ void ini_open(const char* path) {
+@@ -414,6 +533,7 @@ void ini_open(const char* path) {
      char why[256];
      snprintf(g_path, sizeof g_path, "%s", path);
      ini_set_say(say_setting);
@@ -7950,7 +8020,7 @@ index a0ef76b..0a5b782 100644
      for (i = 0; i < g_nover; i++)
          if (!snx_setting_known(g_over[i].key)) WARN("--%s is not a setting, so it does nothing\n", g_over[i].key);
      text = snx_read_file(g_path, &size);
-@@ -433,6 +547,9 @@ void ini_open(const char* path) {
+@@ -433,6 +553,9 @@ void ini_open(const char* path) {
      n = pending_take(taken);
      say_deprecated();
      apply_all();
@@ -7961,7 +8031,7 @@ index a0ef76b..0a5b782 100644
      g_started = 1;
  }
 diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
-index 408db9e..1f9e98b 100644
+index 408db9e..d682e50 100644
 --- a/src/nx/runtime/options.h
 +++ b/src/nx/runtime/options.h
 @@ -34,7 +34,13 @@ void ini_poll(int final);
@@ -7979,7 +8049,7 @@ index 408db9e..1f9e98b 100644
     (hle/services/network/ldn.c) */
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
-index ac4acd5..55ab33d 100644
+index ac4acd5..023ef05 100644
 --- a/src/nx/runtime/platform/backend/gamepad.c
 +++ b/src/nx/runtime/platform/backend/gamepad.c
 @@ -370,6 +370,11 @@ u64 gamepad_button(u32 id, int button) {
@@ -8080,7 +8150,7 @@ index ac4acd5..55ab33d 100644
 +    return 0;
 +}
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
-index 87dfdc6..7bcd768 100644
+index 87dfdc6..2b30e37 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
 +++ b/src/nx/runtime/platform/backend/sdl3.c
 @@ -13,6 +13,7 @@
@@ -8310,7 +8380,7 @@ index 87dfdc6..7bcd768 100644
          g_shot_req = 0;
 diff --git a/src/nx/runtime/platform/frame_trace.c b/src/nx/runtime/platform/frame_trace.c
 new file mode 100644
-index 0000000..4f497ef
+index 0000000..fdc2052
 --- /dev/null
 +++ b/src/nx/runtime/platform/frame_trace.c
 @@ -0,0 +1,118 @@
@@ -8434,7 +8504,7 @@ index 0000000..4f497ef
 +}
 diff --git a/src/nx/runtime/platform/frame_trace.h b/src/nx/runtime/platform/frame_trace.h
 new file mode 100644
-index 0000000..37ce839
+index 0000000..ffc1b48
 --- /dev/null
 +++ b/src/nx/runtime/platform/frame_trace.h
 @@ -0,0 +1,53 @@
@@ -8492,7 +8562,7 @@ index 0000000..37ce839
 +void pf_trace_draw(const PfTrace* t, SnxUiList* l, const int safe[4], int sh, int display_fps);
 +#endif
 diff --git a/src/nx/runtime/platform/gamepad.h b/src/nx/runtime/platform/gamepad.h
-index 0821ef7..c440b93 100644
+index 0821ef7..5edd58c 100644
 --- a/src/nx/runtime/platform/gamepad.h
 +++ b/src/nx/runtime/platform/gamepad.h
 @@ -25,10 +25,15 @@ u32 gamepad_slot_id(int slot); /* SDL joystick instance ID, 0 for an empty slot
@@ -8512,7 +8582,7 @@ index 0821ef7..c440b93 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2..e4785a0 100644
+index 441a8c2..b5f1f3c 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
 @@ -5,6 +5,8 @@
@@ -8737,7 +8807,7 @@ index 441a8c2..e4785a0 100644
      return act(focus, 0);
  }
 diff --git a/src/nx/runtime/platform/overlay.h b/src/nx/runtime/platform/overlay.h
-index 8e29f7b..b59b3ce 100644
+index 8e29f7b..d9c5445 100644
 --- a/src/nx/runtime/platform/overlay.h
 +++ b/src/nx/runtime/platform/overlay.h
 @@ -1,6 +1,6 @@
@@ -8760,7 +8830,7 @@ index 8e29f7b..b59b3ce 100644
  void overlay_set_display_scale(float scale);
  /* where the panel goes on a picture of sw x sh pixels: its corner and the whole number it is scaled by */
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
-index d3e4e35..b50e68e 100644
+index d3e4e35..124c284 100644
 --- a/src/nx/runtime/platform/plat.h
 +++ b/src/nx/runtime/platform/plat.h
 @@ -42,6 +42,9 @@ int plat_thread(PThreadFn fn, void* arg, size_t stack);
@@ -8783,7 +8853,7 @@ index d3e4e35..b50e68e 100644
  
  #endif
 diff --git a/src/nx/runtime/platform/plat_posix.c b/src/nx/runtime/platform/plat_posix.c
-index cd639e4..0502a88 100644
+index cd639e4..ab81e43 100644
 --- a/src/nx/runtime/platform/plat_posix.c
 +++ b/src/nx/runtime/platform/plat_posix.c
 @@ -219,6 +219,9 @@ void plat_thread_cpus(const int* ids, int n) {
@@ -8797,7 +8867,7 @@ index cd639e4..0502a88 100644
  /* the text after "key" (and a '=' or ':' with the spaces around it) on the first line of path that starts with it,
     unquoted; out empty when there's none */
 diff --git a/src/nx/runtime/platform/plat_win32.c b/src/nx/runtime/platform/plat_win32.c
-index 1f9eebc..e9cbd58 100644
+index 1f9eebc..9c04ff8 100644
 --- a/src/nx/runtime/platform/plat_win32.c
 +++ b/src/nx/runtime/platform/plat_win32.c
 @@ -112,6 +112,27 @@ void plat_thread_cpus(const int* ids, int n) {
@@ -8829,7 +8899,7 @@ index 1f9eebc..e9cbd58 100644
  void plat_system_info(char* out, size_t cap) {
      static const char key[] = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
 diff --git a/src/nx/runtime/platform/profiler_win32.c b/src/nx/runtime/platform/profiler_win32.c
-index ebfd9c6..dc8cc1f 100644
+index ebfd9c6..7d8326a 100644
 --- a/src/nx/runtime/platform/profiler_win32.c
 +++ b/src/nx/runtime/platform/profiler_win32.c
 @@ -38,6 +38,24 @@ typedef struct {
@@ -9019,7 +9089,7 @@ index ebfd9c6..dc8cc1f 100644
      SetThreadPriority(h, THREAD_PRIORITY_HIGHEST);
 diff --git a/src/nx/runtime/platform/save_activity.c b/src/nx/runtime/platform/save_activity.c
 new file mode 100644
-index 0000000..f09695e
+index 0000000..6ca941d
 --- /dev/null
 +++ b/src/nx/runtime/platform/save_activity.c
 @@ -0,0 +1,29 @@
@@ -9054,7 +9124,7 @@ index 0000000..f09695e
 +}
 diff --git a/src/nx/runtime/platform/save_activity.h b/src/nx/runtime/platform/save_activity.h
 new file mode 100644
-index 0000000..2d0dad9
+index 0000000..2a82efe
 --- /dev/null
 +++ b/src/nx/runtime/platform/save_activity.h
 @@ -0,0 +1,14 @@
@@ -9073,7 +9143,7 @@ index 0000000..2d0dad9
 +}
 +#endif
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181..f29dccd 100644
+index 2bd6181..033f7e1 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
 @@ -31,14 +31,96 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
@@ -9177,7 +9247,7 @@ index 2bd6181..f29dccd 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..fe392fc 100644
+index be57ac5..2f5a871 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
 @@ -80,13 +80,105 @@ setting Game mods off
@@ -9346,7 +9416,7 @@ index be57ac5..fe392fc 100644
      key jit_threads
      int 0 8
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 64bdd9b..8900efb 100644
+index 64bdd9b..fbf03f8 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -64,7 +64,11 @@ endif()
@@ -9422,7 +9492,7 @@ index 64bdd9b..8900efb 100644
          "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/engines.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/maxwell3d.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/write_pages.c"
          "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/mme.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/mme_hle.c"
 diff --git a/tests/astc_vulkan.c b/tests/astc_vulkan.c
-index fda0dea..488b8dd 100644
+index fda0dea..b833977 100644
 --- a/tests/astc_vulkan.c
 +++ b/tests/astc_vulkan.c
 @@ -72,6 +72,7 @@ void vk_lock(void) {}
@@ -9434,7 +9504,7 @@ index fda0dea..488b8dd 100644
  void vk_gpuprof_frame_done(u32 slot) { (void)slot; }
  /* cmd.c's waits note themselves for gpu.c's stall report, which isn't here */
 diff --git a/tests/filesystem_service.c b/tests/filesystem_service.c
-index 32905ef..cf57f70 100644
+index 32905ef..a8daadf 100644
 --- a/tests/filesystem_service.c
 +++ b/tests/filesystem_service.c
 @@ -33,6 +33,9 @@ static char test_fatal_text[1024];
@@ -9468,7 +9538,7 @@ index 32905ef..cf57f70 100644
      CHECK((argc == 3 || argc == 4) && strstr(argv[1], "scarletnx-fs-tree-") != NULL);
      CHECK(!test_chdir(argv[1]));
 diff --git a/tests/filesystem_tree.c b/tests/filesystem_tree.c
-index 2329b11..7253c07 100644
+index 2329b11..41d9119 100644
 --- a/tests/filesystem_tree.c
 +++ b/tests/filesystem_tree.c
 @@ -64,18 +64,18 @@ void pm_unlock(PMutex* m) { pthread_mutex_unlock(&m->l); }
@@ -9538,7 +9608,7 @@ index 2329b11..7253c07 100644
      CHECK(fs_tree_create(&other, dir, "new.bin", 0, 1, NULL) == FS_TREE_READONLY);
 diff --git a/tests/frame_policy.c b/tests/frame_policy.c
 new file mode 100644
-index 0000000..8404f8a
+index 0000000..c877f89
 --- /dev/null
 +++ b/tests/frame_policy.c
 @@ -0,0 +1,36 @@
@@ -9580,7 +9650,7 @@ index 0000000..8404f8a
 +}
 diff --git a/tests/frame_times.c b/tests/frame_times.c
 new file mode 100644
-index 0000000..17e9fa2
+index 0000000..759c0e2
 --- /dev/null
 +++ b/tests/frame_times.c
 @@ -0,0 +1,21 @@
@@ -9607,7 +9677,7 @@ index 0000000..17e9fa2
 +}
 diff --git a/tests/frame_trace.c b/tests/frame_trace.c
 new file mode 100644
-index 0000000..eafe9e1
+index 0000000..46de470
 --- /dev/null
 +++ b/tests/frame_trace.c
 @@ -0,0 +1,87 @@
@@ -9699,7 +9769,7 @@ index 0000000..eafe9e1
 +    return 0;
 +}
 diff --git a/tests/gamepad.c b/tests/gamepad.c
-index 685599a..63836f9 100644
+index 685599a..a4fc789 100644
 --- a/tests/gamepad.c
 +++ b/tests/gamepad.c
 @@ -247,6 +247,33 @@ int main(void) {
@@ -9737,7 +9807,7 @@ index 685599a..63836f9 100644
         key, and gamepad_buttons is one no longer (docs/DEPRECATIONS.md) */
      CHECK(gamepad_ini("gamepad_swap_ab", "1"));
 diff --git a/tests/gpu_park.c b/tests/gpu_park.c
-index b1bebd4..631ab1e 100644
+index b1bebd4..52d595a 100644
 --- a/tests/gpu_park.c
 +++ b/tests/gpu_park.c
 @@ -104,6 +104,11 @@ void syncpt_add(u32 id, u32 n) {
@@ -9805,7 +9875,7 @@ index b1bebd4..631ab1e 100644
         the CPU immediately reuses; a later fetched entry survives, while a second SYNC sees the new bytes. */
      for (u32 barrier = 0; barrier < 2; barrier++) {
 diff --git a/tests/jit_service.c b/tests/jit_service.c
-index a91eb5f..13f12cc 100644
+index a91eb5f..c11ac08 100644
 --- a/tests/jit_service.c
 +++ b/tests/jit_service.c
 @@ -14,6 +14,7 @@
@@ -9864,7 +9934,7 @@ index a91eb5f..13f12cc 100644
      printf("jit service: passed\n");
 diff --git a/tests/memory_layout.c b/tests/memory_layout.c
 new file mode 100644
-index 0000000..130c79d
+index 0000000..20decbd
 --- /dev/null
 +++ b/tests/memory_layout.c
 @@ -0,0 +1,25 @@
@@ -9894,7 +9964,7 @@ index 0000000..130c79d
 +    return 0;
 +}
 diff --git a/tests/overlay.c b/tests/overlay.c
-index 03330d3..e824359 100644
+index 03330d3..81ec159 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
 @@ -10,11 +10,37 @@
@@ -10101,7 +10171,7 @@ index 03330d3..e824359 100644
           "passed");
      return 0;
 diff --git a/tests/pipeline_file.c b/tests/pipeline_file.c
-index da5b015..25b630e 100644
+index da5b015..69f3e5f 100644
 --- a/tests/pipeline_file.c
 +++ b/tests/pipeline_file.c
 @@ -98,7 +98,7 @@ static void make_shader(int n, PfShader* s, u32* cbr, u32* spv) {
@@ -10115,7 +10185,7 @@ index da5b015..25b630e 100644
      s->ncbr = (u32)n % 3; /* 0, 1 or 2 reads */
 diff --git a/tests/render_scale.c b/tests/render_scale.c
 new file mode 100644
-index 0000000..9c264d5
+index 0000000..cd81534
 --- /dev/null
 +++ b/tests/render_scale.c
 @@ -0,0 +1,29 @@
@@ -10149,7 +10219,7 @@ index 0000000..9c264d5
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45..7464129 100644
+index 53c5e45..19548cc 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,8 @@
@@ -10161,7 +10231,7 @@ index 53c5e45..7464129 100644
  static u64 now_ns, slept_ns;
  static unsigned checks, failures;
  #define CHECK(c, ...)                                                                                                  \
-@@ -84,12 +86,121 @@ static void pacing(void) {
+@@ -84,12 +86,130 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -10213,10 +10283,19 @@ index 53c5e45..7464129 100644
 +    CHECK(present_period(120, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 120");
 +    CHECK(present_period(240, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 240");
 +    /* pacing() left the last swap interval at 1, so the game pace is already 60 Hz */
++    /* A 60 Hz game. The number on screen must change with the choice: 30 is not 60, and FG is not stuck at 60. */
++    CHECK(present_expected_display_fps(30, 0) == 30, "30 without FG stayed at 60");
++    CHECK(present_expected_display_fps(60, 0) == 60, "60 without FG is not the game's rate");
++    CHECK(present_expected_display_fps(120, 0) == 60, "120 without FG invented frames");
++    CHECK(present_expected_display_fps(144, 0) == 60, "144 without FG invented frames");
++    CHECK(present_expected_display_fps(240, 0) == 60, "240 without FG invented frames");
++    CHECK(present_expected_display_fps(0, 0) == 60, "unlimited without FG is not the game's 60");
++    CHECK(present_expected_display_fps(30, 1) == 60, "30 with FG is not about 60 on screen");
 +    CHECK(present_expected_display_fps(60, 1) == 120, "limit 60 with FG on a 60 FPS game is ~120 on screen");
 +    CHECK(present_expected_display_fps(120, 1) == 120, "limit 120 with FG stays ~2x the game, not 240");
++    CHECK(present_expected_display_fps(144, 1) == 120, "144 with FG on a 60 FPS game stayed at 60");
 +    CHECK(present_expected_display_fps(240, 1) == 120, "limit 240 with FG stays ~2x the game, not 480");
-+    CHECK(present_expected_display_fps(30, 1) == 60, "limit 30 with FG shows fewer guest frames, about 60 on screen");
++    CHECK(present_expected_display_fps(0, 1) == 120, "unlimited with FG stayed at 60");
 +    g_opt_fps = 120;
 +    now_ns += 100 * refresh;
 +    present_pace(1); /* fps changed: the old deadline is dropped, so this frame does not wait */
@@ -10284,7 +10363,7 @@ index 53c5e45..7464129 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -98,6 +209,7 @@ int main(void) {
+@@ -98,6 +218,7 @@ int main(void) {
      clock_start();
      ticks();
      pacing();
@@ -10294,7 +10373,7 @@ index 53c5e45..7464129 100644
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
 diff --git a/tests/save_activity.c b/tests/save_activity.c
 new file mode 100644
-index 0000000..5f9ff48
+index 0000000..a20482f
 --- /dev/null
 +++ b/tests/save_activity.c
 @@ -0,0 +1,32 @@
@@ -10331,7 +10410,7 @@ index 0000000..5f9ff48
 +    return 0;
 +}
 diff --git a/tests/tex_upload_rows.c b/tests/tex_upload_rows.c
-index a9d357a..6d09d89 100644
+index a9d357a..eee950b 100644
 --- a/tests/tex_upload_rows.c
 +++ b/tests/tex_upload_rows.c
 @@ -130,6 +130,7 @@ VkState g_vk;
@@ -10343,7 +10422,7 @@ index a9d357a..6d09d89 100644
      (void)what, (void)file, (void)line;
      return r == VK_SUCCESS;
 diff --git a/tests/vulkan_headless.c b/tests/vulkan_headless.c
-index 25f0af2..24a5377 100644
+index 25f0af2..3963b94 100644
 --- a/tests/vulkan_headless.c
 +++ b/tests/vulkan_headless.c
 @@ -14,6 +14,7 @@

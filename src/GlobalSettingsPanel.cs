@@ -14,7 +14,7 @@ namespace PortForge
         private readonly ComboBox resolution = Choice("Resolution", "Auto (game chooses)", "720p", "1080p", "1440p", "4K (2160p)"),
             upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "PortForge FSR 3 (2x, from scratch)"),
             mode = Choice("Rendering mode", "TV - game chooses its layout", "Handheld - lighter rendering where supported"),
-            fps = Choice("Frame limit", "Game speed (recommended)", "60", "120", "144", "240", "Unlimited");
+            fps = Choice("Frame limit", "Game speed (recommended)", "30", "60", "120", "144", "240", "Unlimited");
         private readonly Label status = new Label { AutoSize = true, ForeColor = Color.FromArgb(105,226,183), AccessibleName = "Global settings status", Text = "READY - Settings apply on the next game launch." };
         private readonly Label fpsNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 8) };
         private readonly Label upscaleNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 12) };
@@ -27,7 +27,7 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.27 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. The game always runs at its own speed. The FPS limit and PortForge FSR 3 only change how many pictures are shown. Esc shows live Display FPS. Update the app and use Doctor → Engine on existing games.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.28 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. The game always runs at its own speed. The FPS limit and PortForge FSR 3 only change how many pictures are shown. Esc shows live Display FPS. Update the app and use Doctor → Engine on existing games.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             AddText(layout, "720p through 4K size the window/swapchain; FSR / PortForge FSR 3 enlarge the finished image. Internal game buffers stay native (scaling them broke titles like Breath of the Wild). Auto keeps the game's layout.", 10);
@@ -74,7 +74,7 @@ namespace PortForge
             s.ApplyUpscaleMode();
             s.Graphics.Docked=mode.SelectedIndex==0;
             s.Graphics.Fullscreen=fullscreen.Checked; s.Graphics.VSync=vsync.Checked; s.Graphics.PixelSmoothing=smoothing.Checked;
-            s.Graphics.FpsLimit=fps.SelectedIndex==0 ? "game" : fps.SelectedIndex==5 ? "0" : fps.Text;
+            s.Graphics.FpsLimit=fps.SelectedIndex==0 ? "game" : fps.SelectedIndex==6 ? "0" : fps.Text;
         }
         private void ShowSettings(GlobalSettings s)
         {
@@ -84,14 +84,14 @@ namespace PortForge
             upscale.SelectedIndex = Math.Max(0, Math.Min(2, s.UpscaleMode));
             fullscreen.Checked=s.Graphics.Fullscreen; vsync.Checked=s.Graphics.VSync; smoothing.Checked=s.Graphics.PixelSmoothing;
             mode.SelectedIndex=s.Graphics.Docked?0:1;
-            fps.SelectedIndex=s.Graphics.FpsLimit=="game"?0:s.Graphics.FpsLimit=="0"?5:fps.Items.IndexOf(s.Graphics.FpsLimit);
+            fps.SelectedIndex=s.Graphics.FpsLimit=="game"?0:s.Graphics.FpsLimit=="0"?6:fps.Items.IndexOf(s.Graphics.FpsLimit);
             if(fps.SelectedIndex<0) { fps.Items.Add(s.Graphics.FpsLimit); fps.SelectedIndex=fps.Items.Count-1; }
             RefreshNotes();
         }
         private void RefreshNotes()
         {
             bool fsr3 = upscale.SelectedIndex == 2;
-            string limit = fps.SelectedIndex == 0 ? "game" : fps.SelectedIndex == 5 ? "0" : fps.Text;
+            string limit = fps.SelectedIndex == 0 ? "game" : fps.SelectedIndex == 6 ? "0" : fps.Text;
             int n;
             if (fsr3 && Int32.TryParse(limit, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) && n > 0)
                 fpsNote.Text = n + " does not change game speed. It only drops pictures when it is below the game's pace. With PortForge FSR 3 the screen can show about twice that pace (a 30 FPS game about 60, a 60 FPS game about 120), not twice " + n + ".";
