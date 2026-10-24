@@ -157,6 +157,22 @@ int present_expected_display_fps(int fps_limit, int frame_generation) {
         else
             snprintf(fps_line, sizeof fps_line, "Engine %s | Display FPS: -- | Limit: %s", PF_ENGINE_VERSION,
                      limit_word);"""
+    # FPS limit row: show present_fg_slots as %dx (not hardcoded 2x) when FG is on.
+    old_fps_row = 'snprintf(value, vsize, "< %s (2x game %d -> ~%d) >", word, side, expect);'
+    new_fps_row = (
+        "int slots = present_fg_slots(fps);\n"
+        '                    snprintf(value, vsize, "< %s (%dx game %d -> ~%d) >", word, slots, side, expect);'
+    )
+    if old_fps_row in ot:
+        ot = ot.replace(old_fps_row, new_fps_row, 1)
+        overlay.write_text(ot, encoding="utf-8")
+        print("OK: overlay FPS limit %dx slots")
+        ot = overlay.read_text(encoding="utf-8", errors="replace")
+    elif 'snprintf(value, vsize, "< %s (%dx game %d -> ~%d) >", word, slots, side, expect);' in ot:
+        print("OK already: overlay FPS limit %dx slots")
+    else:
+        print("WARN: overlay FPS limit 2x/%dx row not found (check manually)")
+
     if "(%dx game %d)" in ot and "(~%d)" not in ot.split("PAGE_MAIN")[1][:800]:
         print("OK already: overlay Esc Nx game")
     else:

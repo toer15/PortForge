@@ -115,7 +115,15 @@ namespace PortForge
                 h.Issues.Add(new GameIssue("occlusion","The renderer reported unreliable occlusion counts","This is an engine-level graphics limitation and may affect visibility in the world. Configuration changes cannot prove it fixed. Preserve this report for a backend code fix."));
             if(Regex.IsMatch(h.Log,@"(?i)unsupported (?:shader|opcode)|shader[^\r\n]*(?:translation failed|failed to translate)|[1-9]\d* draws[^\r\n]*[1-9]\d* skipped|draws, [1-9]\d* skipped|batches[^\r\n]*[1-9]\d* skipped"))
                 h.Issues.Add(new GameIssue("renderer_failure","Unsupported or skipped rendering was reported","Some rendering operations failed or were skipped. A supported engine/code fix is needed; the app will not mark this resolved by hiding the message."));
-            if(Regex.IsMatch(h.Log,@"(?im)^.*\bFATAL:|No new frame for \d+ seconds")) h.Issues.Add(new GameIssue("runtime_failure","The runtime reported a failure or stall","The latest recorded session contains a fatal error or stalled-frame warning. Review the game log and AI diagnosis; no general binary repair is known."));
+            /* Guest heap OOM: engine logs "null pointer plus an offset" / memory_gb=6 hint with FATAL invalid-memory-access.
+               BOTW with FSR 3 can fill the default ~3.2 GB heap on Continue/load; raising memory_gb is the supported repair. */
+            bool guestOom=Regex.IsMatch(h.Log,@"(?i)null pointer plus an offset|memory_gb=6 in its \.ini may help|a game short of memory");
+            int memoryGb; if(!Int32.TryParse(get("memory_gb","0"),NumberStyles.Integer,CultureInfo.InvariantCulture,out memoryGb)) memoryGb=0;
+            bool canRaiseMemory=guestOom&&memoryGb<6&&(cap==null||cap.Keys.Contains("memory_gb")||values.ContainsKey("memory_gb"));
+            if(canRaiseMemory)
+                h.Issues.Add(new GameIssue("guest_oom","The game ran out of console memory","The session crashed with a null-pointer access after the guest heap filled (default memory_gb is the console's ~3.2 GB). The repair sets memory_gb=6 (~4.8 GB), which the engine itself recommends for this failure.", "raise_memory"));
+            else if(Regex.IsMatch(h.Log,@"(?im)^.*\bFATAL:|No new frame for \d+ seconds"))
+                h.Issues.Add(new GameIssue("runtime_failure","The runtime reported a failure or stall","The latest recorded session contains a fatal error or stalled-frame warning. Review the game log and AI diagnosis; no general binary repair is known."));
             bool speedLock=cap!=null&&cap.Keys.Contains("speed_lock");
             if(speedLock&&get("speed_lock","1")=="0") h.Issues.Add(new GameIssue("speed_lock_off","Game speed lock is off","With the speed lock off, an FPS limit above the game's own pace makes the game itself run faster than on the console, and a lower one makes it run in slow motion. The repair turns the speed lock back on: the game keeps its own speed at any FPS limit.","speed_lock"));
             else if(!speedLock&&get("fps_limit","game")!="game") h.Issues.Add(new GameIssue("timing","Custom frame timing is selected","Higher FPS can change game speed, physics or world behavior in some games. If that happens, select Game speed. A limiter cannot create correct timing patches for every game."));
@@ -150,6 +158,7 @@ namespace PortForge
             if(allowed.Contains("restore_rendering"))foreach(string key in new[]{"compute","shadows"})if(cap!=null&&cap.Keys.Contains(key))changes[key]="1";
             if(allowed.Contains("reduce_upscale")&&cap!=null&&cap.Keys.Contains("resolution"))changes["resolution"]="1";
             if(allowed.Contains("speed_lock")&&cap!=null&&cap.Keys.Contains("speed_lock"))changes["speed_lock"]="1";
+            if(allowed.Contains("raise_memory"))changes["memory_gb"]="6";
             if(allowed.Contains("speed_pipelines")&&cap!=null&&cap.Keys.Contains("pipeline_threads")&&Environment.ProcessorCount>=6)
             {
                 int want=HardwareProfile.PipelineThreadsFor(Environment.ProcessorCount),now;string iniText=File.Exists(GameOptimization.ConfigPath(exe))?File.ReadAllText(GameOptimization.ConfigPath(exe)):"";

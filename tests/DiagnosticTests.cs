@@ -37,7 +37,18 @@ internal static class DiagnosticTests
             File.WriteAllText(Path.ChangeExtension(exe,".ini"),"fps_limit=240\r\nspeed_lock=0\r\n",new UTF8Encoding(false));GameDiagnostics.Repair(exe,locked,null,new[]{"speed_lock"});
             var lockValues=GameOptimization.ReadValues(File.ReadAllText(Path.ChangeExtension(exe,".ini")));
             Check(lockValues["speed_lock"]=="1"&&lockValues["fps_limit"]=="240","The doctor turns the speed lock back on and keeps the player's FPS cap");
+            string oomLog="*** Crash (exception 0xc0000005) at host pc=1, access to 2 (game address 30) ***\n  invalid memory access\n  a null pointer plus an offset: a game short of memory does this, memory_gb=6 in its .ini may help\n  memory: heap 3110 MiB, physical 0 MiB, code 51 MiB, 3162 of 3285 MiB used\nFATAL: The game crashed (invalid memory access). See the .log for details.\n";
+            var oomCap=new RuntimeCapabilities();oomCap.Keys.UnionWith(cap.Keys);oomCap.Keys.Add("memory_gb");
+            var oomHealth=GameDiagnostics.Inspect("memory_gb=0\r\nfps_limit=120\r\n",oomLog,oomCap);
+            Check(oomHealth.Issues.Any(i=>i.Id=="guest_oom"&&i.Fix=="raise_memory")&&!oomHealth.Issues.Any(i=>i.Id=="runtime_failure"),"Guest heap OOM crashes offer memory_gb=6 instead of an unfixable runtime failure");
+            File.WriteAllText(Path.ChangeExtension(exe,".ini"),"memory_gb=0\r\nfps_limit=120\r\n",new UTF8Encoding(false));
+            File.WriteAllText(Path.ChangeExtension(exe,".log"),oomLog,new UTF8Encoding(false));
+            GameDiagnostics.Repair(exe,oomCap,null,new[]{"raise_memory"});
+            var oomValues=GameOptimization.ReadValues(File.ReadAllText(Path.ChangeExtension(exe,".ini")));
+            Check(oomValues["memory_gb"]=="6"&&oomValues["fps_limit"]=="120","The doctor raises memory_gb to 6 and keeps the player's FPS cap");
+            Check(!GameDiagnostics.Inspect("memory_gb=6\r\n",oomLog,oomCap).Issues.Any(i=>i.Fix=="raise_memory"),"memory_gb=6 already applied is not offered again");
             File.WriteAllText(Path.ChangeExtension(exe,".ini"),ini,new UTF8Encoding(false));
+            File.WriteAllText(Path.ChangeExtension(exe,".log"),log,new UTF8Encoding(false));
             var profile=new GraphicsProfile {FpsLimit="144",Resolution=1,VSync=false,Anisotropy=8};GameOptimization.SaveAndVerify(exe,profile,cap);
             string saved=File.ReadAllText(Path.ChangeExtension(exe,".ini"));int backups=Directory.GetFiles(root,"*.before-portforge-*.bak").Length;
             GameOptimization.SaveAndVerify(exe,profile,cap);

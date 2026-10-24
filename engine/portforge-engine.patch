@@ -1116,8 +1116,6 @@ index 0000000..ad5980a
 +        drop(&g_fg.vec[l]);
 +        drop(&g_fg.med[l]);
 +    }
-+    pic_drop(&g_fg.out);
-+    pic_drop(&g_fg.up_out);
 +    drop(&g_fg.dummy);
 +    drop(&g_fg.dummy_w);
 +    pic_drop(&g_fg.dummy8);
