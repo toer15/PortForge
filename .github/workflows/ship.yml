@@ -73,22 +73,24 @@ jobs:
         run: |
           set -euo pipefail
           cd engine
-          ./build-engine.sh
+          ./build-engine.sh 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-engine.log"
 
       - name: Engine pacing tests
         shell: msys2 {0}
         run: |
           set -euo pipefail
           cd engine/src
-          cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file --parallel "$(getconf _NPROCESSORS_ONLN)"
-          ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file)$' --output-on-failure
+          {
+            cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file --parallel "$(getconf _NPROCESSORS_ONLN)"
+            ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file)$' --output-on-failure
+          } 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-tests.log"
 
       - name: Package the Engine
         shell: msys2 {0}
         run: |
           set -euo pipefail
           cd engine
-          ./package-engine.sh
+          ./package-engine.sh 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-package.log"
           grep -q "version=$(tr -d '\r\n' < VERSION)" package/ENGINE.txt
           ls -la package
 
@@ -96,6 +98,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          Start-Transcript -Path ci-app.log
           $v = '${{ inputs.version }}'.TrimStart('v')
           .\build-native.ps1
           $csc = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
@@ -106,6 +109,18 @@ jobs:
           if (-not (Test-Path build\PortForgeNative\Engine\scarletnx.exe)) { throw 'The app was built without its Engine.' }
           .\build-release.ps1 -Version $v -SkipBuild
           Get-ChildItem "build\release-$v" -File | Format-Table Name, Length
+
+      # The logs' last lines as error annotations, which the checks API shows without the log download
+      - name: Report the failure
+        if: failure()
+        shell: bash
+        run: |
+          for f in ci-engine.log ci-tests.log ci-package.log ci-app.log; do
+            [ -f "$f" ] || continue
+            body=$(grep -v '^[[:space:]]*$' "$f" | tail -n 45 | cut -c1-300 | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=$f::$body"
+            grep -n -E 'error:|Error |FAILED|fatal' "$f" | head -n 8 | while IFS= read -r line; do echo "::error title=$f match::${line//%/%25}"; done
+          done
 
       - uses: actions/upload-artifact@v4
         with:
