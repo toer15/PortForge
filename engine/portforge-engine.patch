@@ -654,10 +654,10 @@ index 8579250..0d6e4cd 100644
      memcpy(g_vk.sc_done, done, sizeof done[0] * nimg);
 diff --git a/src/nx/gpu/vk/fg.c b/src/nx/gpu/vk/fg.c
 new file mode 100644
-index 0000000..65a609c
+index 0000000..ad5980a
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
-@@ -0,0 +1,406 @@
+@@ -0,0 +1,433 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* PortForge FSR 3 (from scratch, shaders/fg.comp): optical-flow frame generation inspired by AMD FSR 3 / AFMF
 +   (luma pyramid, hierarchical SAD search, median filter, bidirectional disocclusion, HUD lock, hole inpaint).
@@ -917,18 +917,29 @@ index 0000000..65a609c
 +Surf* vk_fg_current(void) { return g_fg.have_prev ? &g_fg.hist[g_fg.cur].s : NULL; }
 +Surf* vk_fg_previous(void) { return g_fg.have_prev ? &g_fg.hist[g_fg.cur ^ 1].s : NULL; }
 +
-+/* Motion field into med[], shared by native and FSR-present paths. 0 on failure. */
++/* Motion field into med[], shared by native and FSR-present paths. 0 on failure.
++   Fine levels search radius 1 (a 5x5 SAD; a 3x3 window missed real block matches).
++   The coarsest level searches radius 4, which is 64 full-res pixels either way at
++   1/16, instead of radius 6. */
 +static int fg_motion(VkCommandBuffer cb) {
-+    int c = g_fg.cur, p = c ^ 1;
++    static int cheap_logged;
++    int c, p;
++    if (!cheap_logged) {
++        cheap_logged = 1;
++        LOG("vulkan: frame generation: coarsest search radius is 4; wider radius skipped. Fine levels stay at radius 1\n");
++    }
++    c = g_fg.cur;
++    p = c ^ 1;
 +    for (int l = LEVELS - 1; l >= 0; l--) {
 +        Surf *la = &g_fg.lum[p][l], *lb = &g_fg.lum[c][l], *v = &g_fg.vec[l], *m = &g_fg.med[l];
 +        Surf* coarser = l + 1 < LEVELS ? &g_fg.med[l + 1] : NULL;
++        int fine = l == 0;
 +        reads(cb, la);
 +        reads(cb, lb);
 +        reads(cb, coarser);
 +        writes(cb, v);
 +        i32 extra[6] = {(i32)la->sw, (i32)la->sh, coarser ? (i32)coarser->sw : 1, coarser ? (i32)coarser->sh : 1,
-+                        coarser ? 1 : 6, (coarser ? 1 : 0) | (l == 0 ? 2 : 0)};
++                        coarser ? 1 : 4, (coarser ? 1 : 0) | (fine ? 2 : 0)};
 +        if (!pass(cb, P_SEARCH, la->att, lb->att, coarser ? coarser->att : NULL, g_fg.nearest, v, NULL, v->sw, v->sh,
 +                  extra))
 +            return 0;
@@ -956,6 +967,20 @@ index 0000000..65a609c
 +    return 1;
 +}
 +
++/* Warp hist[p]→hist[c] through the motion field already in med[0] into dst at dw x dh. */
++static Surf* fg_warp(VkCommandBuffer cb, Pic* a, Pic* b, Pic* dst, u32 dw, u32 dh) {
++    if (!pic(dst, g_fg.fmt, dw, dh)) return NULL;
++    cb = vk_cmd(); /* a resize inside pic() waits out the buffer that was recording */
++    reads(cb, &a->s);
++    reads(cb, &b->s);
++    reads(cb, &g_fg.med[0]);
++    writes(cb, &dst->s);
++    i32 extra[6] = {(i32)dw, (i32)dh, (i32)g_fg.med[0].sw, (i32)g_fg.med[0].sh, 0, 0};
++    if (!pass(cb, P_INTERP, a->rgba8, b->rgba8, g_fg.med[0].att, g_fg.bilinear, NULL, dst->rgba8, dw, dh, extra))
++        return NULL;
++    return &dst->s;
++}
++
 +Surf* vk_fg_interpolate(VkCommandBuffer cb) {
 +    int c = g_fg.cur, p = c ^ 1;
 +    if (!g_fg.have_prev || !g_fg.out.s.img) return NULL;
@@ -963,16 +988,7 @@ index 0000000..65a609c
 +    /* coarse to fine: the 1/16 level searches widely, the finer ones around what the coarser found, each level's
 +       motion smoothed by a median before the next starts from it */
 +    if (!fg_motion(cb)) goto unavailable;
-+    Pic *a = &g_fg.hist[p], *b = &g_fg.hist[c];
-+    reads(cb, &a->s);
-+    reads(cb, &b->s);
-+    reads(cb, &g_fg.med[0]);
-+    writes(cb, &g_fg.out.s);
-+    {
-+        i32 extra[6] = {(i32)g_fg.w, (i32)g_fg.h, (i32)g_fg.med[0].sw, (i32)g_fg.med[0].sh, 0, 0};
-+        if (!pass(cb, P_INTERP, a->rgba8, b->rgba8, g_fg.med[0].att, g_fg.bilinear, NULL, g_fg.out.rgba8, g_fg.w, g_fg.h,
-+             extra)) goto unavailable;
-+    }
++    if (!fg_warp(cb, &g_fg.hist[p], &g_fg.hist[c], &g_fg.out, g_fg.w, g_fg.h)) goto unavailable;
 +    vk_render_forget_state();
 +    if (++g_fg.made == 1 || g_fg.made % 1800 == 0)
 +        LOG("vulkan: frame generation made %llu frames, latest %ux%u\n", (unsigned long long)g_fg.made, g_fg.w,
@@ -989,12 +1005,19 @@ index 0000000..65a609c
 +Surf* vk_fg_interpolate_present(VkCommandBuffer cb, u32 dw, u32 dh, Surf** out_cur) {
 +    int c = g_fg.cur, p = c ^ 1;
 +    int enlarge = g_settings.upscaler && dw && dh && (dw > g_fg.w || dh > g_fg.h) && dw >= g_fg.w && dh >= g_fg.h;
++    static int native_logged, fsr_skipped_logged;
 +    *out_cur = vk_fg_current();
-+    if (!enlarge) return vk_fg_interpolate(cb);
++    if (!enlarge) {
++        if (!native_logged) {
++            native_logged = 1;
++            LOG("vulkan: frame generation: FSR enlarge skipped (output is not larger than the game image)\n");
++        }
++        return vk_fg_interpolate(cb);
++    }
 +    if (!g_fg.have_prev) return NULL;
 +    vk_render_end();
 +    cb = vk_cmd(); /* present filters may retire the caller's buffer while allocating scratch */
-+    if (!fg_motion(cb)) goto fallback;
++    if (!fg_motion(cb)) goto failed;
 +    if (g_fg.up_w != dw || g_fg.up_h != dh) {
 +        g_fg.up_ready[0] = g_fg.up_ready[1] = 0;
 +        g_fg.up_w = dw;
@@ -1003,7 +1026,7 @@ index 0000000..65a609c
 +    {
 +        Surf* scaled = vk_present_filters(cb, &g_fg.hist[c].s, 0, 0, g_fg.w, g_fg.h, dw, dh);
 +        cb = vk_cmd(); /* filters may retire the buffer while making FSR scratch */
-+        if (!scaled || !blit_to_pic(cb, scaled, &g_fg.up[c], dw, dh)) goto fallback;
++        if (!scaled || !blit_to_pic(cb, scaled, &g_fg.up[c], dw, dh)) goto fsr_skip;
 +        g_fg.up_ready[c] = 1;
 +    }
 +    if (!g_fg.up_ready[p]) {
@@ -1012,28 +1035,32 @@ index 0000000..65a609c
 +        vk_render_forget_state();
 +        return NULL;
 +    }
-+    if (!pic(&g_fg.up_out, g_fg.fmt, dw, dh)) goto fallback;
-+    reads(cb, &g_fg.up[p].s);
-+    reads(cb, &g_fg.up[c].s);
-+    reads(cb, &g_fg.med[0]);
-+    writes(cb, &g_fg.up_out.s);
-+    {
-+        /* Motion is in native luma units; INTERP scales by dsize/csize so dw x dh receives the right warp. */
-+        i32 extra[6] = {(i32)dw, (i32)dh, (i32)g_fg.med[0].sw, (i32)g_fg.med[0].sh, 0, 0};
-+        if (!pass(cb, P_INTERP, g_fg.up[p].rgba8, g_fg.up[c].rgba8, g_fg.med[0].att, g_fg.bilinear, NULL,
-+                  g_fg.up_out.rgba8, dw, dh, extra))
-+            goto fallback;
-+    }
++    /* Motion is in native luma units; INTERP scales by dsize/csize so dw x dh receives the right warp. */
++    if (!fg_warp(cb, &g_fg.up[p], &g_fg.up[c], &g_fg.up_out, dw, dh)) goto fsr_skip;
 +    vk_render_forget_state();
 +    if (++g_fg.made == 1 || g_fg.made % 1800 == 0)
 +        LOG("vulkan: frame generation made %llu frames, FSR then interpolate %ux%u to %ux%u\n",
 +            (unsigned long long)g_fg.made, g_fg.w, g_fg.h, dw, dh);
 +    *out_cur = &g_fg.up[c].s;
 +    return &g_fg.up_out.s;
-+fallback:
++fsr_skip:
++    /* Motion is already in med[]. Interpolating again would search the pyramid twice. */
++    if (!fsr_skipped_logged) {
++        fsr_skipped_logged = 1;
++        LOG("vulkan: frame generation: FSR-before-interpolate skipped; native interpolation used\n");
++    }
++    vk_render_forget_state();
++    cb = vk_cmd();
++    *out_cur = vk_fg_current();
++    {
++        Surf* mid = fg_warp(cb, &g_fg.hist[p], &g_fg.hist[c], &g_fg.out, g_fg.w, g_fg.h);
++        vk_render_forget_state();
++        return mid;
++    }
++failed:
 +    vk_render_forget_state();
 +    *out_cur = vk_fg_current();
-+    return vk_fg_interpolate(cb);
++    return NULL;
 +}
 +
 +void vk_fg_reset(void) {
@@ -5806,7 +5833,7 @@ index b8247c0..f1fb7dc 100644
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/render_scale.h b/src/nx/gpu/vk/render_scale.h
 new file mode 100644
-index 0000000..c48f96e
+index 0000000..e9e61a1
 --- /dev/null
 +++ b/src/nx/gpu/vk/render_scale.h
 @@ -0,0 +1,34 @@
@@ -5814,9 +5841,9 @@ index 0000000..c48f96e
 +#ifndef PF_RENDER_SCALE_H
 +#define PF_RENDER_SCALE_H
 +#include <string.h>
-+/* Render targets can hold game data, not just pictures. With graphics protection on, data/depth/storage stay at
-+   native size. display_resolution may still raise presentable color targets toward the chosen output height.
-+   Presentation upscaling (FSR) is independent. */
++/* Render targets can hold game data, not just pictures. With graphics protection on, every intermediate
++   stays at native size. display_resolution only chooses the window and swapchain. Do not scale presentable
++   color targets alone: depth stayed native and that corrupted BOTW. Presentation upscaling (FSR) is separate. */
 +static inline float pf_render_scale(float requested, int protect_graphics) {
 +    if (protect_graphics || !(requested >= 0.25f && requested <= 4.0f)) return 1.0f;
 +    return requested;
@@ -6392,10 +6419,10 @@ index f3ac2e2..54f5e6e 100644
  
 diff --git a/src/nx/gpu/vk/shaders/fg.comp b/src/nx/gpu/vk/shaders/fg.comp
 new file mode 100644
-index 0000000..9fe0f53
+index 0000000..fc690a9
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/fg.comp
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,158 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// PortForge FSR 3 (from scratch): display-only upscale + frame generation inspired by AMD FSR 3's
 +// published optical-flow + interpolation design (GPUOpen manuals), without game motion vectors.
@@ -6437,7 +6464,9 @@ index 0000000..9fe0f53
 +#elif defined(FG_SEARCH)
 +float la(ivec2 q) { return texelFetch(srcA, clamp(q, ivec2(0), pc.asize - 1), 0).r; }
 +float lb(ivec2 q) { return texelFetch(srcB, clamp(q, ivec2(0), pc.asize - 1), 0).r; }
-+// 5x5 SAD at this pyramid level (~AFMF 8x8 coverage once scaled by the pyramid).
++// 5x5 SAD (~AFMF 8x8 once the pyramid scale is included). The finest level keeps this
++// window: a 3x3 there missed the block match the midpoint test checks. Cost is cut by
++// radius (1 on fine levels, 4 on the coarsest) rather than a smaller window.
 +float sad(ivec2 p, ivec2 h) {
 +    float s = 0.0;
 +    for (int y = -2; y <= 2; y++)
@@ -6540,15 +6569,16 @@ index 0000000..9fe0f53
 +    vec4 a0 = texelFetch(srcA, p, 0), b0 = texelFetch(srcB, p, 0);
 +    float e0 = length(abs(a0.rgb - b0.rgb));
 +    float motion = length(h_best);
-+    /* Artifact-first policy: any doubt → latest real pixel. BOTW showed multi-layer ruin/UI ghosts when weak
-+       warps were blended; only excellent low-motion matches may invent a midpoint. */
-+    if (e0 < 0.022 || e > 0.06 || motion > 10.0 || e_bi > 0.10) {
++    /* Static HUD stays the current pixel. A correct low-error warp is the midpoint.
++       The squared weight is gone: it turned a small bilinear error into a copy of the
++       current frame and flattened texture. Mismatched warps still copy the current pixel. */
++    if (e0 < 0.022 || e > 0.09 || motion > 12.0 || e_bi > 0.14) {
 +        imageStore(dst8, p, vec4(b0.rgb, 1.0));
 +        return;
 +    }
-+    vec4 moved = 0.5 * (a + b);
-+    float reliable = 1.0 - smoothstep(0.015, 0.055, e);
-+    imageStore(dst8, p, vec4(mix(b0, moved, reliable * reliable).rgb, 1.0));
++    vec3 moved = 0.5 * (a.rgb + b.rgb);
++    float reliable = 1.0 - smoothstep(0.02, 0.08, e);
++    imageStore(dst8, p, vec4(mix(b0.rgb, moved, reliable), 1.0));
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/shaders/fsr1.comp b/src/nx/gpu/vk/shaders/fsr1.comp
@@ -6619,16 +6649,18 @@ index 0000000..88e1851
 +}
 diff --git a/src/nx/gpu/vk/shaders/smooth.comp b/src/nx/gpu/vk/shaders/smooth.comp
 new file mode 100644
-index 0000000..af19111
+index 0000000..9b5ef9f
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/smooth.comp
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,91 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* Pixel smoothing: edge-directed post-process antialiasing in the manner of FXAA's quality path (Timothy Lottes,
 +   2011): find the local edge and its orientation, walk along it to both ends, and resample across it in proportion
 +   to where the pixel sits on the edge's step, plus a subpixel blend for isolated jaggies. Runs on the guest image at
 +   its own resolution, before FSR, where a jagged step is still one pixel. Flat areas below the contrast threshold are
-+   copied unchanged. Spatial only: no history, no motion vectors, no detail is invented. */
++   copied unchanged. Spatial only: no history, no motion vectors, no detail is invented.
++   Off unless pixel_smoothing=1 (the default is off). PortForge FSR 3 does not run this by itself.
++   When it is on, upscale.c uses a lighter RCAS so this blend is not sharpened back into jaggies. */
 +#version 450
 +layout(local_size_x=8,local_size_y=8) in;
 +layout(set=0,binding=0) uniform sampler2D source; /* bilinear sampler, raw (not sRGB-decoded) view */
@@ -6713,14 +6745,14 @@ index 0000000..af19111
 +    imageStore(outputImage, p, vec4(color, 1.0));
 +}
 diff --git a/src/nx/gpu/vk/surface.c b/src/nx/gpu/vk/surface.c
-index 355bd29..4cd61a6 100644
+index 355bd29..cb3d42b 100644
 --- a/src/nx/gpu/vk/surface.c
 +++ b/src/nx/gpu/vk/surface.c
 @@ -151,22 +151,31 @@ void vk_surf_use(VkCommandBuffer cb, Surf* s, VkImageLayout layout, VkPipelineSt
  }
  
  float g_vk_scale = 1.0f;
-+int g_vk_scale_selective; /* 1: scale only presentable color RTs (display_resolution + protection) */
++int g_vk_scale_selective; /* must stay 0: color-only RT scale left depth native and corrupted BOTW */
  u32 vk_sc(u32 v) {
      u32 r = (u32)((float)v * g_vk_scale + 0.5f);
      return r ? r : 1;
@@ -6886,10 +6918,10 @@ index e32e8bd..9c2d31a 100644
      for (i = 0; i < n; ++i) {
 diff --git a/src/nx/gpu/vk/upscale.c b/src/nx/gpu/vk/upscale.c
 new file mode 100644
-index 0000000..628464e
+index 0000000..b800061
 --- /dev/null
 +++ b/src/nx/gpu/vk/upscale.c
-@@ -0,0 +1,280 @@
+@@ -0,0 +1,312 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* Presentation-only filters: pixel smoothing (edge antialiasing, smooth.comp) on the guest image, then FSR 1 to the
 +   window size. Guest targets, timing, saves and game data are untouched. Three reusable images, no CPU readback or
@@ -7002,6 +7034,33 @@ index 0000000..628464e
 +    return raw == VK_FORMAT_R8G8B8A8_UNORM || raw == VK_FORMAT_B8G8R8A8_UNORM || raw == VK_FORMAT_A8B8G8R8_UNORM_PACK32;
 +}
 +
++/* RCAS stops: 0 is sharpest, 2 is nearly off. EASU alone is soft once a Switch image is enlarged
++   (720p to 1080p, 1440p or 4K). Pixel smoothing is off unless the user turns it on; that path stays
++   about a stop softer so the antialias is not sharpened back into jaggies, but not at 2.0,
++   which left the enlarged picture mushy. */
++static float rcas_stops(u32 w, u32 h, u32 dw, u32 dh, int smoothed) {
++    float sx = w ? (float)dw / (float)w : 1.0f;
++    float sy = h ? (float)dh / (float)h : 1.0f;
++    float scale = sx > sy ? sx : sy;
++    float sharp = 0.40f - 0.18f * (scale - 1.0f);
++    if (sharp > 0.38f) sharp = 0.38f;
++    if (sharp < 0.16f) sharp = 0.16f;
++    if (smoothed) {
++        sharp += 1.15f;
++        if (sharp > 1.55f) sharp = 1.55f;
++        if (sharp < 1.30f) sharp = 1.30f;
++    }
++    return sharp;
++}
++static void log_sharp(float sharp, int smoothed) {
++    static int logged_off, logged_on;
++    if (smoothed ? logged_on : logged_off) return;
++    if (smoothed) logged_on = 1;
++    else logged_off = 1;
++    LOG("vulkan: FSR 1 RCAS scale-aware sharpening, %.2f stops (%s)\n", sharp,
++        smoothed ? "pixel smoothing on, lighter sharpen" : "pixel smoothing off, stronger sharpen");
++}
++
 +/* EASU then RCAS from input (a raw view of src) into this frame's rcas. srgb: the values are sRGB-encoded. */
 +static Surf* fsr_run(VkCommandBuffer cb, Surf* src, VkImageView input, int srgb, u32 x, u32 y, u32 w, u32 h,
 +                     u32 dw, u32 dh, float sharpness) {
@@ -7079,7 +7138,9 @@ index 0000000..628464e
 +    const VkComponentMapping identity = {0, 0, 0, 0};
 +    VkImageView input = vk_tex_view(src, VK_IMAGE_VIEW_TYPE_2D, 0, &identity, 0);
 +    if (!input) { report(6, "inactive: input view unavailable; standard scaling", w, h, dw, dh); return NULL; }
-+    return fsr_run(cb, src, input, vk_srgb_as(src->f.vk, 0) != src->f.vk, x, y, w, h, dw, dh, 0.5f);
++    float sharp = rcas_stops(w, h, dw, dh, 0);
++    log_sharp(sharp, 0);
++    return fsr_run(cb, src, input, vk_srgb_as(src->f.vk, 0) != src->f.vk, x, y, w, h, dw, dh, sharp);
 +}
 +
 +/* Edge antialiasing of the crop into smooth (w x h). keep: leave sRGB values encoded for FSR to read, else store
@@ -7142,14 +7203,17 @@ index 0000000..628464e
 +    return g_settings.pixel_smoothing ? smooth_run(cb, src, x, y, w, h, 0) : NULL;
 +}
 +
-+/* Jagged steps are one pixel wide in the game's image and several after enlarging, so smoothing goes first. RCAS
-+   then sharpens less, or it would put back the steps smoothing removed. */
++/* Jagged steps are one pixel wide in the game's image and several after enlarging, so smoothing goes first, and
++   only when pixel_smoothing is on. It is off by default: FSR 3 must not blur the picture to hide jaggies.
++   RCAS then sharpens less than the unsmoothed path, or it would put the steps back. */
 +Surf* vk_present_filters(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh) {
 +    if (!g_settings.pixel_smoothing) return g_settings.upscaler ? vk_upscale(cb, src, x, y, w, h, dw, dh) : NULL;
 +    if (!g_settings.upscaler || fsr_blocked(src, x, y, w, h, dw, dh)) return smooth_run(cb, src, x, y, w, h, 0);
 +    Surf* smoothed = smooth_run(cb, src, x, y, w, h, 1);
 +    if (!smoothed) return vk_upscale(cb, src, x, y, w, h, dw, dh);
-+    Surf* scaled = fsr_run(cb, smoothed, smoothed->att, vk_srgb_as(src->f.vk, 0) != src->f.vk, 0, 0, w, h, dw, dh, 2.0f);
++    float sharp = rcas_stops(w, h, dw, dh, 1);
++    log_sharp(sharp, 1);
++    Surf* scaled = fsr_run(cb, smoothed, smoothed->att, vk_srgb_as(src->f.vk, 0) != src->f.vk, 0, 0, w, h, dw, dh, sharp);
 +    return scaled ? scaled : smooth_run(cb, src, x, y, w, h, 0); /* no FSR scratch: smoothing alone */
 +}
 +
@@ -7709,7 +7773,7 @@ index 6a667e6..5ae8e43 100644
      {
          char version[16];
 diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
-index addf082..6d2466c 100644
+index addf082..a0aa92c 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
 @@ -38,5 +38,14 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
@@ -7721,8 +7785,8 @@ index addf082..6d2466c 100644
 +/* the GPU thread, for each of the game's frames: 0 when the speed lock keeps a frame of a game paced faster than a
 +   lower fps_limit off the display (it is still drawn and submitted), else 1 */
 +int present_show_due(void);
-+/* Game-side FPS after speed lock (0 = unlimited / unknown). With frame generation, a numeric limit's expected
-+   display FPS is ~2x that limit (60 → ~120, 120 → ~240), not 2x the locked console pace. */
++/* Shown guest frames/sec after speed lock (0 = unlimited / unknown). The guest still steps at its swap interval.
++   With frame generation, expected display FPS is about 2x the frames actually shown, not 2x a cap above the game. */
 +int present_game_side_fps(int fps_limit);
 +int present_expected_display_fps(int fps_limit, int frame_generation);
  
@@ -9005,10 +9069,10 @@ index 0000000..2d0dad9
 +}
 +#endif
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181..457124b 100644
+index 2bd6181..f29dccd 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
-@@ -31,14 +31,104 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +31,96 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -9016,30 +9080,23 @@ index 2bd6181..457124b 100644
 +static u64 g_pace_period;
 +
 +/* PortForge speed lock: a game that asks for a swap interval counts its frames, so frames sooner than that interval
-+   run the game itself faster, and later ones slower. With the lock on and frame generation off, such a game is paced
-+   at its interval: a faster FPS limit (or none) can't speed it up, and a lower one shows fewer of its frames
-+   (present_show_due) instead of slowing it down. With frame generation on, a faster numeric limit is the game rate
-+   so the display can be about twice that limit. A game that asks for interval 0 times itself and is paced only by a
-+   set limit */
++   run the game itself faster, and later ones slower. With the lock on, such a game is always paced at its interval,
++   whether or not frame generation is on. A faster FPS limit (or none) can't speed it up, and a lower one shows fewer
++   of its frames (present_show_due) instead of slowing it down. Frame generation inserts a picture between guest
++   frames; it does not shorten this wait. A game that asks for interval 0 times itself and is paced only by a set
++   limit */
 +static u64 g_game_period; /* atomic: the game's pace from its last swap interval, 0 when it times itself */
 +static u64 g_show_next;   /* the GPU thread's: when a lower limit lets the next frame on the display */
 +
-+/* fps_limit is the game-side target. It is not doubled here: frame generation submits a second picture itself
-+   (~2x on screen). Doubling the period would stop a lower cap from dropping frames and would race self-timed games.
-+   With frame generation on, a numeric cap faster than the game's swap interval is honored, so 60 stays ~60 game
-+   frames (~120 on screen) and 120 runs the game at 120 (~240 on screen). Without frame generation, speed lock still
-+   refuses to run a swap-interval game faster than the pace it asked for. */
++/* Guest wait between vi dequeues. fps_limit and frame generation change which pictures reach the display, never this
++   wait, while the speed lock is on and the game asked for a swap interval. A lower cap still returns the game's
++   period (present_show_due drops pictures). Doubling or shrinking the period for frame generation would step physics
++   at the display rate and drop characters through the floor. Interval 0 is self-timed and still follows a numeric cap.
++   speed_lock=0 keeps the old behavior: a faster cap presents sooner. */
 +u64 present_period(int fps, u32 interval, int lock) {
 +    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
 +    u64 cap = fps > 0 ? 1000000000u / (u64)fps : 0;
-+    int fg = __atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED);
-+    if (fps == SNX_FPS_GAME || !cap) {
-+        if (fps == SNX_FPS_GAME || (lock && game)) return game;
-+        return cap;
-+    }
-+    /* Lower caps (cap slower than the game) keep the game's period; present_show_due drops display frames.
-+       A faster numeric cap is the game rate only while frame generation is on. */
-+    if (lock && game && (cap >= game || !fg)) return game;
++    if (fps == SNX_FPS_GAME || (lock && game)) return game;
 +    return cap;
 +}
 +
@@ -9075,15 +9132,14 @@ index 2bd6181..457124b 100644
 +    return fps_limit;
 +}
 +
-+/* Expected on-screen rate. With frame generation a numeric limit is the game-side target and the display is ~2x
-+   that (60 → ~120, 120 → ~240), not 2x the speed-locked console pace. Without it, the speed-locked game pace (a
-+   higher cap does not speed the game; a lower one is the cap). 0 when unlimited or the pace is not known yet. */
++/* Expected on-screen rate. Speed lock keeps a swap-interval game at its own pace, so a cap above that pace does not
++   raise the guest rate. Without frame generation the display follows the frames present_show_due actually shows
++   (the game's pace, or a lower cap). With frame generation each shown guest frame can contribute one generated
++   picture, about twice that shown rate (a 60 FPS game → ~120, a 30 FPS game → ~60) — not twice a cap above the
++   game. 0 when unlimited or the pace is not known yet. */
 +int present_expected_display_fps(int fps_limit, int frame_generation) {
-+    int side;
-+    if (frame_generation && fps_limit > 0) return fps_limit <= 500 ? fps_limit * 2 : 1000;
-+    side = present_game_side_fps(fps_limit);
-+    if (!frame_generation) return side;
-+    if (side <= 0) return 0;
++    int side = present_game_side_fps(fps_limit);
++    if (!frame_generation || side <= 0) return side;
 +    return side <= 500 ? side * 2 : 1000;
 +}
  
@@ -9117,10 +9173,10 @@ index 2bd6181..457124b 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..949ada2 100644
+index be57ac5..fe392fc 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -80,13 +80,103 @@ setting Game mods off
+@@ -80,13 +80,105 @@ setting Game mods off
      help order. The launcher's list of updates, DLCs and mods writes it. A mod's exefs/ is recompiled into the game
  
  table g_display_ini
@@ -9157,9 +9213,9 @@ index be57ac5..949ada2 100644
 +    help PortForge optical-flow frame generation (part of PortForge FSR 3): a picture between each two of the game's
 +    help frames. Built from scratch from FSR 3 / AFMF ideas (luma pyramid, block search, disocclusion, HUD lock) —
 +    help not the AMD FidelityFX SDK (Switch games have no host motion vectors). With Upscaler=FSR 1 this is the full
-+    help PortForge FSR 3 package. Esc/Home toggles PortForge FSR 3 for the session. A numeric fps_limit is the
-+    help game-side target and the display runs at about 2x that (60 → ~120, 120 → ~240). Display FPS counts those
-+    help pictures. Without frame generation, speed lock still keeps a higher cap from speeding the game up.
++    help PortForge FSR 3 package. Esc/Home toggles PortForge FSR 3 for the session. The game keeps the pace it
++    help asked for. Frame generation only adds display pictures (about twice that pace: 30 → ~60, 60 → ~120). A
++    help numeric fps_limit drops pictures when it is lower; it does not speed the game up. Display FPS counts them.
 +setting Frame generation dump
 +    key fg_dump
 +    text 1024
@@ -9179,8 +9235,8 @@ index be57ac5..949ada2 100644
 +    default 1
 +    startup
 +    words Off|On
-+    help Keep intermediate and data render targets at their native size. With Output resolution set above Auto,
-+    help presentable color targets may scale toward that height while depth, storage and writeback buffers stay native.
++    help Keep every intermediate render target at its native size. Output resolution only sizes the window
++    help and swapchain. Color-only render target scaling is not used: it left depth native and corrupted games.
 +    help Presentation scaling including FSR 1 still works. 0 enables experimental full internal scaling at your own risk.
 +setting Display resolution
 +    key display_resolution
@@ -9189,19 +9245,20 @@ index be57ac5..949ada2 100644
 +    startup
 +    words auto|720|1080|1440|2160
 +    help Window and swapchain height to aim for: auto keeps the game's layout and window; 720, 1080, 1440 or 2160
-+    help force a 16:9 output. Presentable color render targets may raise toward that height when graphics protection
-+    help is on; data buffers stay native. FSR still enlarges when the finished image is smaller than the window.
++    help force a 16:9 output. Internal render targets stay native. FSR / PortForge FSR 3 enlarge the finished
++    help image when it is smaller than the window.
 +setting Upscaler
 +    key upscaler
 +    int 0 1
 +    default 1
 +    startup
 +    words Linear|AMD FSR 1
-+    help AMD FSR 1 spatial upscaling and sharpening when the display is larger than the rendered image.
++    help AMD FSR 1 spatial upscaling. RCAS sharpening gets stronger as the window grows past the game image,
++    help and stays short of the maximum so UI does not ring. Pixel smoothing off (the default) does not add blur.
 +    help With frame generation on, PortForge FSR 3 runs FSR 1 on real frames then inserts generated pictures from our
 +    help own optical-flow pipeline (not the AMD driver FSR 3 plugin). FSR adds GPU work. Handheld mode (docked=0) lets
-+    help the game choose a lighter layout where supported. With frame generation a numeric FPS limit is doubled for
-+    help display cadence. Unsupported formats use linear scaling. FSR 4 and DLSS are not implemented.
++    help the game choose a lighter layout where supported. Frame generation does not change the game's pace. A numeric
++    help FPS limit only drops display pictures. Unsupported formats use linear scaling. FSR 4 and DLSS are not implemented.
 +setting Pixel smoothing
 +    key pixel_smoothing
 +    int 0 1
@@ -9209,9 +9266,10 @@ index be57ac5..949ada2 100644
 +    startup
 +    words Off|On
 +    help Edge antialiasing (FXAA-style) on the game's image before FSR: it follows each jagged edge and blends
-+    help along it, so staircase edges become smooth lines. FSR then sharpens less. Text and fine detail soften a
-+    help little and the GPU does a little more work. It cannot add detail the game did not render.
-+    help Off preserves the original presentation. Unsupported image formats use the original presentation.
++    help along it, so staircase edges become smooth lines. FSR then sharpens less, but not all the way off.
++    help Text and fine detail soften a little and the GPU does a little more work. It cannot add detail the game
++    help did not render. Off (the default) leaves the game image unsmoothed and lets FSR sharpen normally.
++    help Unsupported image formats use the original presentation.
  setting TV mode
      key docked
      int 0 1
@@ -9225,29 +9283,28 @@ index be57ac5..949ada2 100644
  setting Fullscreen
      key fullscreen
      int 0 1
-@@ -166,7 +256,20 @@ setting FPS limit
+@@ -166,7 +258,19 @@ setting FPS limit
      default game
      set options_fps_set
      help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
 -    help 10 to 1000 = that many frames a second. F4 turns the limit off and on
-+    help 10 to 1000 = that many frames a second. F4 turns the limit off and on. With frame generation on, that
-+    help number is the game-side rate and the display is about twice it. With Speed lock on and frame generation
-+    help off, a limit above the game's pace (or none) can't make the game run faster; Display FPS shows the real rate.
-+    help A lower limit still drops frames (30 does not stay 60)
++    help 10 to 1000 = how many pictures a second to show. F4 turns the limit off and on. With Speed lock on (the
++    help default) the game always keeps that pace: a higher limit or frame generation cannot speed it up, and a lower
++    help limit shows fewer frames instead of slow motion. Display FPS counts pictures on screen, including generated ones.
 +setting Speed lock
 +    key speed_lock
 +    int 0 1
 +    default 1
 +    set options_speed_lock_set
 +    words Off|On
-+    help PortForge Engine. 1 = without frame generation, frames never come sooner than the pace the game asks for, so
-+    help a higher FPS limit cannot speed the game up; a lower limit still shows fewer frames. With frame generation
-+    help on, a numeric FPS limit is the game-side rate (the display is about 2x that). 0 = an FPS limit above the
-+    help game's pace shows frames sooner, which makes most games run faster than on the console
++    help PortForge Engine. 1 (default) = the game always waits the swap interval it asked for, with or without frame
++    help generation, so a higher FPS limit cannot speed it up and physics keeps the console timestep. A lower limit
++    help shows fewer frames. Frame generation adds display pictures only. 0 = an FPS limit above the game's pace shows
++    help frames sooner, which makes most games run faster than on the console and can break physics.
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -188,8 +291,35 @@ setting Pipeline threads
+@@ -188,8 +292,35 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -10088,7 +10145,7 @@ index 0000000..9c264d5
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45..e0e4e0e 100644
+index 53c5e45..7464129 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,8 @@
@@ -10100,7 +10157,7 @@ index 53c5e45..e0e4e0e 100644
  static u64 now_ns, slept_ns;
  static unsigned checks, failures;
  #define CHECK(c, ...)                                                                                                  \
-@@ -84,12 +86,99 @@ static void pacing(void) {
+@@ -84,12 +86,121 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -10140,19 +10197,41 @@ index 53c5e45..e0e4e0e 100644
 +    CHECK(present_period(SNX_FPS_GAME, 2, 1) == 2 * refresh, "the game's pace changed");
 +    CHECK(present_period(120, 1, 0) == 1000000000u / 120, "speed_lock=0 didn't allow a higher limit");
 +    g_opt_frame_generation = 1;
-+    /* FG does not rewrite the period by itself. A matching cap stays at the game's pace; a faster numeric cap is
-+       the game rate so the display can be ~2x that cap (60 → ~120, 120 → ~240). A lower cap still does not slow
-+       the game: present_show_due drops frames. */
-+    CHECK(present_period(60, 0, 1) == 1000000000u / 60, "frame generation must not change the game-side fps_limit");
-+    CHECK(present_period(60, 1, 1) == refresh, "frame generation did not keep a matching cap at the game pace");
-+    CHECK(present_period(120, 1, 1) == 1000000000u / 120, "frame generation did not run a faster numeric cap");
-+    CHECK(present_period(30, 1, 1) == refresh, "frame generation slowed the game for a lower cap");
-+    CHECK(present_expected_display_fps(60, 1) == 120, "limit 60 with FG is ~120 on screen");
-+    CHECK(present_expected_display_fps(120, 1) == 240, "limit 120 with FG is ~240 on screen");
-+    CHECK(present_expected_display_fps(30, 1) == 60, "limit 30 with FG is ~60 on screen");
++    /* Frame generation must not shorten the guest wait. A faster numeric cap stays at the game's swap interval
++       (60 stays 60, 30 stays 30). The display can still be about 2x the frames present_show_due shows. A lower cap
++       does not slow the game. */
++    CHECK(present_period(60, 0, 1) == 1000000000u / 60, "frame generation must not change a self-timed game's limit");
++    CHECK(present_period(60, 1, 1) == refresh, "frame generation changed a matching cap on a 60 FPS game");
++    CHECK(present_period(120, 1, 1) == refresh, "frame generation sped a 60 FPS game up to 120");
++    CHECK(present_period(240, 1, 1) == refresh, "frame generation sped a 60 FPS game up to 240");
++    CHECK(present_period(30, 1, 1) == refresh, "frame generation slowed a 60 FPS game for a lower cap");
++    CHECK(present_period(60, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 60");
++    CHECK(present_period(120, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 120");
++    CHECK(present_period(240, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 240");
++    /* pacing() left the last swap interval at 1, so the game pace is already 60 Hz */
++    CHECK(present_expected_display_fps(60, 1) == 120, "limit 60 with FG on a 60 FPS game is ~120 on screen");
++    CHECK(present_expected_display_fps(120, 1) == 120, "limit 120 with FG stays ~2x the game, not 240");
++    CHECK(present_expected_display_fps(240, 1) == 120, "limit 240 with FG stays ~2x the game, not 480");
++    CHECK(present_expected_display_fps(30, 1) == 60, "limit 30 with FG shows fewer guest frames, about 60 on screen");
++    g_opt_fps = 120;
++    now_ns += 100 * refresh;
++    present_pace(1); /* fps changed: the old deadline is dropped, so this frame does not wait */
++    before = slept_ns;
++    present_pace(1);
++    CHECK(slept_ns - before == refresh, "FG + 120 FPS on a 60 FPS game waited %llu ns, not one game frame",
++          (unsigned long long)(slept_ns - before));
++    CHECK(present_game_side_fps(120) == 60, "speed lock's game-side view stays the console pace");
++    CHECK(present_expected_display_fps(120, 1) == 120, "known 60 FPS pace with FG does not promise 240");
++    g_opt_fps = 60;
++    now_ns += 100 * (2 * refresh);
++    present_pace(2);
++    before = slept_ns;
++    present_pace(2);
++    CHECK(slept_ns - before == 2 * refresh, "FG + 60 FPS on a 30 FPS game waited %llu ns, not one game frame",
++          (unsigned long long)(slept_ns - before));
++    CHECK(present_expected_display_fps(120, 1) == 60, "a 30 FPS game with FG shows about 60, not 240");
 +    g_opt_fps = 120;
 +    present_pace(1);
-+    CHECK(present_game_side_fps(120) == 60, "speed lock's game-side view stays the console pace");
 +    g_opt_frame_generation = 0;
 +    CHECK(present_period(120, 1, 1) == refresh, "without FG a higher cap sped the game up");
 +    CHECK(present_expected_display_fps(120, 0) == 60, "without FG the honest display rate is the game pace");
@@ -10201,7 +10280,7 @@ index 53c5e45..e0e4e0e 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -98,6 +187,7 @@ int main(void) {
+@@ -98,6 +209,7 @@ int main(void) {
      clock_start();
      ticks();
      pacing();

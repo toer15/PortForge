@@ -1,6 +1,8 @@
-# PortForge 0.42 / Engine 1.25
+# PortForge 0.43 / Engine 1.26
 
-**New in 0.42:** The FPS limit is what you see. With PortForge FSR 3, a numeric cap is the game-side rate and the display runs at about 2× it (60 → ~120, 120 → ~240). Display FPS, the HUD and the frame-time graph count those pictures, including while Esc is open. Without FSR 3, a higher cap still cannot speed the game past its own pace, and the counter shows that real rate; a lower cap (30) no longer stays at 60. Update the app and **Doctor → Engine** on existing games. See [VALIDATION-0.42.md](VALIDATION-0.42.md).
+**New in 0.43:** Every game stays at its own speed. The FPS limit and PortForge FSR 3 only change how many pictures are shown. A 30 FPS game stays at 30 and a 60 FPS game stays at 60, even if you pick 120 or turn frame generation on. Frame generation can still show about twice that pace (30 → ~60 on screen, 60 → ~120). A lower limit shows fewer frames and does not slow the game down. Characters that were falling through the ground were stepping on the display clock. The same release sharpens PortForge FSR 3 when the window is larger than the game, without turning on pixel smoothing, and keeps more scene detail in generated frames when the optical-flow match is reliable. Update the app and **Doctor → Engine** on existing games. See [VALIDATION-0.43.md](VALIDATION-0.43.md).
+
+**0.42:** The FPS readout follows pictures on screen. See [VALIDATION-0.42.md](VALIDATION-0.42.md).
 
 **0.41:** PortForge FSR 3 present mode and Esc Display FPS. See [VALIDATION-0.41.md](VALIDATION-0.41.md).
 

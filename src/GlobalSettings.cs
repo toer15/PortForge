@@ -61,14 +61,13 @@ namespace PortForge
             return value == "auto" || value == "720" || value == "1080" || value == "1440" || value == "2160";
         }
 
-        /// <summary>When FSR 3-style is on and the user chose a numeric FPS, the engine doubles display cadence.</summary>
+        /// <summary>FPS limit and FSR 3 change pictures on screen. The game keeps its own pace.</summary>
         public string EffectiveDisplayFpsNote()
         {
             int fps;
             if (!FrameGeneration || !Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
                 return "";
-            int display = fps <= 500 ? fps * 2 : 1000;
-            return fps + " game → ~" + display + " on screen with PortForge FSR 3";
+            return fps + " only drops pictures when it is below the game's pace. PortForge FSR 3 adds frames on screen (about 2× that pace) and does not speed the game up.";
         }
 
         public void Save(string path)
