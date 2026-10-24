@@ -1,6 +1,6 @@
-# PortForge 0.36 / Engine 1.20
+# PortForge 0.37 / Engine 1.21
 
-**New in 0.36:** Settings tab chooses true output resolution (720p–4K) and PortForge FSR 3-style (FSR 1 + 2x frame generation). The engine selectively scales presentable color targets toward that height, sizes the swapchain accordingly, doubles display FPS when FSR 3-style is on with a numeric limit (60 ? ~120), and the Esc/Home pause menu can change FPS live. See [validation and limits](VALIDATION-0.36.md).
+**New in 0.37:** PortForge FSR 3 from scratch (optical-flow FG from FSR 3/AFMF research: scene-cut, disocclusion, HUD lock, inpaint) with Settings + Esc/Home On/Off. Not the AMD SDK. See [VALIDATION-0.37.md](VALIDATION-0.37.md).
 
 **0.34:** a global Settings tab applies preferences to updated games launched directly, focused fullscreen play hides the cursor, actual save writes show a Saving... indicator, and compute shaders are cached and prepared on later launches. F7/Escape shows a frame-time graph; optional CSV recording and an app viewer help investigate hitches. Experimental PortForge frame generation can be selected globally or toggled in Escape. It is not AMD FSR 3. Universal save-anywhere, native 720p-through-4K overrides and AMD FSR 2/3 remain unsupported.
 
@@ -31,19 +31,19 @@ PortForge is a Windows app (.NET Framework 4.8, no install needed) built around 
 - **Game speed lock** - Engine 1.6 always runs a game at its own pace: a higher FPS cap, Unlimited or F4 can't make a 30 or 60 FPS game run faster, and a lower cap shows fewer frames instead of slow motion. The PC's power goes into render scale and filtering instead. On by default, and the Doctor turns it back on if it is switched off.
 - **Automatic engine frame guard** - Engine 1.4 shares optional shader waits across each frame, reserves compilation capacity for current draws, chooses worker counts on each launch, and resets stale pacing deadlines when FPS modes change. On by default for converted games, including Downloads handoff. Required game work and hardware limits can still stall.
 - **Automatic cloud saves** - connect OneDrive or HTTPS WebDAV once per PC. Existing known games, new conversions and discovered converted games join automatically. A global switch pauses automatic saving, and each game can be excluded. Syncs while the app is open and the game is closed, verifies archives, keeps restore backups and asks which copy to keep when PCs have different progress. Nothing uploads before an account is configured; no PortForge-hosted account is included.
-- **Simple conversion screen** – game file, game name, save folder. Clear buttons beside every input, and a status card for progress, done, errors and cancelled.
-- **Downloads** – paste a direct link: automatic connection count, retries, pause/resume, checksum checks, ZIP unpacking, hand-off to conversion.
-- **Automatic PC matching** – shows CPU, graphics adapters, dedicated graphics memory and usable RAM on startup. New conversions get supported settings for that PC, followed by optional measurements that favor FPS and fewer freezes. On by default, works for local and downloaded inputs, and needs no AI account. Each game gets a report separating hardware estimates from measured results.
-- **Graphics and FPS** – per-game FPS limit (10–1,000 or unlimited), render scale, texture filtering, shadows, VSync, plus an automatic benchmark tuner that compares average FPS, freezes, worst frames and measured p99 frame time/1% low (local measurements, no AI model). Engine 1.7 keeps compatible shader caches across routine engine updates and reports per-frame GPU waits.
-- **Automatic fixes** – reads a game's log, reports known problems, applies supported repairs with backups and undo, and can ask a locally installed Codex for an AI diagnosis. Engine-level glitches are reported, not fixed.
-- **AI Doctor** – watches converted games while they run, explains every slowdown live (shader stutter, loading freezes, or other programs using the CPU), and when the game closes applies the supported repairs and asks Codex AI about new problems. It never changes a running game, and saves and settings are backed up first.
-- **PortForge Engine** (Engine tab) – our own build of the ScarletNX runtime with background pipeline compilation to reduce some shader stalls, plus experimental background translation that is off by default. Game loading and compatibility problems can remain. Keeps the original engine for restore. See [engine/README.md](engine/README.md).
-- **AI Engine Lab** – Codex writes engine changes for a game's recorded problems; PortForge builds and measures each one and keeps it only when stutter measurably drops.
-- **Check for updates** – the header button reads this repository's latest release, shows what is new, and installs it (your games, settings and saves are kept; the old program is backed up).
+- **Simple conversion screen** ? game file, game name, save folder. Clear buttons beside every input, and a status card for progress, done, errors and cancelled.
+- **Downloads** ? paste a direct link: automatic connection count, retries, pause/resume, checksum checks, ZIP unpacking, hand-off to conversion.
+- **Automatic PC matching** ? shows CPU, graphics adapters, dedicated graphics memory and usable RAM on startup. New conversions get supported settings for that PC, followed by optional measurements that favor FPS and fewer freezes. On by default, works for local and downloaded inputs, and needs no AI account. Each game gets a report separating hardware estimates from measured results.
+- **Graphics and FPS** ? per-game FPS limit (10?1,000 or unlimited), render scale, texture filtering, shadows, VSync, plus an automatic benchmark tuner that compares average FPS, freezes, worst frames and measured p99 frame time/1% low (local measurements, no AI model). Engine 1.7 keeps compatible shader caches across routine engine updates and reports per-frame GPU waits.
+- **Automatic fixes** ? reads a game's log, reports known problems, applies supported repairs with backups and undo, and can ask a locally installed Codex for an AI diagnosis. Engine-level glitches are reported, not fixed.
+- **AI Doctor** ? watches converted games while they run, explains every slowdown live (shader stutter, loading freezes, or other programs using the CPU), and when the game closes applies the supported repairs and asks Codex AI about new problems. It never changes a running game, and saves and settings are backed up first.
+- **PortForge Engine** (Engine tab) ? our own build of the ScarletNX runtime with background pipeline compilation to reduce some shader stalls, plus experimental background translation that is off by default. Game loading and compatibility problems can remain. Keeps the original engine for restore. See [engine/README.md](engine/README.md).
+- **AI Engine Lab** ? Codex writes engine changes for a game's recorded problems; PortForge builds and measures each one and keeps it only when stutter measurably drops.
+- **Check for updates** ? the header button reads this repository's latest release, shows what is new, and installs it (your games, settings and saves are kept; the old program is backed up).
 
 ## Download
 
-Get **PortForge-…-Windows-and-Source.zip** from the [Releases](../../releases) page, extract it, and open `PortForge.exe`. Read `README.md` inside for the user guide.
+Get **PortForge-?-Windows-and-Source.zip** from the [Releases](../../releases) page, extract it, and open `PortForge.exe`. Read `README.md` inside for the user guide.
 
 ## Build from source
 
@@ -67,11 +67,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test -BackendPa
 
 ## More documentation
 
-- [USERGUIDE.md](USERGUIDE.md) – how to use the app
-- [NATIVE.md](NATIVE.md) – setup, evidence, limitations
-- [VALIDATION-0.24.md](VALIDATION-0.24.md) – Engine 1.7 and p99 tuning checks and limitations
+- [USERGUIDE.md](USERGUIDE.md) ? how to use the app
+- [NATIVE.md](NATIVE.md) ? setup, evidence, limitations
+- [VALIDATION-0.24.md](VALIDATION-0.24.md) ? Engine 1.7 and p99 tuning checks and limitations
 - [BENCHMARKS.md](BENCHMARKS.md), [ROADMAP.md](ROADMAP.md)
-- `PACKAGER-0.1.md` / `src/App.cs` – the legacy emulator-packaging prototype, kept for reference only
+- `PACKAGER-0.1.md` / `src/App.cs` ? the legacy emulator-packaging prototype, kept for reference only
 
 ## Legal
 

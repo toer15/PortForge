@@ -12,7 +12,7 @@ namespace PortForge
         public bool Enabled = true, HideCursor = true, SaveIndicator = true, FrameTimeGraph, FrameTrace, FrameGeneration;
         /// <summary>auto, 720, 1080, 1440, or 2160 — presentable color targets / swapchain height.</summary>
         public string DisplayResolution = "auto";
-        /// <summary>0 Linear, 1 FSR 1, 2 PortForge FSR 3-style (FSR 1 + frame generation).</summary>
+        /// <summary>0 Linear, 1 FSR 1, 2 PortForge FSR 3 (FSR 1 + from-scratch optical-flow FG).</summary>
         public int UpscaleMode;
         public GraphicsProfile Graphics = new GraphicsProfile();
         public static string FilePath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PortForge", "global-settings.ini"); } }
@@ -68,7 +68,7 @@ namespace PortForge
             if (!FrameGeneration || !Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
                 return "";
             int display = fps <= 500 ? fps * 2 : 1000;
-            return fps + " game → ~" + display + " on screen with FSR 3-style";
+            return fps + " game → ~" + display + " on screen with PortForge FSR 3";
         }
 
         public void Save(string path)
@@ -88,6 +88,7 @@ namespace PortForge
             v["frametime_graph"] = FrameTimeGraph ? "1" : "0";
             v["frame_trace"] = FrameTrace ? "1" : "0";
             v["frame_generation"] = FrameGeneration ? "1" : "0";
+            v["portforge_fsr3"] = UpscaleMode == 2 ? "1" : "0";
             v["speed_lock"] = "1";
             v["pipeline_threads"] = "0";
             var text = new StringBuilder("; PortForge settings for every game. Applied at the next launch.\r\n[PortForge]\r\n");

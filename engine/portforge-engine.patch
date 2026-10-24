@@ -592,17 +592,16 @@ index 8579250..f3ffe2c 100644
                                    .preferredLargeHeapBlockSize = g_vk.alloc_cap < (256ull << 20) ? g_vk.alloc_cap : 0,
 diff --git a/src/nx/gpu/vk/fg.c b/src/nx/gpu/vk/fg.c
 new file mode 100644
-index 0000000..5c154e9
+index 0000000..65a609c
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
-@@ -0,0 +1,407 @@
+@@ -0,0 +1,406 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
-+/* PortForge frame generation (shaders/fg.comp): each of the game's frames is copied into one of two history images,
-+   in the game image's own format, with a luma pyramid beside it. With the frame before it, the motion between the
-+   two is found on the GPU, coarse to fine, and the picture halfway between them is made. When FSR 1 is also on, each
-+   real frame is upscaled once into an output-sized history and the midpoint is warped from those (never FSR on an
-+   interpolated picture, which caused edge shimmer). The renderer shows the midpoint at once and the real copy half a
-+   frame later (renderer.c). Display only: guest targets, timing, saves and game data are untouched. Under vk_lock. */
++/* PortForge FSR 3 (from scratch, shaders/fg.comp): optical-flow frame generation inspired by AMD FSR 3 / AFMF
++   (luma pyramid, hierarchical SAD search, median filter, bidirectional disocclusion, HUD lock, hole inpaint).
++   Not the AMD FidelityFX SDK — Switch games do not give host motion vectors. When FSR 1 is also on (the Settings
++   "PortForge FSR 3" package), each real frame is upscaled once and the midpoint is warped from those images so
++   FSR never runs on an interpolated picture. Display only. Under vk_lock. */
 +#include <string.h>
 +#include "nx/gpu/vk/vk.h"
 +#include "nx/gpu/vk/fg_spv.h"
@@ -6263,19 +6262,19 @@ index f3ac2e2..9041818 100644
  
 diff --git a/src/nx/gpu/vk/shaders/fg.comp b/src/nx/gpu/vk/shaders/fg.comp
 new file mode 100644
-index 0000000..5a6ed44
+index 0000000..5bee361
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/fg.comp
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,170 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
-+// PortForge frame generation: a picture halfway between two of the game's frames, from the frames alone. One file,
-+// a pass per define:
-+//   FG_LUMA    a level of the luma pyramid: half the size of srcA (the frame, or the level above)
-+//   FG_SEARCH  symmetric block matching at one level: for each pixel x the half-motion h that makes the previous
-+//              frame at x - h match the current one at x + h, predicted from the coarser level's (srcC)
-+//   FG_MEDIAN  a 3x3 vector median of the finest motion, which removes lone wrong vectors
-+//   FG_INTERP  the frame in between: both frames warped half way along the motion, blended, with a fallback to the
-+//              unmoved pixels where they agree better (static parts: the game's HUD)
++// PortForge FSR 3 (from scratch): display-only upscale + frame generation inspired by AMD FSR 3's
++// published optical-flow + interpolation design (GPUOpen manuals), without game motion vectors.
++// Switch titles do not expose MVs/depth to the host, so this is not the AMD FidelityFX SDK plugin.
++// Passes:
++//   FG_LUMA    luminance pyramid (FSR 3 Optical Flow preparation)
++//   FG_SEARCH  hierarchical block matching / SAD (AFMF-style 8x8 family, refined coarse→fine)
++//   FG_MEDIAN  3x3 vector median (FSR 3 OF filtering)
++//   FG_INTERP  bidirectional warp, disocclusion, HUD lock, hole inpainting from the current frame
 +#version 450
 +layout(local_size_x = 8, local_size_y = 8) in;
 +layout(binding = 0) uniform sampler2D srcA;
@@ -6284,11 +6283,11 @@ index 0000000..5a6ed44
 +layout(binding = 3, rgba16f) uniform writeonly image2D dst;
 +layout(binding = 4, rgba8) uniform writeonly image2D dst8;
 +layout(push_constant) uniform Push {
-+    ivec2 dsize;  // the output's size
-+    ivec2 asize;  // srcA's (and srcB's) size
-+    ivec2 csize;  // srcC's size
-+    int radius;   // FG_SEARCH: how far around the prediction to look
-+    int flags;    // FG_SEARCH: 1 = srcC holds the coarser level's motion, 2 = sub-pixel refinement
++    ivec2 dsize;
++    ivec2 asize;
++    ivec2 csize;
++    int radius;
++    int flags; // SEARCH: 1=coarser motion, 2=subpixel; INTERP unused
 +} pc;
 +
 +float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
@@ -6297,9 +6296,7 @@ index 0000000..5a6ed44
 +void main() {
 +    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
 +    if (any(greaterThanEqual(p, pc.dsize))) return;
-+    // the bilinear sampler between four texels of a twice larger level averages them
 +    vec2 uv = (vec2(p) + 0.5) / vec2(pc.dsize);
-+    // First level is quarter resolution: a 4x4 box avoids skipping fine texture in the motion search.
 +    float l = 0.0;
 +    if (pc.flags != 0) {
 +        for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
@@ -6310,7 +6307,7 @@ index 0000000..5a6ed44
 +#elif defined(FG_SEARCH)
 +float la(ivec2 q) { return texelFetch(srcA, clamp(q, ivec2(0), pc.asize - 1), 0).r; }
 +float lb(ivec2 q) { return texelFetch(srcB, clamp(q, ivec2(0), pc.asize - 1), 0).r; }
-+// A 5x5 block at quarter resolution covers 20x20 source pixels.
++// 5x5 SAD at this pyramid level (~AFMF 8x8 coverage once scaled by the pyramid).
 +float sad(ivec2 p, ivec2 h) {
 +    float s = 0.0;
 +    for (int y = -2; y <= 2; y++)
@@ -6320,8 +6317,6 @@ index 0000000..5a6ed44
 +        }
 +    return s * (1.0 / 25.0);
 +}
-+// the matching cost, with a pull toward the prediction and toward no motion, which keeps the field smooth where the
-+// picture is flat
 +float cost(ivec2 p, ivec2 h, vec2 pred) {
 +    return sad(p, h) + 0.004 * (abs(float(h.x) - pred.x) + abs(float(h.y) - pred.y)) + 0.0008 * float(abs(h.x) + abs(h.y));
 +}
@@ -6332,10 +6327,15 @@ index 0000000..5a6ed44
 +void main() {
 +    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
 +    if (any(greaterThanEqual(p, pc.dsize))) return;
-+    // the best of the coarser level's motion here and at its neighbours, and no motion
 +    ivec2 best = ivec2(0);
 +    vec2 pred = vec2(0.0);
 +    float bc = cost(p, best, pred);
++    float zero_sad = bc;
++    // FSR 3 Optical Flow: on a hard cut, zero motion (scene-change) — do not invent vectors.
++    if (zero_sad > 0.42) {
++        imageStore(dst, p, vec4(0.0, 0.0, zero_sad, 1.0));
++        return;
++    }
 +    if ((pc.flags & 1) != 0) {
 +        for (int i = 0; i < 5; i++) {
 +            ivec2 o = i == 0 ? ivec2(0) : i == 1 ? ivec2(-2, 0) : i == 2 ? ivec2(2, 0) : i == 3 ? ivec2(0, -2) : ivec2(0, 2);
@@ -6345,7 +6345,6 @@ index 0000000..5a6ed44
 +            if (k < bc) { bc = k; best = h; pred = c; }
 +        }
 +    }
-+    // then every motion within radius of it
 +    ivec2 centre = best;
 +    for (int y = -pc.radius; y <= pc.radius; y++)
 +        for (int x = -pc.radius; x <= pc.radius; x++) {
@@ -6355,12 +6354,17 @@ index 0000000..5a6ed44
 +            if (k < bc) { bc = k; best = h; }
 +        }
 +    vec2 v = vec2(best);
-+    if ((pc.flags & 2) != 0) { // a parabola through the costs either side, per axis
++    if ((pc.flags & 2) != 0) {
 +        float xm = cost(p, best - ivec2(1, 0), pred), xp = cost(p, best + ivec2(1, 0), pred);
 +        float ym = cost(p, best - ivec2(0, 1), pred), yp = cost(p, best + ivec2(0, 1), pred);
 +        float dx = xm - 2.0 * bc + xp, dy = ym - 2.0 * bc + yp;
 +        if (dx > 1e-5) v.x += clamp(0.5 * (xm - xp) / dx, -0.5, 0.5);
 +        if (dy > 1e-5) v.y += clamp(0.5 * (ym - yp) / dy, -0.5, 0.5);
++    }
++    // Still prefer stillness when the match is weak (disocclusion / translucency).
++    if (bc > 0.28 && zero_sad < bc + 0.02) {
++        v = vec2(0.0);
++        bc = zero_sad;
 +    }
 +    imageStore(dst, p, vec4(v, bc, 1.0));
 +}
@@ -6372,7 +6376,6 @@ index 0000000..5a6ed44
 +    int n = 0;
 +    for (int y = -1; y <= 1; y++)
 +        for (int x = -1; x <= 1; x++) v[n++] = texelFetch(srcC, clamp(p + ivec2(x, y), ivec2(0), pc.csize - 1), 0).xy;
-+    // the vector closest to all the others
 +    int best = 4;
 +    float bd = 1e30;
 +    for (int i = 0; i < 9; i++) {
@@ -6387,30 +6390,49 @@ index 0000000..5a6ed44
 +    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
 +    if (any(greaterThanEqual(p, pc.dsize))) return;
 +    vec2 size = vec2(pc.dsize), uv = (vec2(p) + 0.5) / size, field = 1.0 / vec2(pc.csize);
-+    // the motion field is at half the frame's size: its half-motion in the frame's pixels is twice as long. Of the
-+    // motion here and a little way round, the one whose two frames agree best: an edge between two motions takes the
-+    // right one, not a blend of both
 +    vec2 scale = size / vec2(pc.csize);
 +    vec4 a = vec4(0.0), b = vec4(0.0);
 +    float e = 1e9;
++    vec2 h_best = vec2(0.0);
++    // Candidate motions (center + neighbors): FSR 3 picks among game-MV and optical-flow fields;
++    // we only have optical flow, so search local candidates for the lowest bidirectional error.
 +    for (int i = 0; i < 5; i++) {
 +        vec2 o = i == 0 ? vec2(0.0) : vec2(i == 1 ? -3.0 : i == 2 ? 3.0 : 0.0, i == 3 ? -3.0 : i == 4 ? 3.0 : 0.0);
 +        vec2 h = texture(srcC, uv + o * field).xy * scale;
 +        vec4 ca = texture(srcA, uv - h / size), cb = texture(srcB, uv + h / size);
 +        vec3 d = abs(ca.rgb - cb.rgb);
 +        float ce = d.r + d.g + d.b + (i == 0 ? 0.0 : 0.01);
-+        if (ce < e) { e = ce; a = ca; b = cb; }
++        if (ce < e) { e = ce; a = ca; b = cb; h_best = h; }
 +    }
++    // Bidirectional consistency (FSR 3 disocclusion idea without depth): warp current back by -h
++    // and compare to previous; large mismatch marks a hole.
++    vec4 back = texture(srcB, uv - h_best / size);
++    vec4 fwd = texture(srcA, uv + h_best / size);
++    float e_bi = length(abs(a.rgb - back.rgb)) + length(abs(b.rgb - fwd.rgb));
++    e = max(e, 0.55 * e_bi);
++
 +    vec4 a0 = texelFetch(srcA, p, 0), b0 = texelFetch(srcB, p, 0);
-+    vec3 d0 = abs(a0.rgb - b0.rgb);
-+    float e0 = d0.r + d0.g + d0.b;
-+    // Keep unchanged HUD pixels exact. Do not blend moving textures with unwarped frames: that makes two ghosts.
-+    // Where correspondence is unreliable, use the current real pixel rather than inventing a smeared silhouette.
-+    // FSR 3-style (FSR then FG) tightens the falloff so residual shimmer falls back to the current frame sooner.
++    float e0 = length(abs(a0.rgb - b0.rgb));
++    // HUD / static lock (FSR 3 HUD-less path analogue): unchanged pixels stay exact.
++    if (e0 < 0.018) {
++        imageStore(dst8, p, vec4(b0.rgb, 1.0));
++        return;
++    }
++    // Hard hole → present the latest real pixel (FSR 3 inpainting fallback without a color pyramid).
++    if (e > 0.38) {
++        imageStore(dst8, p, vec4(b0.rgb, 1.0));
++        return;
++    }
 +    vec4 moved = 0.5 * (a + b);
-+    float reliable = 1.0 - smoothstep(0.08, 0.28, e);
-+    vec4 c = mix(b0, moved, reliable);
-+    if (e0 < 0.02) c = b0;
++    float reliable = 1.0 - smoothstep(0.05, 0.26, e);
++    // Soft inpaint: pull toward a small neighborhood of the current frame when partially unreliable.
++    vec4 n = 0.25 * (
++        texelFetch(srcB, clamp(p + ivec2(1, 0), ivec2(0), pc.dsize - 1), 0) +
++        texelFetch(srcB, clamp(p + ivec2(-1, 0), ivec2(0), pc.dsize - 1), 0) +
++        texelFetch(srcB, clamp(p + ivec2(0, 1), ivec2(0), pc.dsize - 1), 0) +
++        texelFetch(srcB, clamp(p + ivec2(0, -1), ivec2(0), pc.dsize - 1), 0));
++    vec4 fill = mix(b0, n, 0.4);
++    vec4 c = mix(fill, moved, reliable);
 +    imageStore(dst8, p, vec4(c.rgb, 1.0));
 +}
 +#endif
@@ -7564,7 +7586,7 @@ index addf082..2a2d1f5 100644
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
-index a0ef76b..61c47ff 100644
+index a0ef76b..c26b025 100644
 --- a/src/nx/runtime/options.c
 +++ b/src/nx/runtime/options.c
 @@ -58,6 +58,16 @@ void options_fps_set(const IniOpt* o, const char* v) {
@@ -7584,7 +7606,7 @@ index a0ef76b..61c47ff 100644
  void fps_limit_text(int fps, char* out, size_t n) {
      if (fps == SNX_FPS_GAME)
          snprintf(out, n, "game");
-@@ -135,6 +145,53 @@ typedef struct {
+@@ -135,6 +145,68 @@ typedef struct {
  } Override;
  static Override g_over[OVERRIDE_MAX];
  static int g_nover;
@@ -7599,7 +7621,7 @@ index a0ef76b..61c47ff 100644
 +static void global_load(void) {
 +    static const char* const allowed[] = {"fps_limit", "resolution", "render_scale_safety", "display_resolution", "anisotropy", "upscaler",
 +        "pixel_smoothing", "shadows", "vsync", "docked", "fullscreen", "hide_cursor", "save_indicator", "speed_lock", "pipeline_threads",
-+        "frametime_graph", "frame_trace", "frame_generation"};
++        "frametime_graph", "frame_trace", "frame_generation", "portforge_fsr3"};
 +    const char* base = getenv("LOCALAPPDATA");
 +    char path[1400], *key, *value;
 +    SnxIni ini;
@@ -7633,12 +7655,27 @@ index a0ef76b..61c47ff 100644
 +    }
 +    free(text);
 +    if (!enabled) g_nglobal = 0;
++    /* portforge_fsr3=1 is the Settings package name: force FSR 1 + optical-flow generation together. */
++    if (g_nglobal) {
++        const char* fsr3 = global_of("portforge_fsr3");
++        if (fsr3 && !strcmp(fsr3, "1")) {
++            static const char* const pack[][2] = {{"upscaler", "1"}, {"frame_generation", "1"}};
++            for (int p = 0; p < 2; ++p) {
++                int j;
++                for (j = 0; j < g_nglobal && strcmp(g_global[j].key, pack[p][0]); ++j) {}
++                if (j == g_nglobal) ++g_nglobal;
++                snprintf(g_global[j].key, KEY_MAX, "%s", pack[p][0]);
++                snprintf(g_global[j].value, VALUE_MAX, "%s", pack[p][1]);
++            }
++            LOG("settings: PortForge FSR 3 package enabled (upscaler + frame generation)\n");
++        }
++    }
 +    if (g_nglobal) LOG("settings: PortForge global settings applied at launch (%d keys)\n", g_nglobal);
 +}
  /* the menu's, from any thread, until a write of the file has them. g_pending_lock is a leaf: nothing is called while
     it is held */
  typedef struct {
-@@ -203,6 +260,8 @@ static const char* value_of(const IniOpt* o) {
+@@ -203,6 +275,8 @@ static const char* value_of(const IniOpt* o) {
      const char* v = override_of(o->key);
      const Entry* e;
      if (v) return v;
@@ -7647,7 +7684,7 @@ index a0ef76b..61c47ff 100644
      e = store_find(o->key);
      return e ? e->value : o->def;
  }
-@@ -224,7 +283,7 @@ void ini_override(const char* k, const char* v) {
+@@ -224,7 +298,7 @@ void ini_override(const char* k, const char* v) {
  void ini_set(const char* k, const char* v) {
      size_t kn = strlen(k), vn = strlen(v);
      int i;
@@ -7656,7 +7693,7 @@ index a0ef76b..61c47ff 100644
      if (kn >= KEY_MAX || vn >= PENDING_VALUE) {
          WARN_LIMIT(1, "settings: %s's value is too long to save\n", k);
          return;
-@@ -414,6 +473,7 @@ void ini_open(const char* path) {
+@@ -414,6 +488,7 @@ void ini_open(const char* path) {
      char why[256];
      snprintf(g_path, sizeof g_path, "%s", path);
      ini_set_say(say_setting);
@@ -7664,7 +7701,7 @@ index a0ef76b..61c47ff 100644
      for (i = 0; i < g_nover; i++)
          if (!snx_setting_known(g_over[i].key)) WARN("--%s is not a setting, so it does nothing\n", g_over[i].key);
      text = snx_read_file(g_path, &size);
-@@ -433,6 +493,9 @@ void ini_open(const char* path) {
+@@ -433,6 +508,9 @@ void ini_open(const char* path) {
      n = pending_take(taken);
      say_deprecated();
      apply_all();
@@ -8191,7 +8228,7 @@ index 0821ef7..c440b93 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2..1a85d67 100644
+index 441a8c2..089569f 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
 @@ -5,6 +5,7 @@
@@ -8207,23 +8244,26 @@ index 441a8c2..1a85d67 100644
  enum { FIRST = 3, VISIBLE = OVERLAY_ROWS - FIRST - 1 }; /* the items' first row, and how many show at once */
  enum { PAGE_MAIN, PAGE_CONTROLS, PAGE_BUTTONS, PAGE_PADS, PAGE_MAP };
 -enum { M_CONTROLS, M_PADS, M_EXIT, M_COUNT };                                          /* the first page's items */
-+enum { M_CONTROLS, M_PADS, M_GRAPH, M_FRAMEGEN, M_FPS, M_EXIT, M_COUNT }; /* the first page's items */
++enum { M_CONTROLS, M_PADS, M_GRAPH, M_FSR3, M_FPS, M_EXIT, M_COUNT }; /* the first page's items */
  enum { P_PLAYER, P_SWAP, P_DEADZONE, P_RUMBLE, P_BACKGROUND, P_MAP, P_BACK, P_COUNT }; /* the gamepads' page's */
  /* the controls page's items */
  enum {
-@@ -110,9 +111,28 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
+@@ -110,9 +111,31 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
          return;
      }
      if (page == PAGE_MAIN) {
 -        static const char* const main_items[M_COUNT] = {SNX_VPAD_PAGE, SNX_GAMEPAD_PAGE, "Exit"};
-+        static const char* const main_items[M_COUNT] = {SNX_VPAD_PAGE, SNX_GAMEPAD_PAGE, "Frame-time graph", "Frame generation (experimental)", "FPS limit", "Exit"};
++        static const char* const main_items[M_COUNT] = {SNX_VPAD_PAGE, SNX_GAMEPAD_PAGE, "Frame-time graph", "PortForge FSR 3", "FPS limit", "Exit"};
          snprintf(text, size, "%s", main_items[i]);
 -        if (i != M_EXIT) snprintf(value, vsize, ">");
 +        if (i == M_GRAPH)
 +            snprintf(value, vsize, "%s", __atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED) ? "On" : "Off");
-+        else if (i == M_FRAMEGEN)
-+            snprintf(value, vsize, "%s", __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED) ? "On" : "Off");
-+        else if (i == M_FPS) {
++        else if (i == M_FSR3) {
++            /* Full PortForge FSR 3 package: FSR 1 + optical-flow 2x generation (session toggle). */
++            int on = __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED) &&
++                     __atomic_load_n(&g_settings.upscaler, __ATOMIC_RELAXED);
++            snprintf(value, vsize, "%s", on ? "On" : "Off");
++        } else if (i == M_FPS) {
 +            int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
 +            int fg = __atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED);
 +            char word[32];
@@ -8242,7 +8282,7 @@ index 441a8c2..1a85d67 100644
          return;
      }
      if (page == PAGE_BUTTONS) {
-@@ -259,6 +279,30 @@ static int act(int i, int step) {
+@@ -259,6 +282,32 @@ static int act(int i, int step) {
          return OVERLAY_NONE;
      }
      if (page == PAGE_MAIN) {
@@ -8250,10 +8290,12 @@ index 441a8c2..1a85d67 100644
 +            __atomic_store_n(&g_settings.frame_time_graph, !g_settings.frame_time_graph, __ATOMIC_RELAXED);
 +            return OVERLAY_NONE;
 +        }
-+        if (i == M_FRAMEGEN) {
-+            int on = !g_settings.frame_generation;
++        if (i == M_FSR3) {
++            /* On = FSR 1 + frame generation (PortForge FSR 3). Off clears generation; leaves linear vs FSR to Settings. */
++            int on = !(g_settings.frame_generation && g_settings.upscaler);
 +            __atomic_store_n(&g_settings.frame_generation, on, __ATOMIC_RELAXED);
 +            __atomic_store_n(&g_opt_frame_generation, on, __ATOMIC_RELAXED);
++            if (on) __atomic_store_n(&g_settings.upscaler, 1, __ATOMIC_RELAXED);
 +            return OVERLAY_NONE;
 +        }
 +        if (i == M_FPS) {
@@ -8273,7 +8315,7 @@ index 441a8c2..1a85d67 100644
          if (step) return OVERLAY_NONE;
          if (i == M_EXIT) return OVERLAY_EXIT;
          page_open(i == M_PADS ? PAGE_PADS : PAGE_CONTROLS);
-@@ -481,24 +525,30 @@ int overlay_pad(u64 button) {
+@@ -481,24 +530,30 @@ int overlay_pad(u64 button) {
      return OVERLAY_NONE;
  }
  int overlay_controls(u64 buttons, const i32 sticks[4], u64 ms) {
@@ -8311,7 +8353,7 @@ index 441a8c2..1a85d67 100644
      for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
          if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
      return did;
-@@ -523,7 +573,7 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
+@@ -523,7 +578,7 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
                          size_t size) {
      static const char* const titles[] = {"SCARLETNX  /  MENU", "SCARLETNX  /  CONTROLS", "SCARLETNX  /  BUTTONS",
                                           "SCARLETNX  /  CONTROLLERS"};
@@ -8732,10 +8774,10 @@ index 2bd6181..37c0457 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..40d976b 100644
+index be57ac5..567fce6 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -80,13 +80,101 @@ setting Game mods off
+@@ -80,13 +80,102 @@ setting Game mods off
      help order. The launcher's list of updates, DLCs and mods writes it. A mod's exefs/ is recompiled into the game
  
  table g_display_ini
@@ -8769,9 +8811,11 @@ index be57ac5..40d976b 100644
 +    default 0
 +    words Off|On
 +    set options_frame_generation_set
-+    help Show a generated picture between each two of the game's frames: twice the frames on the display, half a frame
-+    help later. The game itself runs and reacts at its own pace. Needs a display at least twice as fast as the game.
-+    help A numeric FPS limit is doubled for display cadence so the on-screen rate matches the setting.
++    help PortForge optical-flow frame generation (part of PortForge FSR 3): a picture between each two of the game's
++    help frames. Built from scratch from FSR 3 / AFMF ideas (luma pyramid, block search, disocclusion, HUD lock) —
++    help not the AMD FidelityFX SDK (Switch games have no host motion vectors). With Upscaler=FSR 1 this is the full
++    help PortForge FSR 3 package. Esc/Home toggles PortForge FSR 3 for the session. A numeric FPS limit is doubled
++    help for display cadence. The game itself keeps its own pace.
 +setting Frame generation dump
 +    key fg_dump
 +    text 1024
@@ -8810,11 +8854,10 @@ index be57ac5..40d976b 100644
 +    startup
 +    words Linear|AMD FSR 1
 +    help AMD FSR 1 spatial upscaling and sharpening when the display is larger than the rendered image.
-+    help With frame generation on, PortForge FSR 3-style runs FSR 1 on real frames then inserts generated pictures
-+    help (not the AMD FSR 3 driver plugin). FSR adds GPU work. Handheld mode (docked=0) lets the game choose a lighter
-+    help rendering layout where supported. FSR alone does not boost FPS or remove CPU stalls; with frame generation a
-+    help numeric FPS limit is doubled for display cadence. Unsupported formats use linear scaling.
-+    help FSR 4 and DLSS are not implemented.
++    help With frame generation on, PortForge FSR 3 runs FSR 1 on real frames then inserts generated pictures from our
++    help own optical-flow pipeline (not the AMD driver FSR 3 plugin). FSR adds GPU work. Handheld mode (docked=0) lets
++    help the game choose a lighter layout where supported. With frame generation a numeric FPS limit is doubled for
++    help display cadence. Unsupported formats use linear scaling. FSR 4 and DLSS are not implemented.
 +setting Pixel smoothing
 +    key pixel_smoothing
 +    int 0 1
@@ -8838,7 +8881,7 @@ index be57ac5..40d976b 100644
  setting Fullscreen
      key fullscreen
      int 0 1
-@@ -166,7 +254,17 @@ setting FPS limit
+@@ -166,7 +255,17 @@ setting FPS limit
      default game
      set options_fps_set
      help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
@@ -8857,7 +8900,7 @@ index be57ac5..40d976b 100644
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -188,8 +286,35 @@ setting Pipeline threads
+@@ -188,8 +287,35 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -9443,7 +9486,7 @@ index 0000000..130c79d
 +    return 0;
 +}
 diff --git a/tests/overlay.c b/tests/overlay.c
-index 03330d3..3f6c30b 100644
+index 03330d3..22127d5 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
 @@ -10,11 +10,21 @@
@@ -9489,7 +9532,7 @@ index 03330d3..3f6c30b 100644
      /* a phone's display scale: the Poco F8 (408 dpi, 2510x1156) and the Pixel 9 (420 dpi) at 3x, where half the
         picture gave 2x; a 4K picture at 100% keeps the 4x half of it gives */
      overlay_set_display_scale(408.0f / 160);
-@@ -203,17 +214,35 @@ int main(void) {
+@@ -203,17 +214,36 @@ int main(void) {
      /* the first page: the title on a band of ink, the items under it, the focused one on a band; the page hides the
         game, whose text would show through it */
      draw();
@@ -9500,7 +9543,7 @@ index 03330d3..3f6c30b 100644
      assert(text_at(1, 0, "SCARLETNX  /  MENU") && text_at(1, 3, "\xFE On-screen controls") &&
 -           text_at(1, 4, "\xFE Controllers") && text_at(1, 5, "\xFE Exit"));
 +           text_at(1, 4, "\xFE Controllers") && text_at(1, 5, "\xFE Frame-time graph") &&
-+           text_at(1, 6, "\xFE Frame generation (experimental)") && text_at(1, 7, "\xFE FPS limit") &&
++           text_at(1, 6, "\xFE PortForge FSR 3") && text_at(1, 7, "\xFE FPS limit") &&
 +           text_at(1, 8, "\xFE Exit") && text_at(C - 4, 5, "Off"));
 +    /* the frame-time graph turns on and off for this run, nothing kept */
 +    stored[0] = 0;
@@ -9508,7 +9551,8 @@ index 03330d3..3f6c30b 100644
 +    draw();
 +    assert(text_at(C - 3, 5, "On"));
 +    assert(tap(2, 3) == OVERLAY_NONE && !g_settings.frame_time_graph);
-+    assert(tap(3, 3) == OVERLAY_NONE && g_settings.frame_generation && !stored[0]);
++    g_settings.upscaler = 0;
++    assert(tap(3, 3) == OVERLAY_NONE && g_settings.frame_generation && g_settings.upscaler == 1 && !stored[0]);
 +    assert(tap(3, 3) == OVERLAY_NONE && !g_settings.frame_generation);
 +    /* FPS limit cycles session-only; with frame generation on, the label shows the display rate */
 +    g_opt_fps = SNX_FPS_GAME;
@@ -9529,7 +9573,7 @@ index 03330d3..3f6c30b 100644
      assert(overlay_select() == OVERLAY_EXIT && overlay_back() == OVERLAY_CLOSE);
  
      /* the controls' page: each setting shown with its value, changed and kept */
-@@ -314,18 +343,26 @@ int main(void) {
+@@ -314,18 +344,26 @@ int main(void) {
             left stick past half way as one, goes on after a while, then on and on; with the menu closed, nothing, and
             a press held as it opens does not act */
          assert(overlay_controls(0, still, 1000) == OVERLAY_NONE); /* the focus back on Controllers */
@@ -9562,7 +9606,7 @@ index 03330d3..3f6c30b 100644
          assert(overlay_controls(1ull << 0, still, 3000) == OVERLAY_EXIT);
          assert(overlay_controls(1ull << 13, still, 3001) == OVERLAY_NONE &&
                 overlay_controls(0, left, 3002) == OVERLAY_NONE);
-@@ -768,6 +805,24 @@ int main(void) {
+@@ -768,6 +806,24 @@ int main(void) {
          for (i = 0, pictures = 0; i < list.n; ++i) pictures += list.q[i].v == SNX_CONTROLS_ATLAS_HEIGHT;
          assert(!pictures && !shows("Player"));
      }

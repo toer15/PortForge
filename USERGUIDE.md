@@ -1,6 +1,6 @@
-# PortForge 0.36
+# PortForge 0.37
 
-**Resolution and FSR 3-style (Engine 1.20):** use the Settings tab for Auto/720p/1080p/1440p/4K output and Upscaling (Linear, AMD FSR 1, or PortForge FSR 3-style). FSR 3-style is PortForge's FSR 1 + 2x frame generation, not the AMD driver plugin. With a numeric FPS limit the display rate doubles (60 ? ~120). Esc / controller Home can change the FPS limit for the current session. See `VALIDATION-0.36.md`.
+**PortForge FSR 3 (Engine 1.21):** Settings Upscaling ? PortForge FSR 3, or Esc/Home ? PortForge FSR 3 On/Off. Built from FSR 3/AFMF ideas without AMD SDK (no Switch motion vectors). 60 FPS ? ~120 on screen. See `VALIDATION-0.37.md`.
 
 **Settings for all games:** open the main **Settings** tab, choose your preferences, then **Save for all games**. Updated games read these on their next launch, including when started directly from the desktop with PortForge closed. Turn off **Apply these settings to every game** and save to return to individual game settings. The global layer takes priority over Game tools. Engine 1.17 or newer is required; older converted games need the runtime update while closed.
 

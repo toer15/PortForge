@@ -12,7 +12,7 @@ namespace PortForge
             vsync = Check("VSync", true), smoothing = Check("Smooth jagged edges", false),
             graph = Check("Show frame-time graph in game (F7 toggles it)", false), trace = Check("Record frame-time trace (to find hitches)", false);
         private readonly ComboBox resolution = Choice("Resolution", "Auto (game chooses)", "720p", "1080p", "1440p", "4K (2160p)"),
-            upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "PortForge FSR 3-style (2x)"),
+            upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "PortForge FSR 3 (2x, from scratch)"),
             mode = Choice("Rendering mode", "TV - game chooses its layout", "Handheld - lighter rendering where supported"),
             fps = Choice("Frame limit", "Game speed (recommended)", "60", "120", "144", "240", "Unlimited");
         private readonly Label status = new Label { AutoSize = true, ForeColor = Color.FromArgb(105,226,183), AccessibleName = "Global settings status", Text = "READY - Settings apply on the next game launch." };
@@ -27,12 +27,12 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.20 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. In-game Esc / Home can change FPS for the current session.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.21 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. In-game Esc / Home can toggle PortForge FSR 3 and change FPS for the session.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             AddText(layout, "720p through 4K raise presentable color buffers toward that height and size the window. Game-data textures stay protected. Auto keeps the game's own layout.", 10);
             AddChoice(layout, "Upscaling", upscale);
-            upscaleNote.Text = "PortForge FSR 3-style combines AMD FSR 1 with PortForge 2x frame generation (not the AMD driver FSR 3 plugin). A numeric FPS limit is doubled on screen (60 → ~120).";
+            upscaleNote.Text = "PortForge FSR 3 is built from scratch from FSR 3 / AFMF ideas (optical flow, disocclusion, HUD lock) plus AMD FSR 1 spatial upscale — not the AMD FidelityFX SDK. Esc/Home → PortForge FSR 3 On/Off. Numeric FPS doubles on screen (60 → ~120).";
             layout.Controls.Add(upscaleNote);
             AddChoice(layout, "Rendering mode", mode);
             AddChoice(layout, "FPS limit", fps);
@@ -94,9 +94,9 @@ namespace PortForge
             string limit = fps.SelectedIndex == 0 ? "game" : fps.SelectedIndex == 5 ? "0" : fps.Text;
             int n;
             if (fsr3 && Int32.TryParse(limit, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) && n > 0)
-                fpsNote.Text = n + " game → ~" + (n <= 500 ? n * 2 : 1000) + " on screen with FSR 3-style. The engine doubles the display cadence automatically.";
+                fpsNote.Text = n + " game → ~" + (n <= 500 ? n * 2 : 1000) + " on screen with PortForge FSR 3. The engine doubles the display cadence automatically.";
             else if (fsr3)
-                fpsNote.Text = "FSR 3-style is on. Pick a numeric FPS limit (for example 60) to get about twice that many pictures on screen.";
+                fpsNote.Text = "PortForge FSR 3 is on. Pick a numeric FPS limit (for example 60) to get about twice that many pictures on screen.";
             else
                 fpsNote.Text = "Game speed keeps the console pace. Unlimited removes the limiter (speed lock still protects game speed).";
         }
