@@ -23,10 +23,22 @@ internal sealed class ReleaseServer : IDisposable
         assets["good"] = Zip(z => { Add(z, "PortForge-9/PortForge.exe", File.ReadAllBytes(exePath)); Add(z, "PortForge-9/README.md", Encoding.UTF8.GetBytes("readme")); });
         assets["slip"] = Zip(z => { Add(z, "../escape.txt", new byte[] { 1 }); Add(z, "PortForge.exe", File.ReadAllBytes(exePath)); });
         assets["noexe"] = Zip(z => Add(z, "README.md", new byte[] { 1 }));
+        // Broken/partial .git and Source tree: older extractors failed on empty objects\info\ with a trailing backslash.
+        assets["vcs"] = Zip(z =>
+        {
+            Add(z, "PortForge-9/PortForge.exe", File.ReadAllBytes(exePath));
+            Add(z, "PortForge-9/README.md", Encoding.UTF8.GetBytes("readme"));
+            Add(z, "PortForge-9/Engine/ENGINE.txt", Encoding.UTF8.GetBytes("version=9"));
+            AddDir(z, "PortForge-9/Source/engine/src/.git/objects/info\\");
+            Add(z, "PortForge-9/Source/engine/src/.git/HEAD", Encoding.UTF8.GetBytes("ref: refs/heads/main"));
+            Add(z, "PortForge-9/Source/secret.txt", Encoding.UTF8.GetBytes("should-not-extract"));
+            Add(z, "PortForge-9/.cache/junk.bin", new byte[] { 9 });
+        });
         var thread = new Thread(Accept) { IsBackground = true }; thread.Start();
     }
 
     private static void Add(ZipArchive zip, string name, byte[] data) { using (var s = zip.CreateEntry(name).Open()) s.Write(data, 0, data.Length); }
+    private static void AddDir(ZipArchive zip, string name) { zip.CreateEntry(name); }
     private static byte[] Zip(Action<ZipArchive> fill) { using (var m = new MemoryStream()) { using (var z = new ZipArchive(m, ZipArchiveMode.Create, true)) fill(z); return m.ToArray(); } }
     public static string Sha(byte[] data) { using (var h = SHA256.Create()) return BitConverter.ToString(h.ComputeHash(data)).Replace("-", "").ToLowerInvariant(); }
     private void Accept() { try { while (true) { var c = listener.AcceptTcpClient(); ThreadPool.QueueUserWorkItem(o => Handle(c)); } } catch (SocketException) { } catch (ObjectDisposedException) { } }
@@ -55,6 +67,7 @@ internal sealed class ReleaseServer : IDisposable
                 case "/repos/o/badsum/releases/latest": body = Encoding.UTF8.GetBytes(Release("v9.0.0", "good", "sha256:" + new string('0', 64))); break;
                 case "/repos/o/slip/releases/latest": body = Encoding.UTF8.GetBytes(Release("v9.0.0", "slip", "")); break;
                 case "/repos/o/noexe/releases/latest": body = Encoding.UTF8.GetBytes(Release("v9.0.0", "noexe", "")); break;
+                case "/repos/o/vcs/releases/latest": body = Encoding.UTF8.GetBytes(Release("v9.0.0", "vcs", "")); break;
                 case "/repos/o/nopkg/releases/latest": body = Encoding.UTF8.GetBytes(Release("v9.0.0", null, "")); break;
                 case "/repos/o/junk/releases/latest": body = Encoding.UTF8.GetBytes("<html>not json"); break;
                 case "/repos/o/notag/releases/latest": body = Encoding.UTF8.GetBytes(Release("nightly", "good", "")); break;
@@ -110,6 +123,14 @@ internal static class UpdateTests
                 string package = AppUpdates.Download(found, work, p => lastPercent = p, none);
                 Check(File.Exists(Path.Combine(package, "PortForge.exe")) && File.ReadAllText(Path.Combine(package, "README.md")) == "readme" && lastPercent == 100, "A verified update is downloaded, unpacked and reports progress");
                 Check(!Directory.GetFiles(work, "*.zip").Any(), "The downloaded ZIP is removed after unpacking");
+
+                string vcsWork = Path.Combine(root, "vcs");
+                string vcsPkg = AppUpdates.Download(AppUpdates.Check(server.BaseUrl, "o/vcs", current, none), vcsWork, null, none);
+                Check(File.Exists(Path.Combine(vcsPkg, "PortForge.exe")) && File.Exists(Path.Combine(vcsPkg, "Engine", "ENGINE.txt")), "A package with Source/.git still unpacks the program and Engine");
+                Check(!Directory.Exists(Path.Combine(vcsPkg, "Source")), "Source is not extracted for in-app updates");
+                Check(!Directory.Exists(Path.Combine(vcsPkg, ".cache")) &&
+                      Directory.GetDirectories(vcsPkg, ".git", SearchOption.AllDirectories).Length == 0,
+                    "VCS and cache folders from the ZIP are skipped");
 
                 var badSum = AppUpdates.Check(server.BaseUrl, "o/badsum", current, none);
                 Reject(() => AppUpdates.Download(badSum, Path.Combine(root, "w2"), null, none), "A package that does not match GitHub's checksum is discarded", "checksum");

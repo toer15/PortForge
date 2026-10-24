@@ -155,6 +155,29 @@ namespace PortForge
             finally { try { File.Delete(zipPath); } catch (IOException) { } }
         }
 
+        /// <summary>Folders that must never be unpacked from an update ZIP (VCS metadata, build caches, optional Source tree).</summary>
+        private static readonly string[] SkipExtractNames = { ".git", ".svn", ".hg", ".cache", ".claude", "Source" };
+
+        private static bool ShouldSkipExtract(string entryName)
+        {
+            if (String.IsNullOrEmpty(entryName)) return true;
+            string[] parts = entryName.Replace('/', '\\').Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = parts[i];
+                foreach (string skip in SkipExtractNames)
+                {
+                    if (part.Equals(skip, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsDirectoryEntry(string entryName)
+        {
+            return entryName.EndsWith("/", StringComparison.Ordinal) || entryName.EndsWith("\\", StringComparison.Ordinal);
+        }
+
         private static void Extract(string zipPath, string folder)
         {
             string root = Path.GetFullPath(folder).TrimEnd('\\') + "\\";
@@ -162,10 +185,14 @@ namespace PortForge
             using (var zip = ZipFile.OpenRead(zipPath))
                 foreach (var entry in zip.Entries)
                 {
-                    string destination = Path.GetFullPath(Path.Combine(folder, entry.FullName.Replace('/', '\\')));
+                    if (ShouldSkipExtract(entry.FullName)) continue;
+                    string relative = entry.FullName.Replace('/', '\\').TrimEnd('\\');
+                    if (relative.Length == 0) continue;
+                    string destination = Path.GetFullPath(Path.Combine(folder, relative));
                     if (!destination.StartsWith(root, StringComparison.OrdinalIgnoreCase) || entry.FullName.IndexOf(':') >= 0) throw new IOException("The update package contains an unsafe path and was rejected.");
-                    if (entry.FullName.EndsWith("/")) { Directory.CreateDirectory(destination); continue; }
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                    if (IsDirectoryEntry(entry.FullName)) { Directory.CreateDirectory(destination); continue; }
+                    string parent = Path.GetDirectoryName(destination);
+                    if (!String.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
                     entry.ExtractToFile(destination, true);
                 }
         }

@@ -1,6 +1,10 @@
-# PortForge 0.38 / Engine 1.22
+# PortForge 0.40 / Engine 1.23
 
-**New in 0.38:** Fixes BOTW-class ghosting (no selective RT scale under protect; hardened FG; safe-area reject) and on-screen FPS shows ~2x with PortForge FSR 3. See [VALIDATION-0.38.md](VALIDATION-0.38.md).
+**New in 0.40:** In-app updates no longer fail when a release ZIP contains `Source/.../.git` (or other VCS junk). Unpack skips `.git` / `.cache` / `Source`; release packaging excludes them. See [VALIDATION-0.40.md](VALIDATION-0.40.md).
+
+**0.39:** FPS limit from Settings / global ini / Esc-Home actually sticks and applies with PortForge FSR 3 (session override over global re-apply; FG honors frame dropping; game-side limit so 60 → ~120 on screen). Frame-time graph shows live display FPS. See [VALIDATION-0.39.md](VALIDATION-0.39.md).
+
+**0.38:** Fixes BOTW-class ghosting (no selective RT scale under protect; hardened FG; safe-area reject) and on-screen FPS shows ~2x with PortForge FSR 3. See [VALIDATION-0.38.md](VALIDATION-0.38.md).
 
 **0.34:** a global Settings tab applies preferences to updated games launched directly, focused fullscreen play hides the cursor, actual save writes show a Saving... indicator, and compute shaders are cached and prepared on later launches. F7/Escape shows a frame-time graph; optional CSV recording and an app viewer help investigate hitches. Experimental PortForge frame generation can be selected globally or toggled in Escape. It is not AMD FSR 3. Universal save-anywhere, native 720p-through-4K overrides and AMD FSR 2/3 remain unsupported.
 
@@ -61,9 +65,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test -BackendPa
 
 ## Releasing a version
 
-1. Raise the version in `src/AssemblyInfo.cs`, build with `-Test`.
-2. Zip the release folder as `PortForge-<version>-Windows-and-Source.zip` (must contain `PortForge.exe`).
-3. Create a GitHub release tagged `v<version>` and attach the ZIP. The in-app **Check for updates** button picks it up.
+1. Raise the version in `src/AssemblyInfo.cs` (and the window title in `src/NativeApp.cs`), build with `-Test`.
+2. Run `build-release.ps1 -Version <version>` (or `-SkipBuild` after a local build). It stages the Windows+Source ZIP, source-only ZIP, Setup.exe and SHA256 sums under `build\release-<version>`, and **excludes** `.git`, `.cache` and `build` from Source (required so older in-app updaters can install the package).
+3. Create a GitHub release tagged `v<version>` and attach those assets. The in-app **Check for updates** button picks it up.
 
 ## More documentation
 
