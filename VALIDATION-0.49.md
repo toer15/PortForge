@@ -26,7 +26,9 @@ With PortForge FSR 3 On and Limit 120, Esc **Display FPS** stayed near **60** on
 
 ## Ship (Windows — required for Doctor/Play)
 
-Linux cloud agents cannot produce `scarletnx.exe`. On a Windows box with MSYS2 CLANG64 and this branch checked out (e.g. `D:\portforge`):
+Linux cloud agents cannot produce `scarletnx.exe`. Latest GitHub release remains **0.47 / Engine 1.30** until this ship runs.
+
+On a Windows box with MSYS2 CLANG64 and this branch checked out (e.g. `D:\portforge` on DESKTOP-EBI7UUL):
 
 1. Ensure `engine\src` exists (existing ScarletNX tree, or extract `Source\engine` from the 0.47 Windows zip).
 2. One-shot: `powershell -NoProfile -File tools\ship-0.49.ps1`
@@ -35,5 +37,7 @@ Linux cloud agents cannot produce `scarletnx.exe`. On a Windows box with MSYS2 C
    - `build.ps1 -Test` then `build-release.ps1 -Version 0.49`
    - `gh release create 0.49` with Windows-and-Source / source / Setup / SHA256
 3. Install the release (or copy `engine\package` into the app `Engine\` folder). Play a game → Esc **Engine 1.31**.
+
+Optional CI: `.github/workflows/ship-engine-0.49.yml` (`workflow_dispatch`) does the same after the workflow file exists on `main` (GitHub only lists dispatch workflows from the default branch). Until then, use `tools\ship-0.49.ps1` on Windows.
 
 Manual equivalent: upgrade script → MSYS build/package → `build-release.ps1 -Version 0.49` → upload assets to GitHub release `0.49` titled `PortForge 0.49 / Engine 1.31`.
