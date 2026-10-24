@@ -35,6 +35,7 @@ namespace PortForge
         private UiLock fieldLock;
         private readonly ProgressBar progress = new ProgressBar();
         private readonly ToolTip tips = new ToolTip();
+        private TabControl mainTabs;
         private readonly Button downloads = Button("Downloads", false), updates = Button("Check for updates", false), doctorButton = Button("AI Doctor", false);
         private readonly Label doctorStatus = new Label();
         private readonly Label hardwareInfo = Caption("Checking this PC in the background...", 9, Muted, false);
@@ -59,7 +60,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.33 | Switch to PC"; AppIcon.Apply(this);
+            Text = "PortForge 0.34 | Switch to PC"; AppIcon.Apply(this);
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -81,10 +82,7 @@ namespace PortForge
             var settings = Button("Graphics and FPS", true); settings.AccessibleName = "Graphics and FPS"; settings.Size = new Size(165, 40);
             settings.Click += delegate
             {
-                string exe = Directory.Exists(result) ? Path.Combine(result, Path.GetFileName(result) + ".exe") : null;
-                string last = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last-game.txt");
-                try { if (exe == null && File.Exists(last)) exe = File.ReadAllText(last).Trim(); } catch { }
-                using (var window = new GameSettingsWindow(exe,backend.Text)) window.ShowDialog(this);
+                if (mainTabs != null) mainTabs.SelectedIndex = 1;
             };
             var headerActions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = new Padding(0) };
             downloads.AccessibleName = "Downloads"; downloads.Size = new Size(120, 40);
@@ -234,7 +232,12 @@ namespace PortForge
             doctorAi.CheckedChanged += delegate { if (doctor != null) doctor.UseAi = doctorAi.Checked; };
             footer.Controls.Add(doctorStatus, 0, 0); footer.Controls.Add(doctorAuto, 1, 0); footer.Controls.Add(doctorAi, 2, 0); footer.Controls.Add(doctorButton, 3, 0);
             root.Controls.Add(footer, 0, 2);
-            Controls.Add(root);
+            var tabs = new TabControl { Dock = DockStyle.Fill, AccessibleName = "PortForge tabs" };
+            mainTabs = tabs;
+            var convertTab = new TabPage("Convert") { BackColor = Background };
+            var settingsTab = new TabPage("Settings") { BackColor = Background };
+            convertTab.Controls.Add(root); settingsTab.Controls.Add(new GlobalSettingsPanel());
+            tabs.TabPages.Add(convertTab); tabs.TabPages.Add(settingsTab); Controls.Add(tabs);
 
             LocateBackend();
             foreach (var box in new[] { input, name, output, backend, keys, titleKeys }) box.TextChanged += delegate { InputsChanged(); };

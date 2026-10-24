@@ -1,3 +1,17 @@
+# PortForge 0.34
+
+**Settings for all games:** open the main **Settings** tab, choose your preferences, then **Save for all games**. Updated games read these on their next launch, including when started directly from the desktop with PortForge closed. Turn off **Apply these settings to every game** and save to return to individual game settings. The global layer takes priority over Game tools. Engine 1.17 or newer is required; older converted games need the runtime update while closed.
+
+**Cursor and saving:** the pointer hides during focused fullscreen play and returns for Escape menus or Windows focus. **Saving...** appears at the bottom right when the game writes save data, including autosaves; errors are reported. A short write during a loading pause is kept pending until a frame can show it. This does not capture unsaved progress. Saving anywhere and an Escape Save Game action are not implemented.
+
+**Compute caching:** compute programs are now saved and prepared on subsequent launches. First-time compilation and other loading stalls remain possible. This update may rebuild the shader cache once. See `VALIDATION-0.34.md` for measurements and limitations.
+
+**Frame generation (Engine 1.18):** choose **PortForge 2x - experimental** in Settings and save for all games. The engine estimates a picture between game frames using GPU motion search. It is separate from AMD FSR 1 upscaling and is not AMD FSR 3 or the Radeon driver feature. It works through the Vulkan engine without changing Radeon settings. It starts off; you can also turn it on or off for the current session in the Escape menu. A fast display and GPU headroom are required. It can add latency and show artifacts around fast motion, HUD changes and occlusions. Simulation and input stay at the game's real rate, and hitches cannot be filled indefinitely. Engine 1.17 games need updating for this option.
+
+**Frame-time trace:** F7 or **Escape > Frame-time graph** shows the graph, with hitches in red. Turn on **Record frame-time trace** in Settings before launching to write `frametime-trace.csv` beside the game's log. After play, **View frame-time trace** shows the slowest frames and measured work. This measures real game frames; generated display frames do not inflate it. Cause labels identify the largest measured component; overlapping counters are not a complete causal profile. The CSV is replaced on each recorded launch.
+
+**Resolution and FSR:** TV/handheld modes let each game choose its own render resolution. FSR 1 enlarges the finished picture. True native resolution overrides (720p through 4K) and AMD FSR 2/3 are not implemented. No doubled simulation FPS or universally stutter-free promise is made.
+
 # PortForge 0.33
 
 **Smoother first plays:** if a game dropped to a few frames per second right after its first loading screens and never recovered, Engine 1.16 fixes the cause. Expect a few short loading pauses the first time a game builds its shaders, then normal speed. Existing games get Engine 1.16 from the Doctor when they are closed.

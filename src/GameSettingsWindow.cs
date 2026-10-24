@@ -109,6 +109,7 @@ namespace PortForge
             scan.Click+=async delegate{await CheckHealth(false);};askAi.Click+=async delegate{await CheckHealth(true);};
             undo.Click+=delegate{try{autoRepair.Checked=false;GameDiagnostics.RestoreLastRepair(loadedGame);ShowProfile(GameOptimization.Load(loadedGame));history.AppendText("Restored the last repair backup. Automatic repairs are switched off so the undo is kept.\r\n");SetStatus("DONE","Previous settings restored","Review the settings before starting the game.",Mint);}catch(Exception e){Error(e);}};
             options.Padding = new Padding(0, 0, 18, 0);
+            options.Controls.Add(Label("The main Settings tab applies to all updated games and takes priority here. Turn it off to use per-game choices.", 9, Muted));
             options.Controls.Add(Label("Choose a starting point", 12, Mint));
             var presets = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = false };
             foreach (string text in new[] {"Match my PC", "Performance", "Balanced", "Quality", "Reset defaults"})

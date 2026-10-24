@@ -4,6 +4,11 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")" && pwd)"
 pkg="${1:-$root/package}"
+pkg="$(realpath -m "$pkg")"
+if [[ "$pkg" != "$root/package" && "$pkg" != "$root"/package-* ]]; then
+  echo "Package output must be engine/package or engine/package-*" >&2
+  exit 1
+fi
 rm -rf "$pkg"; mkdir -p "$pkg"
 cp "$root/src/build/default/scarletnx.exe" "$pkg/"
 bins=("$pkg/scarletnx.exe")

@@ -127,29 +127,42 @@ index 9d34b9e..e13b5cb 100644
  void fs_tree_release(FsNode* node);
  
 diff --git a/src/nx/CMakeLists.txt b/src/nx/CMakeLists.txt
-index f6a4f52..b5e3454 100644
+index f6a4f52..819cfaa 100644
 --- a/src/nx/CMakeLists.txt
 +++ b/src/nx/CMakeLists.txt
+@@ -71,7 +71,7 @@ target_link_libraries(snx_gpu PRIVATE snx_llvm)
+ include("${PROJECT_SOURCE_DIR}/cmake/controls_atlas.cmake")
+ include("${PROJECT_SOURCE_DIR}/cmake/gui_themes.cmake")
+ set(platform runtime/platform/plat.c runtime/platform/unattended.c runtime/platform/backend/sdl3.c
+-             runtime/platform/backend/gamepad.c
++             runtime/platform/backend/gamepad.c runtime/platform/save_activity.c runtime/platform/frame_trace.c
+              runtime/platform/overlay.c runtime/platform/touch.c runtime/platform/ui.c runtime/platform/vpad.c
+              runtime/platform/fatal_screen.c "${CMAKE_BINARY_DIR}/generated/controls_png.c")
+ if(WIN32)
 @@ -86,7 +86,7 @@ snx_component(shader gpu/shader/shader.c gpu/shader/decode.c gpu/shader/corpus.c
  # the opcode enum and decoder, generated from gpu/shader/maxwell_opcodes.def
  include("${PROJECT_SOURCE_DIR}/cmake/shaderdec.cmake")
  snx_shaderdec(snx_shader)
 -snx_component(vk gpu/vk/renderer.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/record.c gpu/vk/format.c gpu/vk/surface.c gpu/vk/texture.c
-+snx_component(vk gpu/vk/renderer.c gpu/vk/upscale.c gpu/vk/frame_times.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/record.c gpu/vk/format.c gpu/vk/surface.c gpu/vk/texture.c
++snx_component(vk gpu/vk/renderer.c gpu/vk/upscale.c gpu/vk/fg.c gpu/vk/frame_times.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/record.c gpu/vk/format.c gpu/vk/surface.c gpu/vk/texture.c
                   gpu/vk/buffer.c gpu/vk/writeback.c gpu/vk/pipeline.c gpu/vk/pipeline_file.c gpu/vk/render.c gpu/vk/release.c gpu/vk/query.c gpu/vk/compute.c
                   gpu/vk/pending_pages.c gpu/vk/memory.c gpu/vk/renderdoc.c gpu/vk/astc.c gpu/vk/blocklinear.c gpu/vk/texconv.c gpu/vk/owned.c gpu/vk/nvdec.c gpu/vk/dma.c gpu/vk/blit.c gpu/vk/ui.c gpu/texture/blocklinear.c gpu/texture/depth.c gpu/vk/vic.c gpu/vk/vma.cpp gpu/vk/gpuprof.c
                   "${volk_SOURCE_DIR}/volk.c")
-@@ -95,6 +95,9 @@ snx_component(vk gpu/vk/renderer.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/record.c
+@@ -95,6 +95,13 @@ snx_component(vk gpu/vk/renderer.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/record.c
  # built twice: for word aligned rows, and for the rest
  # (gpu/video/vic_compose.glsl)
  include("${PROJECT_SOURCE_DIR}/cmake/glsl.cmake")
 +snx_glsl_spirv(snx_vk SOURCE gpu/vk/shaders/fsr1.comp NAME fsr_easu_spv HEADER nx/gpu/vk/fsr1_spv.h)
 +snx_glsl_spirv(snx_vk SOURCE gpu/vk/shaders/fsr1.comp NAME fsr_rcas_spv HEADER nx/gpu/vk/fsr1_spv.h DEFINES FSR_SHARPEN=1)
 +snx_glsl_spirv(snx_vk SOURCE gpu/vk/shaders/smooth.comp NAME smooth_spv HEADER nx/gpu/vk/fsr1_spv.h)
++snx_glsl_spirv(snx_vk SOURCE gpu/vk/shaders/fg.comp NAME fg_luma_spv HEADER nx/gpu/vk/fg_spv.h DEFINES FG_LUMA=1)
++snx_glsl_spirv(snx_vk SOURCE gpu/vk/shaders/fg.comp NAME fg_search_spv HEADER nx/gpu/vk/fg_spv.h DEFINES FG_SEARCH=1)
++snx_glsl_spirv(snx_vk SOURCE gpu/vk/shaders/fg.comp NAME fg_median_spv HEADER nx/gpu/vk/fg_spv.h DEFINES FG_MEDIAN=1)
++snx_glsl_spirv(snx_vk SOURCE gpu/vk/shaders/fg.comp NAME fg_interp_spv HEADER nx/gpu/vk/fg_spv.h DEFINES FG_INTERP=1)
  snx_glsl_spirv(snx_vk SOURCE gpu/texture/astc.comp NAME astc_spv HEADER nx/gpu/texture/astc_spv.h)
  snx_glsl_spirv(snx_vk SOURCE gpu/texture/blocklinear.comp NAME blocklinear_spv HEADER nx/gpu/texture/blocklinear_spv.h)
  snx_glsl_spirv(snx_vk SOURCE gpu/texture/texconv.comp NAME texconv_spv HEADER nx/gpu/texture/texconv_spv.h)
-@@ -173,11 +176,33 @@ include("${PROJECT_SOURCE_DIR}/cmake/pad_sdl.cmake")
+@@ -173,11 +180,34 @@ include("${PROJECT_SOURCE_DIR}/cmake/pad_sdl.cmake")
  target_link_libraries(snx_platform PRIVATE SDL3::SDL3 snx_window_icon snx_build_info snx_pad_sdl snx_splash)
  # the build is part of the key of the shader and pipeline file (gpu/vk/pipeline.c)
  target_link_libraries(snx_vk PRIVATE snx_build_info FFmpeg::avutil) # vk/nvdec.c: FFmpeg's Vulkan device and pictures
@@ -160,6 +173,7 @@ index f6a4f52..b5e3454 100644
 +     "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/*.def")
 +list(SORT snx_shader_abi_files)
 +list(APPEND snx_shader_abi_files "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/pipeline.c" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/vk.h"
++     "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/compute.c"
 +     "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/render.c" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/format.c"
 +     "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/record.c" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/vk/pipeline_file.c"
 +     "${PROJECT_SOURCE_DIR}/tools/shaderdec/shaderdec.c" "${PROJECT_SOURCE_DIR}/cmake/dependencies.cmake")
@@ -334,6 +348,220 @@ index cd9e27e..08c51fd 100644
  }
  /* the storage results of every submission up to value, which has finished, land in guest memory, in order */
  static void land_through(u64 value) {
+diff --git a/src/nx/gpu/vk/compute.c b/src/nx/gpu/vk/compute.c
+index e74a30c..b83c51c 100644
+--- a/src/nx/gpu/vk/compute.c
++++ b/src/nx/gpu/vk/compute.c
+@@ -31,8 +31,16 @@ typedef struct CsPipe {
+     int failed;
+     struct CsPipe* next;
+     struct CsPipe* keyed; /* the program translated for the integer-ness of the 2D images last bound to it */
++    /* PortForge: programs of earlier runs (cs_preload). The module is kept, so the file knows it by a handle no other
++       module has. state (atomic): CS_QUEUED until a thread takes it, CS_MAKING, then CS_MADE with p (or failed) set */
++    VkShaderModule mod;
++    int state;
++    int preloaded;
++    struct CsPipe* lnext; /* the loaded list, then the work list */
++    struct CsPipe* wnext;
+ } CsPipe;
+ static CsPipe* g_csp[256];
++enum { CS_MADE, CS_QUEUED, CS_MAKING };
+ 
+ /* the arena: inputs and outputs of the batch's dispatches, and what the outputs held before (org, host only) */
+ static VkBuffer g_ar;
+@@ -536,17 +544,164 @@ typedef struct {
+     u64 tex_int, tex_sint;
+     u32 image;
+ } CsKey;
++/* PortForge: compute programs made and the time it took (translation, module and pipeline), for the stall line */
++static u64 g_cs_made, g_cs_make_ns, g_cs_prewarmed, g_cs_preloaded, g_cs_cache_hits;
++void vk_cs_make_stats(u64* made, u64* ms) {
++    *made = __atomic_load_n(&g_cs_made, __ATOMIC_RELAXED);
++    *ms = __atomic_load_n(&g_cs_make_ns, __ATOMIC_RELAXED) / 1000000;
++}
++/* p's pipeline from its module, on any thread */
++static void cs_pipeline_create(CsPipe* p) {
++    VkComputePipelineCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
++                                      .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
++                                                .stage = VK_SHADER_STAGE_COMPUTE_BIT,
++                                                .module = p->mod,
++                                                .pName = "main"},
++                                      .layout = g_vk_playout};
++    if (!VK_OK(vkCreateComputePipelines(g_vk.dev, vk_pipeline_cache(), 1, &ci, NULL, &p->p))) p->failed = 1;
++    (void)vk_pipeline_cache(); /* dirty after creation too: a periodic save could have raced the build */
++}
++
++/* PortForge: the compute programs of earlier runs. A first run makes each program when the game first dispatches it,
++   on the GPU thread, and a driver without its cache took up to 1.7 s for one: the whole game stopped. The pipeline
++   file keeps them (as shader records of stage ST_CS), its reading thread hands them here, and a thread of their own
++   makes them in the file's order while the game starts. A dispatch that needs one no thread took yet makes it at
++   once, and one being made is waited for. The GPU thread merges what was loaded into its table when it looks one up */
++static PMutex g_csl_lock = PMUTEX_INIT;
++static PCond g_csl_cv;
++static int g_csl_started;
++static CsPipe *g_csl_head, *g_csl_tail; /* loaded, not merged yet */
++static CsPipe *g_csw_head, *g_csw_tail; /* to make */
++static int g_csl_any;                   /* atomic: something is in the loaded list */
++static void cs_take_and_make(CsPipe* p) {
++    int queued = CS_QUEUED;
++    if (!__atomic_compare_exchange_n(&p->state, &queued, CS_MAKING, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
++    cs_pipeline_create(p);
++    if (!p->failed) __atomic_add_fetch(&g_cs_prewarmed, 1, __ATOMIC_RELAXED);
++    pm_lock(&g_csl_lock);
++    __atomic_store_n(&p->state, CS_MADE, __ATOMIC_RELEASE);
++    pc_broadcast(&g_csl_cv);
++    pm_unlock(&g_csl_lock);
++}
++static void cs_prewarm_thread(void* arg) {
++    (void)arg;
++    for (;;) {
++        CsPipe* p;
++        pm_lock(&g_csl_lock);
++        while (!g_csw_head) pc_wait(&g_csl_cv, &g_csl_lock, -1);
++        p = g_csw_head;
++        g_csw_head = p->wnext;
++        if (!g_csw_head) g_csw_tail = NULL;
++        pm_unlock(&g_csl_lock);
++        cs_take_and_make(p);
++    }
++}
++u64 vk_cs_preload(u64 key, const ShaderInfo* si, const u32* cbr, u32 ncbr, const u32* spv, u32 nspv) {
++    CsPipe* p = calloc(1, sizeof *p);
++    if (!p) return 0;
++    if (ncbr) {
++        p->cbr.r = malloc(ncbr * sizeof *p->cbr.r);
++        if (!p->cbr.r) {
++            free(p);
++            return 0;
++        }
++        memcpy(p->cbr.r, cbr, ncbr * sizeof *p->cbr.r);
++        p->cbr.n = ncbr;
++    }
++    p->key = key;
++    memcpy(&p->si, si, sizeof p->si);
++    p->mod = vk_module_spv(spv, nspv);
++    if (!p->mod) {
++        free(p->cbr.r);
++        free(p);
++        return 0;
++    }
++    p->state = CS_QUEUED;
++    p->preloaded = 1;
++    __atomic_add_fetch(&g_cs_preloaded, 1, __ATOMIC_RELAXED);
++    pm_lock(&g_csl_lock);
++    if (!g_csl_started) {
++        pc_init(&g_csl_cv);
++        g_csl_started = 1;
++        if (plat_thread(cs_prewarm_thread, NULL, (size_t)1 << 20)) g_csl_started = 2; /* none: made when dispatched */
++    }
++    if (g_csl_tail)
++        g_csl_tail->lnext = p;
++    else
++        g_csl_head = p;
++    g_csl_tail = p;
++    if (g_csl_started == 1) {
++        if (g_csw_tail)
++            g_csw_tail->wnext = p;
++        else
++            g_csw_head = p;
++        g_csw_tail = p;
++        pc_broadcast(&g_csl_cv);
++    }
++    __atomic_store_n(&g_csl_any, 1, __ATOMIC_RELEASE);
++    pm_unlock(&g_csl_lock);
++    {
++        u64 bits = 0;
++        memcpy(&bits, &p->mod, sizeof p->mod);
++        return bits;
++    }
++}
++/* on the GPU thread: what was loaded into the table, the file's last made found first, as in the run that made it */
++static void cs_merge(void) {
++    CsPipe* p;
++    if (!__atomic_load_n(&g_csl_any, __ATOMIC_ACQUIRE)) return;
++    pm_lock(&g_csl_lock);
++    p = g_csl_head;
++    g_csl_head = g_csl_tail = NULL;
++    __atomic_store_n(&g_csl_any, 0, __ATOMIC_RELAXED);
++    pm_unlock(&g_csl_lock);
++    while (p) {
++        CsPipe* n = p->lnext;
++        p->next = g_csp[p->key & 255];
++        g_csp[p->key & 255] = p;
++        p = n;
++    }
++}
++/* p ready for a dispatch: made here when no thread took it yet, waited for while one makes it. 1 when it had to */
++static int cs_ready(CsPipe* p) {
++    int state = __atomic_load_n(&p->state, __ATOMIC_ACQUIRE);
++    if (state == CS_MADE) return 0;
++    if (state == CS_QUEUED) cs_take_and_make(p);
++    pm_lock(&g_csl_lock);
++    while (__atomic_load_n(&p->state, __ATOMIC_ACQUIRE) != CS_MADE) pc_wait(&g_csl_cv, &g_csl_lock, -1);
++    pm_unlock(&g_csl_lock);
++    return 1;
++}
++
++static CsPipe* cs_pipe_make(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm, CsKey k);
+ static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm, CsKey k) {
++    u64 t0 = plat_ns(), made = g_cs_made;
++    CsPipe* p = cs_pipe_make(code, lx, ly, lz, shm, k);
++    if (g_cs_made != made) __atomic_add_fetch(&g_cs_make_ns, plat_ns() - t0, __ATOMIC_RELAXED);
++    return p;
++}
++static CsPipe* cs_pipe_make(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm, CsKey k) {
+     static CsPipe allocation_failed = {.failed = 1};
+     u32 blen;
+     u64 key = vk_shader_hash(code, 0x10000 + 80, &blen, cs_cb_read) ^ ((u64)lx << 40) ^ ((u64)ly << 48) ^
+               ((u64)lz << 56) ^ ((u64)shm << 20) ^ ((u64)k.image << 32) ^ (u64)k.tex_int * 0x9E3779B97F4A7C15ull ^
+               (u64)k.tex_sint * 0xC2B2AE3D27D4EB4Full;
++    cs_merge();
+     CsPipe* p = g_csp[key & 255];
+     while (p && (p->key != key || !vk_cb_reads_hold(&p->cbr, cs_cb_read))) p = p->next;
+-    if (p) return p;
++    if (p) {
++        if (cs_ready(p)) __atomic_add_fetch(&g_cs_made, 1, __ATOMIC_RELAXED); /* the stall line counts its wait */
++        if (!p->failed && p->preloaded) {
++            u64 hits = __atomic_add_fetch(&g_cs_cache_hits, 1, __ATOMIC_RELAXED);
++            if (hits == 1) LOG("vulkan: compute cache active: %llu programs loaded, %llu prepared\n",
++                (unsigned long long)__atomic_load_n(&g_cs_preloaded, __ATOMIC_RELAXED),
++                (unsigned long long)__atomic_load_n(&g_cs_prewarmed, __ATOMIC_RELAXED));
++        }
++        return p;
++    }
+     p = calloc(1, sizeof *p);
+     if (!p) return &allocation_failed;
++    __atomic_add_fetch(&g_cs_made, 1, __ATOMIC_RELAXED);
+     p->key = key;
+     p->next = g_csp[key & 255];
+     g_csp[key & 255] = p;
+@@ -579,21 +734,15 @@ static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm, CsKey k)
+     }
+     VkShaderModuleCreateInfo mi = {
+         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
+-    VkShaderModule m;
+-    int ok = VK_OK(vkCreateShaderModule(g_vk.dev, &mi, NULL, &m));
+-    free(spv);
++    int ok = VK_OK(vkCreateShaderModule(g_vk.dev, &mi, NULL, &p->mod));
+     if (!ok) {
++        free(spv);
+         p->failed = 1;
+         return p;
+     }
+-    VkComputePipelineCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+-                                      .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+-                                                .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+-                                                .module = m,
+-                                                .pName = "main"},
+-                                      .layout = g_vk_playout};
+-    if (!VK_OK(vkCreateComputePipelines(g_vk.dev, vk_pipeline_cache(), 1, &ci, NULL, &p->p))) p->failed = 1;
+-    vkDestroyShaderModule(g_vk.dev, m, NULL);
++    cs_pipeline_create(p);
++    if (!p->failed) vk_pipeline_file_compute(key, &p->si, &p->cbr, spv, nw, p->mod); /* for the next run */
++    free(spv);
+     if (!p->failed)
+         LOG_LIMIT(12, "vulkan: compute %016llx ready: block %ux%ux%u, %d global buffers, %d textures, %d images\n",
+                   (unsigned long long)key, lx, ly, lz, p->si.ngbuf, p->si.ntex, p->si.nimg);
 diff --git a/src/nx/gpu/vk/device.c b/src/nx/gpu/vk/device.c
 index 8579250..f3ffe2c 100644
 --- a/src/nx/gpu/vk/device.c
@@ -362,6 +590,344 @@ index 8579250..f3ffe2c 100644
                                    .device = g_vk.dev,
                                    .instance = g_vk.instance,
                                    .preferredLargeHeapBlockSize = g_vk.alloc_cap < (256ull << 20) ? g_vk.alloc_cap : 0,
+diff --git a/src/nx/gpu/vk/fg.c b/src/nx/gpu/vk/fg.c
+new file mode 100644
+index 0000000..09ca749
+--- /dev/null
++++ b/src/nx/gpu/vk/fg.c
+@@ -0,0 +1,321 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++/* PortForge frame generation (shaders/fg.comp): each of the game's frames is copied into one of two history images,
++   in the game image's own format, with a luma pyramid beside it. With the frame before it, the motion between the
++   two is found on the GPU, coarse to fine, and the picture halfway between them is made into out, which presents as
++   the game's own image does (filters, FSR 1, the HUD and menu). The renderer shows out at once and the copy of the
++   game's frame half a frame later (renderer.c). Display only: guest targets, timing, saves and game data are
++   untouched. Under vk_lock. */
++#include <string.h>
++#include "nx/gpu/vk/vk.h"
++#include "nx/gpu/vk/fg_spv.h"
++#include "nx/runtime/platform/log.h"
++
++enum { LEVELS = 3 };
++enum { P_LUMA, P_SEARCH, P_MEDIAN, P_INTERP, PASSES };
++typedef struct {
++    Surf s;
++    VkImageView rgba8; /* the 32-bit image read and written as R8G8B8A8_UNORM: the passes see its bytes as they are */
++} Pic;
++static struct {
++    int failed, logged;
++    VkDescriptorSetLayout ds;
++    VkPipelineLayout layout;
++    VkPipeline pipe[PASSES];
++    VkSampler nearest, bilinear;
++    Pic hist[2], out, dummy8;
++    Surf lum[2][LEVELS]; /* each history image's luma at 1/4, 1/8 and 1/16 */
++    Surf vec[LEVELS], med[LEVELS]; /* the motion at each level, and its median: what the next level starts from */
++    Surf dummy, dummy_w; /* sampled, and written, where a pass has no image for a binding */
++    int cur, have_prev;
++    u32 w, h;
++    VkFormat fmt;
++    u64 made;
++} g_fg;
++
++/* images are replaced only when the game's picture changes size or format: after a full wait, so no frame in flight
++   still uses them or their views */
++static void drop(Surf* s) {
++    if (s->img) {
++        vk_finish();
++        for (int i = 0; i < s->nsv; i++) vkDestroyImageView(g_vk.dev, s->sv[i].v, NULL);
++        vk_defer_image(s->img, s->mem, s->att, VK_NULL_HANDLE);
++        vk_defer_bytes(s->bytes);
++    }
++    memset(s, 0, sizeof *s);
++}
++static void pic_drop(Pic* p) {
++    if (p->rgba8) {
++        vk_finish();
++        vkDestroyImageView(g_vk.dev, p->rgba8, NULL);
++    }
++    p->rgba8 = VK_NULL_HANDLE;
++    drop(&p->s);
++}
++static VkImageView view(VkImage img, VkFormat f) {
++    VkImageView v = VK_NULL_HANDLE;
++    VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = img,
++        .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = f, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
++    return VK_OK(vkCreateImageView(g_vk.dev, &vi, NULL, &v)) ? v : VK_NULL_HANDLE;
++}
++/* a scratch image: luma levels and motion */
++static int scratch(Surf* s, u32 w, u32 h) {
++    if (s->img && s->sw == w && s->sh == h) return 1;
++    drop(s);
++    VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
++        .format = VK_FORMAT_R16G16B16A16_SFLOAT, .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1,
++        .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
++        .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
++    if (!vk_cache_image_create(&ii, &s->img, &s->mem, &s->bytes)) return 0;
++    if (!(s->att = view(s->img, ii.format))) { drop(s); return 0; }
++    s->f = (VkFmt){.vk = ii.format, .bpp = 8, .bw = 1, .bh = 1};
++    s->w = s->sw = w; s->h = s->sh = h; s->layers = s->levels = 1;
++    s->type = VK_IMAGE_VIEW_TYPE_2D;
++    return 1;
++}
++/* an image in the game image's format, presentable as it is, and writable through its R8G8B8A8 view */
++static int pic(Pic* p, VkFormat f, u32 w, u32 h) {
++    if (p->s.img && p->s.sw == w && p->s.sh == h && p->s.f.vk == f) return 1;
++    pic_drop(p);
++    VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++        .flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT,
++        .imageType = VK_IMAGE_TYPE_2D, .format = f, .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1,
++        .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
++        .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
++                 VK_IMAGE_USAGE_TRANSFER_DST_BIT};
++    if (!vk_cache_image_create(&ii, &p->s.img, &p->s.mem, &p->s.bytes)) return 0;
++    VkImageViewUsageCreateInfo sampled = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
++                                          .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
++    VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .pNext = &sampled,
++        .image = p->s.img, .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = f,
++        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
++    if (!VK_OK(vkCreateImageView(g_vk.dev, &vi, NULL, &p->s.att)) ||
++        !(p->rgba8 = view(p->s.img, VK_FORMAT_R8G8B8A8_UNORM))) {
++        pic_drop(p);
++        return 0;
++    }
++    p->s.f = (VkFmt){.vk = f, .bpp = 4, .bw = 1, .bh = 1};
++    p->s.w = p->s.sw = w; p->s.h = p->s.sh = h; p->s.layers = p->s.levels = 1;
++    p->s.type = VK_IMAGE_VIEW_TYPE_2D;
++    return 1;
++}
++
++static int setup(void) {
++    if (g_fg.failed) return 0;
++    if (g_fg.pipe[P_INTERP]) return 1;
++    g_fg.failed = 1; /* tried once a run */
++    VkDescriptorSetLayoutBinding b[5];
++    for (u32 i = 0; i < 5; i++)
++        b[i] = (VkDescriptorSetLayoutBinding){i, i < 3 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
++                                                       : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
++                                              1, VK_SHADER_STAGE_COMPUTE_BIT, NULL};
++    VkDescriptorSetLayoutCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
++                                          .bindingCount = 5, .pBindings = b};
++    if (!VK_OK(vkCreateDescriptorSetLayout(g_vk.dev, &di, NULL, &g_fg.ds))) return 0;
++    VkPushConstantRange push = {VK_SHADER_STAGE_COMPUTE_BIT, 0, 32};
++    VkPipelineLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
++                                     .pSetLayouts = &g_fg.ds, .pushConstantRangeCount = 1, .pPushConstantRanges = &push};
++    if (!VK_OK(vkCreatePipelineLayout(g_vk.dev, &li, NULL, &g_fg.layout))) return 0;
++    VkSamplerCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO, .magFilter = VK_FILTER_NEAREST,
++        .minFilter = VK_FILTER_NEAREST, .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
++        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE};
++    if (!VK_OK(vkCreateSampler(g_vk.dev, &si, NULL, &g_fg.nearest))) return 0;
++    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
++    if (!VK_OK(vkCreateSampler(g_vk.dev, &si, NULL, &g_fg.bilinear))) return 0;
++    const u32* spv[PASSES] = {[P_LUMA] = fg_luma_spv, [P_SEARCH] = fg_search_spv, [P_MEDIAN] = fg_median_spv,
++                              [P_INTERP] = fg_interp_spv};
++    u64 size[PASSES] = {[P_LUMA] = fg_luma_spv_size, [P_SEARCH] = fg_search_spv_size,
++                        [P_MEDIAN] = fg_median_spv_size, [P_INTERP] = fg_interp_spv_size};
++    for (int i = P_LUMA; i < PASSES; i++) {
++        VkShaderModule m = vk_module_spv(spv[i], size[i] / 4);
++        if (!m) return 0;
++        VkComputePipelineCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
++            .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_COMPUTE_BIT,
++                      .module = m, .pName = "main"},
++            .layout = g_fg.layout};
++        int ok = VK_OK(vkCreateComputePipelines(g_vk.dev, vk_pipeline_cache(), 1, &ci, NULL, &g_fg.pipe[i]));
++        vkDestroyShaderModule(g_vk.dev, m, NULL);
++        if (!ok) return 0;
++    }
++    if (!scratch(&g_fg.dummy, 1, 1) || !scratch(&g_fg.dummy_w, 1, 1) || !pic(&g_fg.dummy8, VK_FORMAT_R8G8B8A8_UNORM, 1, 1))
++        return 0;
++    g_fg.failed = 0;
++    LOG("vulkan: frame generation ready: motion search and interpolation on the GPU\n");
++    return 1;
++}
++
++/* the 8-bit color formats the passes can read and write as R8G8B8A8 */
++static int usable(const Surf* src) {
++    VkFormat raw = vk_srgb_as(src->f.vk, 0);
++    return src->layers == 1 && !src->f.depth && !src->f.is_int && src->f.bw == 1 && src->f.bh == 1 &&
++           (raw == VK_FORMAT_R8G8B8A8_UNORM || raw == VK_FORMAT_B8G8R8A8_UNORM ||
++            raw == VK_FORMAT_A8B8G8R8_UNORM_PACK32);
++}
++
++/* one pass: srcA, srcB, srcC sampled (NULL: the dummy), into dst (a scratch image) or dst8 (a picture's view) */
++static int pass(VkCommandBuffer cb, int which, VkImageView a, VkImageView b, VkImageView c, VkSampler sa, Surf* dst,
++                 VkImageView dst8, u32 dw, u32 dh, const i32 extra[6]) {
++    VkDescriptorSet set = vk_desc_alloc(g_fg.ds);
++    if (!set) return 0;
++    VkDescriptorImageInfo ii[5] = {
++        {sa, a ? a : g_fg.dummy.att, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
++        {sa, b ? b : g_fg.dummy.att, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
++        {g_fg.bilinear, c ? c : g_fg.dummy.att, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
++        {VK_NULL_HANDLE, dst ? dst->att : g_fg.dummy_w.att, VK_IMAGE_LAYOUT_GENERAL},
++        {VK_NULL_HANDLE, dst8 ? dst8 : g_fg.dummy8.rgba8, VK_IMAGE_LAYOUT_GENERAL}};
++    VkWriteDescriptorSet w[5];
++    for (u32 i = 0; i < 5; i++)
++        w[i] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = i,
++            .descriptorCount = 1,
++            .descriptorType = i < 3 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
++            .pImageInfo = &ii[i]};
++    vkUpdateDescriptorSets(g_vk.dev, 5, w, 0, NULL);
++    struct { i32 dsize[2], asize[2], csize[2], radius, flags; } pc = {
++        {(i32)dw, (i32)dh}, {extra[0], extra[1]}, {extra[2], extra[3]}, extra[4], extra[5]};
++    rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_fg.pipe[which]);
++    rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_fg.layout, 0, 1, &set, 0, NULL);
++    rec_CmdPushConstants(cb, g_fg.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
++    rec_CmdDispatch(cb, (dw + 7) / 8, (dh + 7) / 8, 1);
++    return 1;
++}
++static void reads(VkCommandBuffer cb, Surf* s) {
++    if (s && s->img)
++        vk_surf_use(cb, s, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
++                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
++}
++static void writes(VkCommandBuffer cb, Surf* s) {
++    vk_surf_use(cb, s, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
++                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
++}
++static u32 half(u32 v) { return v > 1 ? (v + 1) / 2 : 1; }
++
++int vk_fg_capture(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h) {
++    if (!src || !w || !h || x > src->sw || w > src->sw - x || y > src->sh || h > src->sh - y || !usable(src) ||
++        !setup()) {
++        g_fg.have_prev = 0;
++        return 0;
++    }
++    if (g_fg.w != w || g_fg.h != h || g_fg.fmt != src->f.vk) g_fg.have_prev = 0; /* nothing to blend across */
++    int next = g_fg.cur ^ 1;
++    Pic* p = &g_fg.hist[next];
++    if (!pic(p, src->f.vk, w, h)) goto unavailable;
++    u32 lw = half(w), lh = half(h);
++    for (int l = 0; l < LEVELS; l++) {
++        lw = half(lw); lh = half(lh);
++        if (!scratch(&g_fg.lum[next][l], lw, lh) || !scratch(&g_fg.vec[l], lw, lh) || !scratch(&g_fg.med[l], lw, lh))
++            goto unavailable;
++    }
++    if (!pic(&g_fg.out, src->f.vk, w, h)) goto unavailable;
++    vk_render_end();
++    /* Resizing scratch images can submit and retire the caller's command buffer. */
++    cb = vk_cmd();
++    reads(cb, &g_fg.dummy); /* the stand-ins in the layouts their descriptors name */
++    writes(cb, &g_fg.dummy_w);
++    writes(cb, &g_fg.dummy8.s);
++    vk_surf_touch(src);
++    vk_surf_use(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
++                VK_ACCESS_2_TRANSFER_READ_BIT);
++    vk_surf_use(cb, &p->s, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
++                VK_ACCESS_2_TRANSFER_WRITE_BIT);
++    VkImageCopy copy = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffset = {(i32)x, (i32)y, 0},
++                        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .extent = {w, h, 1}};
++    rec_CmdCopyImage(cb, src->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, p->s.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++                     1, &copy);
++    /* its luma pyramid, kept for the next frame's search too */
++    VkImageView from = p->rgba8;
++    Surf* from_s = &p->s;
++    u32 fw = w, fh = h;
++    for (int l = 0; l < LEVELS; l++) {
++        Surf* d = &g_fg.lum[next][l];
++        reads(cb, from_s);
++        writes(cb, d);
++        i32 extra[6] = {(i32)fw, (i32)fh, 1, 1, 0, l == 0};
++        if (!pass(cb, P_LUMA, from, NULL, NULL, g_fg.bilinear, d, NULL, d->sw, d->sh, extra)) goto unavailable;
++        from = d->att;
++        from_s = d;
++        fw = d->sw;
++        fh = d->sh;
++    }
++    vk_render_forget_state();
++    int pair = g_fg.have_prev;
++    g_fg.cur = next;
++    g_fg.have_prev = 1;
++    g_fg.w = w;
++    g_fg.h = h;
++    g_fg.fmt = src->f.vk;
++    return pair;
++unavailable:
++    vk_render_forget_state();
++    g_fg.have_prev = 0;
++    if (!g_fg.logged) LOG("vulkan: frame generation unavailable: no memory for its images\n");
++    g_fg.logged = 1;
++    return 0;
++}
++
++Surf* vk_fg_current(void) { return g_fg.have_prev ? &g_fg.hist[g_fg.cur].s : NULL; }
++Surf* vk_fg_previous(void) { return g_fg.have_prev ? &g_fg.hist[g_fg.cur ^ 1].s : NULL; }
++
++Surf* vk_fg_interpolate(VkCommandBuffer cb) {
++    int c = g_fg.cur, p = c ^ 1;
++    if (!g_fg.have_prev || !g_fg.out.s.img) return NULL;
++    vk_render_end();
++    /* coarse to fine: the 1/16 level searches widely, the finer ones around what the coarser found, each level's
++       motion smoothed by a median before the next starts from it */
++    for (int l = LEVELS - 1; l >= 0; l--) {
++        Surf *la = &g_fg.lum[p][l], *lb = &g_fg.lum[c][l], *v = &g_fg.vec[l], *m = &g_fg.med[l];
++        Surf* coarser = l + 1 < LEVELS ? &g_fg.med[l + 1] : NULL;
++        reads(cb, la);
++        reads(cb, lb);
++        reads(cb, coarser);
++        writes(cb, v);
++        i32 extra[6] = {(i32)la->sw, (i32)la->sh, coarser ? (i32)coarser->sw : 1, coarser ? (i32)coarser->sh : 1,
++                        coarser ? 1 : 6, (coarser ? 1 : 0) | (l == 0 ? 2 : 0)};
++        if (!pass(cb, P_SEARCH, la->att, lb->att, coarser ? coarser->att : NULL, g_fg.nearest, v, NULL, v->sw, v->sh, extra)) goto unavailable;
++        reads(cb, v);
++        writes(cb, m);
++        i32 mextra[6] = {1, 1, (i32)v->sw, (i32)v->sh, 0, 0};
++        if (!pass(cb, P_MEDIAN, NULL, NULL, v->att, g_fg.nearest, m, NULL, m->sw, m->sh, mextra)) goto unavailable;
++    }
++    Pic *a = &g_fg.hist[p], *b = &g_fg.hist[c];
++    reads(cb, &a->s);
++    reads(cb, &b->s);
++    reads(cb, &g_fg.med[0]);
++    writes(cb, &g_fg.out.s);
++    {
++        i32 extra[6] = {(i32)g_fg.w, (i32)g_fg.h, (i32)g_fg.med[0].sw, (i32)g_fg.med[0].sh, 0, 0};
++        if (!pass(cb, P_INTERP, a->rgba8, b->rgba8, g_fg.med[0].att, g_fg.bilinear, NULL, g_fg.out.rgba8, g_fg.w, g_fg.h,
++             extra)) goto unavailable;
++    }
++    vk_render_forget_state();
++    if (++g_fg.made == 1 || g_fg.made % 1800 == 0)
++        LOG("vulkan: frame generation made %llu frames, latest %ux%u\n", (unsigned long long)g_fg.made, g_fg.w,
++            g_fg.h);
++    return &g_fg.out.s;
++unavailable:
++    vk_render_forget_state();
++    return NULL;
++}
++
++void vk_fg_reset(void) { g_fg.have_prev = 0; }
++
++void vk_fg_destroy(void) {
++    for (int i = 0; i < 2; i++) {
++        pic_drop(&g_fg.hist[i]);
++        for (int l = 0; l < LEVELS; l++) drop(&g_fg.lum[i][l]);
++    }
++    for (int l = 0; l < LEVELS; l++) {
++        drop(&g_fg.vec[l]);
++        drop(&g_fg.med[l]);
++    }
++    pic_drop(&g_fg.out);
++    drop(&g_fg.dummy);
++    drop(&g_fg.dummy_w);
++    pic_drop(&g_fg.dummy8);
++    for (int i = 0; i < PASSES; i++)
++        if (g_fg.pipe[i]) vkDestroyPipeline(g_vk.dev, g_fg.pipe[i], NULL);
++    if (g_fg.nearest) vkDestroySampler(g_vk.dev, g_fg.nearest, NULL);
++    if (g_fg.bilinear) vkDestroySampler(g_vk.dev, g_fg.bilinear, NULL);
++    if (g_fg.layout) vkDestroyPipelineLayout(g_vk.dev, g_fg.layout, NULL);
++    if (g_fg.ds) vkDestroyDescriptorSetLayout(g_vk.dev, g_fg.ds, NULL);
++    memset(&g_fg, 0, sizeof g_fg);
++}
+diff --git a/src/nx/gpu/vk/fg_spv.h b/src/nx/gpu/vk/fg_spv.h
+new file mode 100644
+index 0000000..457edb8
+--- /dev/null
++++ b/src/nx/gpu/vk/fg_spv.h
+@@ -0,0 +1,5 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#pragma once
++#include "common/cpu/aarch64/cpu.h"
++extern const u32 fg_luma_spv[], fg_search_spv[], fg_median_spv[], fg_interp_spv[];
++extern const u64 fg_luma_spv_size, fg_search_spv_size, fg_median_spv_size, fg_interp_spv_size;
 diff --git a/src/nx/gpu/vk/frame_policy.h b/src/nx/gpu/vk/frame_policy.h
 new file mode 100644
 index 0000000..a298fde
@@ -4353,7 +4919,7 @@ index 0000000..8ac3788
 +extern const u32 smooth_spv[];
 +extern const u64 smooth_spv_size;
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..ca80c7e 100644
+index 33f94b6..539626e 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
 @@ -16,6 +16,7 @@
@@ -4843,7 +5409,36 @@ index 33f94b6..ca80c7e 100644
  void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms) {
      *pipes = g_pipes_new;
      *hits = __atomic_load_n(&g_pipe_hits, __ATOMIC_RELAXED);
-@@ -1157,15 +1454,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
+@@ -1064,6 +1361,20 @@ static void pf_shader_record(const VkSh* s, const u32* spv, size_t nw) {
+     memcpy(&r.si, &s->si, sizeof r.si);
+     pf_shader(&g_pf.file, mod_bits(s->mod), &r, (const u32*)(const void*)s->cbr.r, spv);
+ }
++/* PortForge: a compute program, made this run from spv into mod: kept for the next run as a shader record of stage
++   ST_CS, which no pipeline record names (compute.c's vk_cs_preload makes it again) */
++void vk_pipeline_file_compute(u64 key, const ShaderInfo* si, const VkCbReads* cbr, const u32* spv, size_t nw,
++                              VkShaderModule mod) {
++    PfShader r;
++    if (!g_pf.on || nw > 0xFFFFFFFFu) return;
++    memset(&r, 0, sizeof r);
++    r.hash = key;
++    r.stage = ST_CS;
++    r.ncbr = cbr->n;
++    r.nspv = (u32)nw;
++    memcpy(&r.si, si, sizeof r.si);
++    pf_shader(&g_pf.file, mod_bits(mod), &r, (const u32*)(const void*)cbr->r, spv);
++}
+ /* a draw's pipeline, made: kept for the next run, its modules by their shaders' records (any thread) */
+ static void pf_pipe_record(const PipeKey* k) {
+     PipeKey c;
+@@ -1084,6 +1395,7 @@ static u64 pf_load_shader(void* ctx, const PfShader* r, const u32* cbr, const u3
+     VkSh* s;
+     (void)ctx;
+     if (r->si.ntex < 0 || r->si.ntex > SH_MAXTEX || vk_spirv_unavailable(spv, r->nspv)) return 0;
++    if (r->stage == ST_CS) return vk_cs_preload(r->hash, &r->si, cbr, r->ncbr, spv, r->nspv);
+     s = calloc(1, sizeof *s);
+     if (!s) return 0;
+     if (r->ncbr) {
+@@ -1157,15 +1469,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
      g_pf.npipe++;
  }
  
@@ -4864,7 +5459,7 @@ index 33f94b6..ca80c7e 100644
      u32 caps[] = {(u32)g_vk.has_divisor,
                    (u32)g_vk.has_dynamic_stride,
                    (u32)g_vk.has_shader_draw_parameters,
-@@ -1187,20 +1482,9 @@ static void pf_key(char* out, size_t n) {
+@@ -1187,20 +1497,9 @@ static void pf_key(char* out, size_t n) {
                    g_vk_buffer_image_slots,
                    d->limits.maxPerStageDescriptorStorageImages,
                    d->limits.maxDescriptorSetStorageImages};
@@ -4887,6 +5482,19 @@ index 33f94b6..ca80c7e 100644
               (unsigned long long)vk_hash(&g_vk.feat, sizeof g_vk.feat), (unsigned long long)vk_hash(caps, sizeof caps),
               (unsigned)sizeof(ShaderInfo), (unsigned)sizeof(PipeKey), (unsigned)sizeof(PfShader));
  }
+diff --git a/src/nx/gpu/vk/pipeline_file.c b/src/nx/gpu/vk/pipeline_file.c
+index 1e659d4..7b43c30 100644
+--- a/src/nx/gpu/vk/pipeline_file.c
++++ b/src/nx/gpu/vk/pipeline_file.c
+@@ -194,7 +194,7 @@ static size_t pf_read(PFile* pf, const u8* buf, size_t at, size_t size, const Pf
+             if (len < sizeof s) break;
+             memcpy(&s, p, sizeof s);
+             need = sizeof s + (u64)s.ncbr * 16 + (u64)s.nspv * 4;
+-            if (need > len || len - need >= 8 || s.stage > ST_FS || s.nspv < 5) break;
++            if (need > len || len - need >= 8 || s.stage > ST_CS || s.nspv < 5) break;
+             if (n + 1 >= cap) {
+                 u32 c = cap ? cap * 2 : 1024;
+                 u64* a = (u64*)realloc(check, c * sizeof *a);
 diff --git a/src/nx/gpu/vk/query.c b/src/nx/gpu/vk/query.c
 index 2b46a4c..7648ada 100644
 --- a/src/nx/gpu/vk/query.c
@@ -5066,7 +5674,7 @@ index 0000000..3f0bee2
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..51ba0b4 100644
+index f3ac2e2..32aa4b8 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -15,6 +15,7 @@
@@ -5077,15 +5685,70 @@ index f3ac2e2..51ba0b4 100644
  #include "nx/runtime/platform/backend.h"
  #include "nx/runtime/platform/log.h"
  #include "nx/runtime/platform/plat.h"
-@@ -22,6 +23,7 @@
+@@ -22,7 +23,62 @@
  #include "nx/memory/mem.h"
  #include "nx/memory/own.h"
  #include "nx/gpu/vk/pending_pages.h"
 +#include "nx/gpu/vk/render_scale.h"
  #include "nx/gpu/renderer.h"
++#include "nx/runtime/guest_jit.h"
++#include "nx/runtime/platform/frame_trace.h"
++#include "nx/runtime/platform/overlay.h"
++
++static PfTrace g_trace;
++const PfTrace* vk_frame_trace(void) { return &g_trace; }
++
++/* one presented frame into the graph and, with frame_trace on, the CSV beside the log */
++#define FRAME_COUNTERS 24
++static void frame_trace_add(u64 now_ns, u64 frame_ns, const u64 is[FRAME_COUNTERS], const u64 was[FRAME_COUNTERS]) {
++    static FILE* csv;
++    static int failed;
++    static u64 first_ns;
++    unsigned long long part[PF_PARTS], count[PF_COUNTS];
++    u64 ms = frame_ns / 1000000;
++    part[PF_PART_SHADERS] = is[5] - was[5];
++    part[PF_PART_PIPELINES] = is[3] - was[3];
++    part[PF_PART_COMPUTE] = is[20] - was[20];
++    part[PF_PART_TARGETS] = is[10] - was[10];
++    part[PF_PART_TEXTURES] = is[11] - was[11];
++    part[PF_PART_FILES] = is[14] - was[14];
++    part[PF_PART_GPU] = (is[15] - was[15]) + (is[16] - was[16]);
++    part[PF_PART_FINISH] = is[9] - was[9];
++    part[PF_PART_JIT] = is[21] - was[21];
++    part[PF_PART_PRESENT] = is[23] - was[23];
++    count[PF_COUNT_SHADERS] = is[4] - was[4];
++    count[PF_COUNT_PIPELINES] = is[0] - was[0];
++    count[PF_COUNT_TARGETS] = is[8] - was[8];
++    count[PF_COUNT_UPLOADS] = is[6] - was[6];
++    count[PF_COUNT_UPLOAD_KB] = (is[7] - was[7]) >> 10;
++    count[PF_COUNT_READS] = is[12] - was[12];
++    count[PF_COUNT_READ_KB] = (is[13] - was[13]) >> 10;
++    count[PF_COUNT_ALLOCS] = is[17] - was[17];
++    count[PF_COUNT_COMPUTE] = is[19] - was[19];
++    count[PF_COUNT_JIT] = is[22] - was[22];
++    int cause = pf_trace_cause(part, ms);
++    int hitch = pf_trace_add(&g_trace, (float)frame_ns / 1e6f, cause);
++    if (!g_settings.frame_time_trace || failed) return;
++    if (!csv) {
++        char path[1200];
++        snprintf(path, sizeof path, "%sframetime-trace.csv", g_statedir);
++        if (!(csv = fopen(path, "w"))) {
++            failed = 1;
++            LOG("frame trace: %s could not be written\n", path);
++            return;
++        }
++        pf_trace_csv_header(csv);
++        first_ns = now_ns;
++        LOG("frame trace: every frame's time and its causes go to %s\n", path);
++    }
++    pf_trace_csv_line(csv, g_trace.frames, (double)(now_ns - first_ns) / 1e9, (float)frame_ns / 1e6f, part, count,
++                      cause, hitch);
++    if (hitch || g_trace.frames % 60 == 0) fflush(csv);
++}
  
  static VkSemaphore g_acquired[VK_FRAMES];
-@@ -72,13 +74,18 @@ static void vkr_mapping_end(void) { vk_unlock(); }
+ /* the CPU fallback's image, and the last presented frame for screenshots */
+@@ -72,13 +128,18 @@ static void vkr_mapping_end(void) { vk_unlock(); }
  /* 0 when Vulkan can't run here */
  static int vkr_start(void) {
      if (!vk_init()) return 0;
@@ -5105,22 +5768,58 @@ index f3ac2e2..51ba0b4 100644
      vk_own_init(); /* GPU engines' results stay on the GPU where guest memory can be trapped (memory/own.c) */
      g_gpu_before_write = vkr_before_write;
      g_gpu_mapping_begin = vkr_mapping_begin;
-@@ -313,7 +320,9 @@ static void flip_src(VkImageBlit* b, u32 transform) {
+@@ -289,6 +350,7 @@ static int is_srgb(VkFormat f) {
+ }
+ 
+ static int g_sc_srgb; /* what the swapchain was asked for (the surface may not have it) */
++static u64 g_present_ns; /* time in vkQueuePresentKHR and swapchain creation, which a compositor can hold up */
+ /* the window's surface: lost while the app is in the background (Android), made anew when it comes back */
+ static u32 g_generation;
+ static int g_lost;
+@@ -307,13 +369,17 @@ static void flip_src(VkImageBlit* b, u32 transform) {
+     }
+ }
+ 
+-/* The window's image: src's g_last_ rectangle (a frame of fw x fh, flipped by transform) letterboxed on black, or
++/* Frame generation keeps a game frame's own present off the display (its copy is shown later): bookkeeping only */
++static int g_show_hidden;
++/* The window's image: src's rect (x, y, w, h: a frame of fw x fh, flipped by transform) letterboxed on black, or
+    black alone, with the on-screen controls and the game's menu over it; then the frame's commands are submitted and
+    the image presented. A game's frame (game) also moves the per-present bookkeeping, and without src shows nothing.
     Under vk_lock */
- static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+-static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
++static int show(Surf* src, const u32 rect[4], u32 fw, u32 fh, u32 transform, int game) {
      /* the size the swapchain was made for, not the extent the surface clamped it to: that can stay different */
 -    int ww, wh, srgb = src ? is_srgb(src->f.vk) : g_sc_srgb, shown = backend_window_shown();
 +    /* a game's frame the speed lock keeps off the display under a lower fps_limit is still drawn and submitted */
 +    int ww, wh, srgb = src ? is_srgb(src->f.vk) : g_sc_srgb,
-+                shown = backend_window_shown() && (!game || present_show_due());
++                shown = !g_show_hidden && backend_window_shown() && (!game || present_show_due());
      backend_window_size(&ww, &wh);
      if (shown && (g_lost || backend_window_generation() != g_generation)) {
          vk_finish();
-@@ -392,8 +401,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
-                                                    {(i32)(g_last_x + g_last_w), (i32)(g_last_y + g_last_h), 1}},
+@@ -326,9 +392,11 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+     if (shown && ww > 0 && wh > 0 &&
+         (ww != g_vk.sc_win_w || wh != g_vk.sc_win_h || srgb != g_sc_srgb ||
+          __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) != g_vk.sc_vsync)) {
++        u64 t0 = plat_ns();
+         vk_finish();
+         g_sc_srgb = srgb;
+         vk_swapchain_create(srgb);
++        g_present_ns += plat_ns() - t0;
+         tried = 1;
+     }
+     VkSemaphore wait = VK_NULL_HANDLE, signal = VK_NULL_HANDLE;
+@@ -388,12 +456,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+                 }
+                 i32 dx = (i32)(cx + (cw - dw) / 2), dy = (i32)(cy + (ch - dh) / 2);
+                 VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+-                                    .srcOffsets = {{(i32)g_last_x, (i32)g_last_y, 0},
+-                                                   {(i32)(g_last_x + g_last_w), (i32)(g_last_y + g_last_h), 1}},
++                                    .srcOffsets = {{(i32)rect[0], (i32)rect[1], 0},
++                                                   {(i32)(rect[0] + rect[2]), (i32)(rect[1] + rect[3]), 1}},
                                      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                                      .dstOffsets = {{dx, dy, 0}, {dx + (i32)dw, dy + (i32)dh, 1}}};
-+                Surf* scaled = vk_present_filters(cb, src, g_last_x, g_last_y, g_last_w, g_last_h, dw, dh);
++                Surf* scaled = vk_present_filters(cb, src, rect[0], rect[1], rect[2], rect[3], dw, dh);
 +                if (scaled) {
 +                    blit.srcOffsets[0] = (VkOffset3D){0, 0, 0};
 +                    blit.srcOffsets[1] = (VkOffset3D){(i32)scaled->sw, (i32)scaled->sh, 1};
@@ -5131,14 +5830,14 @@ index f3ac2e2..51ba0b4 100644
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
              }
              {
-@@ -411,24 +425,38 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -411,24 +484,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
 -        static u64 was[10];
 -        u64 now_ns = plat_ns(), is[10];
-+        static u64 was[19];
-+        u64 now_ns = plat_ns(), is[19];
++        static u64 was[FRAME_COUNTERS];
++        u64 now_ns = plat_ns(), is[FRAME_COUNTERS];
          vk_pipeline_stats(&is[0], &is[1], &is[2], &is[3], &is[4], &is[5]);
          vk_tex_stats(&is[6], &is[7]);
          is[8] = vk_rt_made();
@@ -5150,9 +5849,13 @@ index f3ac2e2..51ba0b4 100644
 +        is[16] = __atomic_load_n(&g_vk_cs_wait_ns, __ATOMIC_RELAXED) / 1000000;
 +        is[17] = __atomic_load_n(&g_vk.allocs, __ATOMIC_RELAXED);
 +        is[18] = __atomic_load_n(&g_vk.alloc_bytes, __ATOMIC_RELAXED) >> 20;
++        vk_cs_make_stats(&is[19], &is[20]);
++        jit_wait_stats(&is[22], &is[21]);
++        is[23] = g_present_ns / 1000000;
          if (last_present_ns) {
              u64 d = now_ns - last_present_ns;
 +            vk_frame_time_add(d);
++            frame_trace_add(now_ns, d, is, was);
              if (d > 50000000) {
                  slow_frames++;
 +#if defined(_WIN32)
@@ -5161,7 +5864,7 @@ index f3ac2e2..51ba0b4 100644
                  LOG_LIMIT(200,
                            "vulkan: a %llu ms frame: %llu shaders translated (%llu ms), %llu pipelines made (%llu ms waited "
 -                          "for), %llu render targets made, %llu texture uploads (%llu KB), %llu ms in finishes\n",
-+                          "for), %llu render targets made (%llu ms), %llu texture uploads (%llu KB, %llu ms), %llu ms in finishes, %llu file reads (%llu KB, %llu ms), %llu ms waiting for the GPU's graphics and %llu ms its compute, %llu memory allocations (%llu MB)\n",
++                          "for), %llu render targets made (%llu ms), %llu texture uploads (%llu KB, %llu ms), %llu ms in finishes, %llu file reads (%llu KB, %llu ms), %llu ms waiting for the GPU's graphics and %llu ms its compute, %llu memory allocations (%llu MB), %llu compute programs made (%llu ms), %llu ms waiting for game code to compile, %llu ms presenting\n",
                            (unsigned long long)(d / 1000000), (unsigned long long)(is[4] - was[4]),
                            (unsigned long long)(is[5] - was[5]), (unsigned long long)(is[0] - was[0]),
                            (unsigned long long)(is[3] - was[3]), (unsigned long long)(is[8] - was[8]),
@@ -5171,11 +5874,13 @@ index f3ac2e2..51ba0b4 100644
 +                          (unsigned long long)(is[9] - was[9]), (unsigned long long)(is[12] - was[12]),
 +                          (unsigned long long)((is[13] - was[13]) >> 10), (unsigned long long)(is[14] - was[14]),
 +                          (unsigned long long)(is[15] - was[15]), (unsigned long long)(is[16] - was[16]),
-+                          (unsigned long long)(is[17] - was[17]), (unsigned long long)(is[18] - was[18]));
++                          (unsigned long long)(is[17] - was[17]), (unsigned long long)(is[18] - was[18]),
++                          (unsigned long long)(is[19] - was[19]), (unsigned long long)(is[20] - was[20]),
++                          (unsigned long long)(is[21] - was[21]), (unsigned long long)(is[23] - was[23]));
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -441,6 +469,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -441,6 +534,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          vk_buf_frame();
          vk_mem_trim(0, 0);
          if (g_vk_present % 600 == 0) {
@@ -5188,7 +5893,7 @@ index f3ac2e2..51ba0b4 100644
              char cs_why[256];
              u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
              LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
-@@ -467,6 +501,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +566,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -5202,14 +5907,337 @@ index f3ac2e2..51ba0b4 100644
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -518,6 +559,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -518,8 +624,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      }
      /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
      vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
 +    if (game) vk_rec_frame_boundary(); /* ordered with the draws, even when the GPU producer runs ahead */
      if (game) vk_renderdoc_present(g_vk_present);
      vk_frame_next(); /* every show used this frame's slot and acquire semaphore, the menu's own too */
++    int displayed = 0;
      if (signal) {
+         VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                                .waitSemaphoreCount = 1,
+@@ -528,7 +636,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+                                .pSwapchains = &g_vk.swapchain,
+                                .pImageIndices = &idx};
+         vk_rec_queue(g_vk.gfx); /* the present waits on the frame's submission's semaphore */
++        u64 t0 = plat_ns();
+         VkResult r = vkQueuePresentKHR(g_vk.gfx, &pi);
++        displayed = r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR;
++        g_present_ns += plat_ns() - t0;
+         if (r == VK_ERROR_OUT_OF_DATE_KHR || (r == VK_SUBOPTIMAL_KHR && !g_vk.sc_turned))
+             recreate = 1;
+         else if (r == VK_ERROR_SURFACE_LOST_KHR)
+@@ -544,6 +655,132 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+         g_vk.sc_lost = 0;
+         g_lost = 1;
+     }
++    return displayed;
++}
++
++static u64 surf_save(Surf* s, u32 x, u32 y, u32 w, u32 h, u32 transform, const char* path);
++/* ---- frame generation (fg.c): when a game frame arrives the picture halfway between it and the one before is shown,
++   and the frame itself half a game frame later, from fg_thread. Every displayed picture then lands between two of the
++   game's, at twice its rate, half a frame behind it */
++static PMutex g_fg_lock = PMUTEX_INIT;
++static PCond g_fg_cond;
++static int g_fg_started, g_fg_pending, g_fg_active;
++static u64 g_fg_due, g_fg_last_ns, g_fg_period;
++static u32 g_fg_fw, g_fg_fh, g_fg_transform;
++static void fg_note_display(int generated) {
++    static u64 first, real, mid;
++    u64 now = plat_ns();
++    if (!first) first = now;
++    if (generated) ++mid; else ++real;
++    if (generated && mid % 300 == 0) {
++        double seconds = (double)(now - first) / 1e9;
++        LOG("vulkan: frame generation display submissions: %llu generated, %llu real over %.3f s (%.1f/s); display scanout is not measured\n",
++            (unsigned long long)mid, (unsigned long long)real, seconds, seconds > 0 ? (double)(mid + real) / seconds : 0);
++    }
++}
++/* the copy of the game's newest frame, while it waits to be shown: shown now. Under vk_lock */
++static void fg_flush(int due_only) {
++    pm_lock(&g_fg_lock);
++    /* A new game frame may have replaced the scheduled one while the timer waited for vk_lock. */
++    int pending = g_fg_pending && (!due_only || plat_ns() >= g_fg_due);
++    if (pending) g_fg_pending = 0;
++    pm_unlock(&g_fg_lock);
++    Surf* cur = vk_fg_current();
++    if (!pending || !cur) return;
++    const u32 rect[4] = {0, 0, cur->sw, cur->sh};
++    vk_render_end();
++    if (show(cur, rect, g_fg_fw, g_fg_fh, g_fg_transform, 0)) fg_note_display(0);
++}
++static void fg_thread(void* arg) {
++    (void)arg;
++    pm_lock(&g_fg_lock);
++    for (;;) {
++        u64 now = plat_ns();
++        if (!g_fg_pending)
++            pc_wait(&g_fg_cond, &g_fg_lock, -1);
++        else if (now < g_fg_due)
++            pc_wait(&g_fg_cond, &g_fg_lock, (i64)(g_fg_due - now));
++        else {
++            pm_unlock(&g_fg_lock); /* never held while taking vk_lock: the GPU thread takes them the other way */
++            vk_lock();
++            fg_flush(1);
++            vk_unlock();
++            pm_lock(&g_fg_lock);
++        }
++    }
++}
++/* src's rect shown as the game's frame, through frame generation when it is on and the game's pace is steady */
++static void present_frame(Surf* src, const u32 rect[4], u32 fw, u32 fh, u32 transform) {
++    u64 now = plat_ns(), interval = g_fg_last_ns ? now - g_fg_last_ns : 0;
++    g_fg_last_ns = now;
++    if (interval && interval < 200000000ull) g_fg_period = g_fg_period ? (g_fg_period * 7 + interval) / 8 : interval;
++    /* fg_dump also makes them headless, for tests */
++    int want = src && !overlay_shown() && __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED) &&
++               (backend_window_shown() || g_settings.frame_generation_dump[0]);
++    if (!want) {
++        if (g_fg_active) {
++            fg_flush(0);
++            vk_fg_reset();
++            g_fg_active = 0;
++        }
++        show(src, rect, fw, fh, transform, 1);
++        return;
++    }
++    if (!g_fg_started) {
++        g_fg_started = 1;
++        pc_init(&g_fg_cond);
++        if (plat_thread(fg_thread, NULL, 0)) {
++            LOG("vulkan: frame generation unavailable: its presenting thread could not start\n");
++            g_fg_started = -1;
++        }
++    }
++    if (g_fg_started < 0) {
++        show(src, rect, fw, fh, transform, 1);
++        return;
++    }
++    fg_flush(0); /* a frame sooner than half a frame after the last: its copy goes first */
++    g_fg_active = 1;
++    /* 14 to 120 game frames a second, without a hitch just now: a pace the halfway picture can fall between */
++    int steady = g_fg_period >= 8000000ull && g_fg_period <= 70000000ull && interval && interval < g_fg_period * 3 / 2;
++    int pair = vk_fg_capture(vk_cmd(), src, rect[0], rect[1], rect[2], rect[3]);
++    Surf *mid = NULL, *cur;
++    int hidden = g_show_hidden = pair && steady;
++    show(src, rect, fw, fh, transform, 1); /* the frame's own bookkeeping, and the copy submitted */
++    g_show_hidden = 0;
++    if (!hidden) return; /* shown as it is */
++    mid = vk_fg_interpolate(vk_cmd());
++    cur = vk_fg_current();
++    if (!mid) { /* its copy instead, at once */
++        if (cur) {
++            const u32 all[4] = {0, 0, cur->sw, cur->sh};
++            show(cur, all, fw, fh, transform, 0);
++        }
++        return;
++    }
++    const u32 whole[4] = {0, 0, mid->sw, mid->sh};
++    if (g_settings.frame_generation_dump[0]) { /* every 300th made: the frame before, the one made and the frame after */
++        static u64 made;
++        if (++made % 300 == 150) {
++            char path[1200];
++            Surf* prev = vk_fg_previous();
++            snprintf(path, sizeof path, "%s_%04llu_a", g_settings.frame_generation_dump, (unsigned long long)made);
++            if (prev) surf_save(prev, 0, 0, prev->sw, prev->sh, 0, path);
++            snprintf(path, sizeof path, "%s_%04llu_b", g_settings.frame_generation_dump, (unsigned long long)made);
++            surf_save(mid, 0, 0, mid->sw, mid->sh, 0, path);
++            snprintf(path, sizeof path, "%s_%04llu_c", g_settings.frame_generation_dump, (unsigned long long)made);
++            surf_save(cur, 0, 0, cur->sw, cur->sh, 0, path);
++        }
++    }
++    if (show(mid, whole, fw, fh, transform, 0)) fg_note_display(1);
++    pm_lock(&g_fg_lock);
++    g_fg_fw = fw;
++    g_fg_fh = fh;
++    g_fg_transform = transform;
++    /* Time from the submitted midpoint, not from before an expensive interpolation/driver stall. */
++    g_fg_due = plat_ns() + g_fg_period / 2;
++    g_fg_pending = 1;
++    pc_signal(&g_fg_cond);
++    pm_unlock(&g_fg_lock);
+ }
+ 
+ /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
+@@ -583,7 +820,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+         g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
+         g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
+     }
+-    show(src, x1 - x0, y1 - y0, transform, 1);
++    {
++        const u32 rect[4] = {g_last_x, g_last_y, g_last_w, g_last_h};
++        present_frame(src, rect, x1 - x0, y1 - y0, transform);
++    }
+     __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
+     vk_unlock();
+ }
+@@ -600,7 +840,10 @@ static void vkr_refresh(void) {
+     if (!vk_trylock()) return;
+     last = now;
+     vk_render_end();
+-    show(g_last, g_last_w, g_last_h, g_last_transform, 0);
++    {
++        const u32 rect[4] = {g_last_x, g_last_y, g_last_w, g_last_h};
++        show(g_last, rect, g_last_w, g_last_h, g_last_transform, 0);
++    }
+     vk_unlock();
+ }
+ 
+diff --git a/src/nx/gpu/vk/shaders/fg.comp b/src/nx/gpu/vk/shaders/fg.comp
+new file mode 100644
+index 0000000..222e867
+--- /dev/null
++++ b/src/nx/gpu/vk/shaders/fg.comp
+@@ -0,0 +1,146 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// PortForge frame generation: a picture halfway between two of the game's frames, from the frames alone. One file,
++// a pass per define:
++//   FG_LUMA    a level of the luma pyramid: half the size of srcA (the frame, or the level above)
++//   FG_SEARCH  symmetric block matching at one level: for each pixel x the half-motion h that makes the previous
++//              frame at x - h match the current one at x + h, predicted from the coarser level's (srcC)
++//   FG_MEDIAN  a 3x3 vector median of the finest motion, which removes lone wrong vectors
++//   FG_INTERP  the frame in between: both frames warped half way along the motion, blended, with a fallback to the
++//              unmoved pixels where they agree better (static parts: the game's HUD)
++#version 450
++layout(local_size_x = 8, local_size_y = 8) in;
++layout(binding = 0) uniform sampler2D srcA;
++layout(binding = 1) uniform sampler2D srcB;
++layout(binding = 2) uniform sampler2D srcC;
++layout(binding = 3, rgba16f) uniform writeonly image2D dst;
++layout(binding = 4, rgba8) uniform writeonly image2D dst8;
++layout(push_constant) uniform Push {
++    ivec2 dsize;  // the output's size
++    ivec2 asize;  // srcA's (and srcB's) size
++    ivec2 csize;  // srcC's size
++    int radius;   // FG_SEARCH: how far around the prediction to look
++    int flags;    // FG_SEARCH: 1 = srcC holds the coarser level's motion, 2 = sub-pixel refinement
++} pc;
++
++float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
++
++#if defined(FG_LUMA)
++void main() {
++    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
++    if (any(greaterThanEqual(p, pc.dsize))) return;
++    // the bilinear sampler between four texels of a twice larger level averages them
++    vec2 uv = (vec2(p) + 0.5) / vec2(pc.dsize);
++    // First level is quarter resolution: a 4x4 box avoids skipping fine texture in the motion search.
++    float l = 0.0;
++    if (pc.flags != 0) {
++        for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
++            l += luma(texture(srcA, uv + (vec2(x, y) * 2.0 - 1.0) / vec2(pc.asize)).rgb) * 0.25;
++    } else l = luma(texture(srcA, uv).rgb);
++    imageStore(dst, p, vec4(l, l, l, 1.0));
++}
++#elif defined(FG_SEARCH)
++float la(ivec2 q) { return texelFetch(srcA, clamp(q, ivec2(0), pc.asize - 1), 0).r; }
++float lb(ivec2 q) { return texelFetch(srcB, clamp(q, ivec2(0), pc.asize - 1), 0).r; }
++// A 5x5 block at quarter resolution covers 20x20 source pixels.
++float sad(ivec2 p, ivec2 h) {
++    float s = 0.0;
++    for (int y = -2; y <= 2; y++)
++        for (int x = -2; x <= 2; x++) {
++            ivec2 q = p + ivec2(x, y);
++            s += abs(la(q - h) - lb(q + h));
++        }
++    return s * (1.0 / 25.0);
++}
++// the matching cost, with a pull toward the prediction and toward no motion, which keeps the field smooth where the
++// picture is flat
++float cost(ivec2 p, ivec2 h, vec2 pred) {
++    return sad(p, h) + 0.004 * (abs(float(h.x) - pred.x) + abs(float(h.y) - pred.y)) + 0.0008 * float(abs(h.x) + abs(h.y));
++}
++vec2 coarse(ivec2 p) {
++    ivec2 c = clamp(p / 2, ivec2(0), pc.csize - 1);
++    return texelFetch(srcC, c, 0).xy * 2.0;
++}
++void main() {
++    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
++    if (any(greaterThanEqual(p, pc.dsize))) return;
++    // the best of the coarser level's motion here and at its neighbours, and no motion
++    ivec2 best = ivec2(0);
++    vec2 pred = vec2(0.0);
++    float bc = cost(p, best, pred);
++    if ((pc.flags & 1) != 0) {
++        for (int i = 0; i < 5; i++) {
++            ivec2 o = i == 0 ? ivec2(0) : i == 1 ? ivec2(-2, 0) : i == 2 ? ivec2(2, 0) : i == 3 ? ivec2(0, -2) : ivec2(0, 2);
++            vec2 c = coarse(p + o);
++            ivec2 h = ivec2(round(c));
++            float k = cost(p, h, c);
++            if (k < bc) { bc = k; best = h; pred = c; }
++        }
++    }
++    // then every motion within radius of it
++    ivec2 centre = best;
++    for (int y = -pc.radius; y <= pc.radius; y++)
++        for (int x = -pc.radius; x <= pc.radius; x++) {
++            if (x == 0 && y == 0) continue;
++            ivec2 h = centre + ivec2(x, y);
++            float k = cost(p, h, pred);
++            if (k < bc) { bc = k; best = h; }
++        }
++    vec2 v = vec2(best);
++    if ((pc.flags & 2) != 0) { // a parabola through the costs either side, per axis
++        float xm = cost(p, best - ivec2(1, 0), pred), xp = cost(p, best + ivec2(1, 0), pred);
++        float ym = cost(p, best - ivec2(0, 1), pred), yp = cost(p, best + ivec2(0, 1), pred);
++        float dx = xm - 2.0 * bc + xp, dy = ym - 2.0 * bc + yp;
++        if (dx > 1e-5) v.x += clamp(0.5 * (xm - xp) / dx, -0.5, 0.5);
++        if (dy > 1e-5) v.y += clamp(0.5 * (ym - yp) / dy, -0.5, 0.5);
++    }
++    imageStore(dst, p, vec4(v, bc, 1.0));
++}
++#elif defined(FG_MEDIAN)
++void main() {
++    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
++    if (any(greaterThanEqual(p, pc.dsize))) return;
++    vec2 v[9];
++    int n = 0;
++    for (int y = -1; y <= 1; y++)
++        for (int x = -1; x <= 1; x++) v[n++] = texelFetch(srcC, clamp(p + ivec2(x, y), ivec2(0), pc.csize - 1), 0).xy;
++    // the vector closest to all the others
++    int best = 4;
++    float bd = 1e30;
++    for (int i = 0; i < 9; i++) {
++        float d = 0.0;
++        for (int j = 0; j < 9; j++) d += length(v[i] - v[j]);
++        if (d < bd) { bd = d; best = i; }
++    }
++    imageStore(dst, p, vec4(v[best], 0.0, 1.0));
++}
++#elif defined(FG_INTERP)
++void main() {
++    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
++    if (any(greaterThanEqual(p, pc.dsize))) return;
++    vec2 size = vec2(pc.dsize), uv = (vec2(p) + 0.5) / size, field = 1.0 / vec2(pc.csize);
++    // the motion field is at half the frame's size: its half-motion in the frame's pixels is twice as long. Of the
++    // motion here and a little way round, the one whose two frames agree best: an edge between two motions takes the
++    // right one, not a blend of both
++    vec2 scale = size / vec2(pc.csize);
++    vec4 a = vec4(0.0), b = vec4(0.0);
++    float e = 1e9;
++    for (int i = 0; i < 5; i++) {
++        vec2 o = i == 0 ? vec2(0.0) : vec2(i == 1 ? -3.0 : i == 2 ? 3.0 : 0.0, i == 3 ? -3.0 : i == 4 ? 3.0 : 0.0);
++        vec2 h = texture(srcC, uv + o * field).xy * scale;
++        vec4 ca = texture(srcA, uv - h / size), cb = texture(srcB, uv + h / size);
++        vec3 d = abs(ca.rgb - cb.rgb);
++        float ce = d.r + d.g + d.b + (i == 0 ? 0.0 : 0.01);
++        if (ce < e) { e = ce; a = ca; b = cb; }
++    }
++    vec4 a0 = texelFetch(srcA, p, 0), b0 = texelFetch(srcB, p, 0);
++    vec3 d0 = abs(a0.rgb - b0.rgb);
++    float e0 = d0.r + d0.g + d0.b;
++    // Keep unchanged HUD pixels exact. Do not blend moving textures with unwarped frames: that makes two ghosts.
++    // Where correspondence is unreliable, use the current real pixel rather than inventing a smeared silhouette.
++    vec4 moved = 0.5 * (a + b);
++    float reliable = 1.0 - smoothstep(0.12, 0.36, e);
++    vec4 c = mix(b0, moved, reliable);
++    if (e0 < 0.015) c = b0;
++    imageStore(dst8, p, vec4(c.rgb, 1.0));
++}
++#endif
 diff --git a/src/nx/gpu/vk/shaders/fsr1.comp b/src/nx/gpu/vk/shaders/fsr1.comp
 new file mode 100644
 index 0000000..88e1851
@@ -5460,6 +6488,55 @@ index 6096f99..ed57f58 100644
      const VkFmt* f = &t->f;
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
+diff --git a/src/nx/gpu/vk/ui.c b/src/nx/gpu/vk/ui.c
+index e32e8bd..410ccbf 100644
+--- a/src/nx/gpu/vk/ui.c
++++ b/src/nx/gpu/vk/ui.c
+@@ -9,6 +9,8 @@
+ #include "nx/gpu/vk/ui_spv.h"
+ #include "nx/runtime/platform/log.h"
+ #include "nx/runtime/platform/overlay.h"
++#include "nx/runtime/platform/save_activity.h"
++#include "nx/runtime/platform/frame_trace.h"
+ #include "nx/runtime/platform/plat.h"
+ #include "nx/runtime/platform/vpad.h"
+ 
+@@ -253,7 +255,7 @@ static void vertex(Vertex* v, float x, float y, float u, float t, u32 rgba) {
+ }
+ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
+     SnxUiList list = {g_quads, 0, MAX_QUADS};
+-    int sw = (int)g_vk.sc_extent.width, sh = (int)g_vk.sc_extent.height, n, i, run;
++    int sw = (int)g_vk.sc_extent.width, sh = (int)g_vk.sc_extent.height, n, i, run, save_notice = 0;
+     VkImageView view;
+     Vertex* v;
+     VkBuffer buf;
+@@ -267,10 +269,26 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
+     atlas_upload(cb);
+     vpad_draw(&list, safe);
+     vpad_showcase_draw(&list, safe, vpad_showcase_fps(g_vk_present, plat_ns()));
++    if (__atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED) && !overlay_shown())
++        pf_trace_draw(vk_frame_trace(), &list, safe, sh);
+     overlay_draw(&list, sw, sh);
++    if (g_settings.save_indicator) {
++        const char* message = pf_save_message(plat_ns());
++        if (message) {
++            save_notice = 1;
++            int scale = sh >= 1440 ? 3 : sh >= 720 ? 2 : 1;
++            int width = ((int)strlen(message) * 8 + 16) * scale;
++            int height = 28 * scale, x = safe[0] + safe[2] - width - 12, y = safe[1] + safe[3] - height - 12;
++            if (x < 0) x = 0;
++            if (y < 0) y = 0;
++            ui_fill(&list, x, y, width, height, 0xE6202020u);
++            ui_text(&list, x + 8 * scale, y + 6 * scale, scale, message, 0xFFFFFFFFu);
++        }
++    }
+     ui_unlock();
+     n = list.n;
+     if (!n || !g_atlas || !pipeline_make(g_vk.sc_format) || !(view = sc_view(sc))) return;
++    if (save_notice) pf_save_presented(plat_ns());
+     v = (Vertex*)vk_stage((u64)n * 6 * sizeof(Vertex), 4, &buf, &off);
+     if (!v) return;
+     for (i = 0; i < n; ++i) {
 diff --git a/src/nx/gpu/vk/upscale.c b/src/nx/gpu/vk/upscale.c
 new file mode 100644
 index 0000000..d6d8f13
@@ -5737,7 +6814,7 @@ index 0000000..d6d8f13
 +    g_upscale.frames = 0; g_upscale.status = 0;
 +}
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..f9c5cd5 100644
+index db13c2d..6985ca5 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -74,6 +74,7 @@ typedef struct {
@@ -5748,16 +6825,18 @@ index db13c2d..f9c5cd5 100644
      /* optional features that were enabled */
      VkPhysicalDeviceFeatures feat;
      int has_divisor;      /* VK_EXT_vertex_attribute_divisor: instance divisors above 1 */
-@@ -156,6 +157,8 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
+@@ -156,6 +157,10 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
  void vk_submit_after(VkSemaphore sem, u64 wait, u64 signal);
  void vk_finish(void); /* submits and waits until the GPU has done everything, and lands every result */
  extern u64 g_vk_finishes, g_vk_finish_ns; /* statistics: vk_finish calls and their wait (the GPU thread idles) */
 +void vk_frame_time_add(u64 ns);
 +u64 vk_frame_time_p99(u32* count);
++struct PfTrace;
++const struct PfTrace* vk_frame_trace(void); /* the presented frames' times and causes (frame_trace.h), for the graph */
  void vk_frame_next(void);                 /* ends the frame (a present): the next records in the other slot */
  void vk_frame_check(void);                /* at the start of a draw or dispatch: ends a frame that has grown too big */
  /* a buffer for GPU -> host copies: record the copy into it, vk_finish(), vk_readback_ready(), then read */
-@@ -367,6 +370,7 @@ typedef struct Surf {
+@@ -367,6 +372,7 @@ typedef struct Surf {
      u64 wseq;       /* when its image last changed, counted across surfaces: of two over the same bytes, the higher
                         holds them (vk_surf_wrote) */
      u32 drawn_at;   /* render targets: g_vk_present when last drawn to */
@@ -5765,7 +6844,7 @@ index db13c2d..f9c5cd5 100644
      int in_drawn;   /* in surface.c's list of drawn targets, entered at drawn_from */
      u64 drawn_from;
      u64 draw_gw;    /* guest-memory generation at the first draw this present or since a full replacement */
-@@ -708,6 +712,7 @@ void vk_release_drain(void);
+@@ -708,6 +714,7 @@ void vk_release_drain(void);
     a game's draw in a rendering pass, vk_query_pass_end before the pass ends or a draw of the renderer's own in it
     (render.c), vk_query_flush outside a pass before a submit (cmd.c) */
  void vk_query_draw(VkCommandBuffer cb, u32 chan, u32 msaa_mode); /* msaa_mode: 3D 0x574 */
@@ -5773,7 +6852,7 @@ index db13c2d..f9c5cd5 100644
  void vk_query_pass_end(VkCommandBuffer cb);
  void vk_query_flush(VkCommandBuffer cb);
  void vk_query_reset(u32 chan);
-@@ -780,6 +785,8 @@ typedef struct VkSh {
+@@ -780,6 +787,8 @@ typedef struct VkSh {
      int failed;
      u32 clen, clen_a;
      u64 qh, qh_a;
@@ -5782,7 +6861,7 @@ index db13c2d..f9c5cd5 100644
      struct VkSh* next;
  } VkSh;
  /* the pipeline layout whose sets have no texture array bindings: compute's, and the one push constants go through
-@@ -810,6 +817,15 @@ void vk_pipeline_init(void);
+@@ -810,6 +819,15 @@ void vk_pipeline_init(void);
     rasterization's outputs (ShaderInfo.xfb), NULL for none */
  VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
                      u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb);
@@ -5798,7 +6877,7 @@ index db13c2d..f9c5cd5 100644
  typedef struct {
      VkShaderModule vs, fs;
      VkShaderModule tcs, tes, gs; /* tessellation control and evaluation, geometry: VK_NULL_HANDLE when off */
-@@ -843,15 +859,26 @@ VkPipeline vk_pipeline_get(const PipeKey* k);
+@@ -843,15 +861,34 @@ VkPipeline vk_pipeline_get(const PipeKey* k);
  /* the threads making new pipelines: setting (pipeline_threads) when it is one or more, else a quarter of cpus, two
     to six */
  int vk_pipeline_worker_count(int setting, int cpus);
@@ -5818,6 +6897,14 @@ index db13c2d..f9c5cd5 100644
  /* so far: pipelines made, how many of them the pipeline cache had, ms the workers took making them, ms the GPU thread
     waited for new ones, shaders translated, ms translating them */
  void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms);
++/* PortForge: compute programs made so far, and the milliseconds spent making them (compute.c) */
++void vk_cs_make_stats(u64* made, u64* ms);
++/* PortForge: a compute program of an earlier run (the pipeline file's reading thread): queued to be made in the
++   background; its module's handle bits, or 0 when it couldn't be made (compute.c) */
++u64 vk_cs_preload(u64 key, const ShaderInfo* si, const u32* cbr, u32 ncbr, const u32* spv, u32 nspv);
++/* PortForge: a compute program made this run, kept in the pipeline file for the next (pipeline.c) */
++void vk_pipeline_file_compute(u64 key, const ShaderInfo* si, const VkCbReads* cbr, const u32* spv, size_t nw,
++                              VkShaderModule mod);
  void vk_tex_stats(u64* uploads, u64* bytes); /* texture uploads from guest memory so far, and their bytes */
  u64 vk_rt_made(void);                         /* render targets made so far */
 +u64 vk_tex_upload_ms(void);                  /* the time spent uploading textures, in milliseconds */
@@ -5825,7 +6912,7 @@ index db13c2d..f9c5cd5 100644
  VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
-@@ -888,6 +915,12 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
+@@ -888,6 +925,20 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
     safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
  void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
  void vk_ui_swapchain_gone(void); /* its images' views go before the swapchain does */
@@ -5835,11 +6922,19 @@ index db13c2d..f9c5cd5 100644
 +Surf* vk_pixel_smooth(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h); /* edge AA alone, same size */
 +/* Pixel smoothing then FSR 1 to dw x dh, as the settings ask; NULL: present src's crop as it is. */
 +Surf* vk_present_filters(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h, u32 dw, u32 dh);
++/* fg.c, frame generation: the game's frame (src's crop) copied into the history; 1 when the frame before it is there
++   too, so vk_fg_interpolate can make the picture between them. vk_fg_current is the copy, presentable as src is */
++int vk_fg_capture(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h);
++Surf* vk_fg_interpolate(VkCommandBuffer cb);
++Surf* vk_fg_current(void);
++Surf* vk_fg_previous(void); /* the copy before it, while the history holds two */
++void vk_fg_reset(void);   /* the next frame starts a new history: a menu, a hitch or a scene the motion can't bridge */
++void vk_fg_destroy(void); /* GPU idle before this */
  void vk_render_clear(GpuChannel* ch, u32 v);
  VkViewport vk_render_viewport(const u32* r);
  int vk_render_depth_clamp(const u32* r);
 diff --git a/src/nx/hle/filesystem/fs.c b/src/nx/hle/filesystem/fs.c
-index 354a1fc..e7d0ddd 100644
+index 354a1fc..72d60bf 100644
 --- a/src/nx/hle/filesystem/fs.c
 +++ b/src/nx/hle/filesystem/fs.c
 @@ -391,9 +391,9 @@ void fs_init(void) {
@@ -5892,6 +6987,37 @@ index 354a1fc..e7d0ddd 100644
      FsNode* node = rf->node;
      i64 got = (i64)size;
      if (!node) return image_read(rf->base + rel, dst, size, 0); /* the game's image's, under the mods' */
+@@ -1183,6 +1199,15 @@ static int nn_fssrv_sf_IFile_Read(SvcObj* self, nn_fs_ReadOption option, i64 off
+     *bytes_read = (i64)n;
+     R_SUCCEED();
+ }
++#include "nx/runtime/platform/save_activity.h"
++/* Called under tree.lock: classify by nodes, so an SD-card path merely containing "save" cannot trigger the HUD. */
++static int save_node(const FsNode* node) {
++    const FsNode* kind = NULL;
++    while (node && node->parent != g_hle.fs.tree.root) { kind = node; node = node->parent; }
++    return node && kind && !strcmp(node->name, "save") &&
++        (!strcmp(kind->name, "system") || !strcmp(kind->name, "device") || !strcmp(kind->name, "user") ||
++         !strncmp(kind->name, "user.", 5));
++}
+ static int nn_fssrv_sf_IFile_Write(SvcObj* self, nn_fs_WriteOption option, i64 offset, IpcBuf buffer, i64 size) {
+     FileData* f = self->data;
+     u64 off = (u64)offset, sz = (u64)size, a = buffer.addr;
+@@ -1195,9 +1220,13 @@ static int nn_fssrv_sf_IFile_Write(SvcObj* self, nn_fs_WriteOption option, i64 o
+     if (off + sz > f->node->size && !(f->mode & 4)) R_THROW(FS_NO_APPEND);
+     R_UNLESS(!file_seek(f->f, off), FS_OUT_OF_RANGE);
+     own_acquire(a, sz); /* write() can't wait on memory the GPU holds: it lands first */
++    int saving = save_node(f->node);
++    if (saving) pf_save_begin();
+     size_t n = fwrite(GP(a), 1, (size_t)sz, f->f);
+     if (n && off + n > f->node->size) f->node->size = off + n;
+-    R_UNLESS(n == sz && !fflush(f->f), FS_NO_SPACE);
++    int ok = n == sz && !fflush(f->f);
++    if (saving) pf_save_end(plat_ns(), ok);
++    R_UNLESS(ok, FS_NO_SPACE);
+     R_SUCCEED();
+ }
+ static int nn_fssrv_sf_IFile_Flush(SvcObj* self) {
 diff --git a/src/nx/hle/filesystem/fs.h b/src/nx/hle/filesystem/fs.h
 index fd64ad4..2845a4a 100644
 --- a/src/nx/hle/filesystem/fs.h
@@ -6047,8 +7173,48 @@ index 2f956fa..23ac531 100644
      uint64_t end_ofs = ofs + total_size;
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
+diff --git a/src/nx/runtime/guest_jit.c b/src/nx/runtime/guest_jit.c
+index b259c30..e06079b 100644
+--- a/src/nx/runtime/guest_jit.c
++++ b/src/nx/runtime/guest_jit.c
+@@ -164,7 +164,21 @@ GuestFn jit_resolve_or_add(u64 pc) {
+     return snx_jit_resolve(g_jit, pc);
+ }
+ 
+-GuestFn jit_wait(u64 pc) { return g_jit ? snx_jit_wait(g_jit, pc) : NULL; }
++static u64 g_jit_waits, g_jit_wait_ns;
++GuestFn jit_wait(u64 pc) {
++    u64 start;
++    GuestFn code;
++    if (!g_jit) return NULL;
++    start = plat_ns();
++    code = snx_jit_wait(g_jit, pc);
++    __atomic_add_fetch(&g_jit_wait_ns, plat_ns() - start, __ATOMIC_RELAXED);
++    __atomic_add_fetch(&g_jit_waits, 1, __ATOMIC_RELAXED);
++    return code;
++}
++void jit_wait_stats(u64* waits, u64* ms) {
++    *waits = __atomic_load_n(&g_jit_waits, __ATOMIC_RELAXED);
++    *ms = __atomic_load_n(&g_jit_wait_ns, __ATOMIC_RELAXED) / 1000000;
++}
+ 
+ const char* jit_failure(void) { return g_jit ? "the JIT could not compile it" : g_jit_error; }
+ 
+diff --git a/src/nx/runtime/guest_jit.h b/src/nx/runtime/guest_jit.h
+index 894d8e7..00f0695 100644
+--- a/src/nx/runtime/guest_jit.h
++++ b/src/nx/runtime/guest_jit.h
+@@ -18,6 +18,8 @@ GuestFn jit_resolve(u64 pc);
+ GuestFn jit_resolve_or_add(u64 pc);
+ /* the JIT's code for pc, waiting for its compile: NULL when there is no JIT or pc can't be compiled */
+ GuestFn jit_wait(u64 pc);
++/* how many times threads waited in jit_wait, and for how long in all (ms): the frame-time trace's game code part */
++void jit_wait_stats(u64* waits, u64* ms);
+ /* why jit_wait answered NULL */
+ const char* jit_failure(void);
+ /* Code the game maps while it runs (an NRO, hle/services/ldr.c), text_size bytes of text at base out of size: the
 diff --git a/src/nx/runtime/main.c b/src/nx/runtime/main.c
-index 6a667e6..fccfbec 100644
+index 6a667e6..5ae8e43 100644
 --- a/src/nx/runtime/main.c
 +++ b/src/nx/runtime/main.c
 @@ -19,6 +19,7 @@
@@ -6059,7 +7225,13 @@ index 6a667e6..fccfbec 100644
  #include "nx/runtime/arm.h"
  #include "nx/runtime/clock.h"
  #include "nx/runtime/gdbstub.h"
-@@ -32,6 +33,7 @@
+@@ -27,11 +28,13 @@
+ #include "nx/runtime/rtapi.h"
+ #include "nx/runtime/startup.h"
+ #include "nx/runtime/platform/backend.h"
++#include "nx/runtime/platform/overlay.h"
+ #include "nx/runtime/platform/log.h"
+ #include "nx/runtime/platform/plat.h"
  #include <stdio.h>
  #include <stdlib.h>
  #include <string.h>
@@ -6067,7 +7239,7 @@ index 6a667e6..fccfbec 100644
  
  #if defined(_WIN32)
  #define MODULE_SUFFIX "_code.dll"
-@@ -339,6 +341,11 @@ static void read_npdm(void) {
+@@ -339,6 +342,11 @@ static void read_npdm(void) {
          return;
      }
      g_hle.kernel.sysres_size = rd32le(d + 0x14);
@@ -6079,7 +7251,52 @@ index 6a667e6..fccfbec 100644
      aci = rd32le(d + 0x70);
      aci_size = rd32le(d + 0x74);
      if (aci < size && aci_size >= 0x38 && aci_size <= size - aci && !memcmp(d + aci, "ACI0", 4)) {
-@@ -459,6 +466,7 @@ int snx_main(int argc, char** argv) {
+@@ -399,10 +407,30 @@ static void write_threads(u64 second) {
+     fclose(f);
+ }
+ 
++#define HITCH_NS ((u64)1500000000u) /* a frame this late while playing: what every thread is doing, for the trace */
++
++/* the threads during a hitch, appended to hitch-threads.txt, with the GPU's state: what a frame of seconds waited for */
++static void write_hitch(u64 late_ns, int frames) {
++    char path[sizeof g_statedir + 24];
++    FILE* f;
++    snprintf(path, sizeof path, "%shitch-threads.txt", g_statedir);
++    f = fopen(path, "a");
++    if (!f) return;
++    fprintf(f, "---- %.1f s into the game, no new frame for %llu ms (%d shown), window %s\n", (double)plat_ns() / 1e9,
++            (unsigned long long)(late_ns / 1000000u), frames, backend_window_shown() ? "shown" : "minimized or covered");
++    tls_log_redirect = f;
++    kernel_dump_threads();
++    gpu_report_stall();
++    tls_log_redirect = NULL;
++    fclose(f);
++    LOG("hitch: no new frame for %llu ms, every thread's state is in %s\n", (unsigned long long)(late_ns / 1000000u),
++        path);
++}
++
+ static void frontend_loop(void) {
+     const u64 period = 1000000000u / VI_REFRESH_HZ;
+     u64 tick = 0, next = plat_ns(), now, changed = next;
+-    int frames = 0, stalls = 0;
++    int frames = 0, stalls = 0, hitches = 0, hitch_seen = 0;
+     while (!g_quit) {
+         int shown;
+         video_poll();
+@@ -421,6 +449,12 @@ static void frontend_loop(void) {
+         if (shown != frames) {
+             frames = shown;
+             changed = now;
++            hitch_seen = 0;
++        } else if (frames > 0 && !hitch_seen && now - changed >= HITCH_NS && hitches < 6 && !overlay_shown()) {
++            /* once per hitch, a few a run, while the game runs unpaused by the menu */
++            hitch_seen = 1;
++            hitches++;
++            write_hitch(now - changed, frames);
+         } else if (now - changed >= STALL_NS && stalls < 4) {
+             stalls++;
+             changed = now;
+@@ -459,6 +493,7 @@ int snx_main(int argc, char** argv) {
      const SnxModule* mod;
      int status, i;
      hle_init(); /* before anything, the options included, touches g_hle */
@@ -6087,7 +7304,7 @@ index 6a667e6..fccfbec 100644
      status = snx_startup_options(argc, argv);
      if (status) return status;
      if (argc == 2 && !strcmp(argv[1], "--settings")) {
-@@ -523,6 +531,7 @@ int snx_main(int argc, char** argv) {
+@@ -523,6 +558,7 @@ int snx_main(int argc, char** argv) {
              "the update", base);
  
      fs_init(); /* the npdm is read through it, and mem_init's layout comes before */
@@ -6095,7 +7312,7 @@ index 6a667e6..fccfbec 100644
      mem_init();
      kernel_init();
      dispatch_init();
-@@ -534,7 +543,6 @@ int snx_main(int argc, char** argv) {
+@@ -534,7 +570,6 @@ int snx_main(int argc, char** argv) {
      /* after the trace, which says whether calls must go through the slots it wraps. The JIT compiles A64: a 32-bit
         game's blocks are arm.c's, and its hints are A32 block keys the JIT must not warm-compile */
      if (!g_arm_mod) jit_init();
@@ -6119,7 +7336,7 @@ index addf082..2a2d1f5 100644
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
-index a0ef76b..ddbc003 100644
+index a0ef76b..115e79f 100644
 --- a/src/nx/runtime/options.c
 +++ b/src/nx/runtime/options.c
 @@ -58,6 +58,11 @@ void options_fps_set(const IniOpt* o, const char* v) {
@@ -6134,6 +7351,96 @@ index a0ef76b..ddbc003 100644
  void fps_limit_text(int fps, char* out, size_t n) {
      if (fps == SNX_FPS_GAME)
          snprintf(out, n, "game");
+@@ -135,6 +140,53 @@ typedef struct {
+ } Override;
+ static Override g_over[OVERRIDE_MAX];
+ static int g_nover;
++/* Global settings are a launch-time layer. The per-game store is left intact, so disabling the layer restores it. */
++static Entry g_global[32];
++static int g_nglobal;
++static const char* global_of(const char* key) {
++    for (int i = 0; i < g_nglobal; ++i)
++        if (!strcmp(g_global[i].key, key)) return g_global[i].value;
++    return NULL;
++}
++static void global_load(void) {
++    static const char* const allowed[] = {"fps_limit", "resolution", "render_scale_safety", "anisotropy", "upscaler",
++        "pixel_smoothing", "shadows", "vsync", "docked", "fullscreen", "hide_cursor", "save_indicator", "speed_lock", "pipeline_threads",
++        "frametime_graph", "frame_trace", "frame_generation"};
++    const char* base = getenv("LOCALAPPDATA");
++    char path[1400], *key, *value;
++    SnxIni ini;
++    size_t size;
++    unsigned char* text;
++    int enabled = 0;
++    g_nglobal = 0;
++    for (int i = 0; i < g_nover; ++i)
++        if (!strcmp(g_over[i].key, "global_settings") && !strcmp(g_over[i].value, "0")) return;
++    /* Automated measurements keep their per-game test settings. Explicit 1 opts into testing the global layer. */
++    int force = 0, timed = 0;
++    for (int i = 0; i < g_nover; ++i) {
++        if (!strcmp(g_over[i].key, "global_settings") && !strcmp(g_over[i].value, "1")) force = 1;
++        if (!strcmp(g_over[i].key, "seconds") || !strcmp(g_over[i].key, "frames")) timed = 1;
++    }
++    if (timed && !force) return;
++    if (!base || !base[0] || snprintf(path, sizeof path, "%s/PortForge/global-settings.ini", base) >= (int)sizeof path) return;
++    text = snx_read_file(path, &size);
++    if (!text) return;
++    snx_ini_start(&ini, (char*)text);
++    while (snx_ini_next(&ini, &key, &value)) {
++        if (!strcmp(key, "global_enabled")) enabled = !strcmp(value, "1");
++        for (size_t i = 0; i < sizeof allowed / sizeof allowed[0]; ++i) {
++            if (strcmp(key, allowed[i]) || strlen(value) >= VALUE_MAX) continue;
++            int j;
++            for (j = 0; j < g_nglobal && strcmp(g_global[j].key, key); ++j) {}
++            if (j == g_nglobal) ++g_nglobal;
++            snprintf(g_global[j].key, KEY_MAX, "%s", key);
++            snprintf(g_global[j].value, VALUE_MAX, "%s", value);
++        }
++    }
++    free(text);
++    if (!enabled) g_nglobal = 0;
++    if (g_nglobal) LOG("settings: PortForge global settings applied at launch (%d keys)\n", g_nglobal);
++}
+ /* the menu's, from any thread, until a write of the file has them. g_pending_lock is a leaf: nothing is called while
+    it is held */
+ typedef struct {
+@@ -203,6 +255,8 @@ static const char* value_of(const IniOpt* o) {
+     const char* v = override_of(o->key);
+     const Entry* e;
+     if (v) return v;
++    v = global_of(o->key);
++    if (v) return v;
+     e = store_find(o->key);
+     return e ? e->value : o->def;
+ }
+@@ -224,7 +278,7 @@ void ini_override(const char* k, const char* v) {
+ void ini_set(const char* k, const char* v) {
+     size_t kn = strlen(k), vn = strlen(v);
+     int i;
+-    if (override_of(k)) return; /* this run's value, not the file's */
++    if (override_of(k) || global_of(k)) return; /* this run's value, not the file's */
+     if (kn >= KEY_MAX || vn >= PENDING_VALUE) {
+         WARN_LIMIT(1, "settings: %s's value is too long to save\n", k);
+         return;
+@@ -414,6 +468,7 @@ void ini_open(const char* path) {
+     char why[256];
+     snprintf(g_path, sizeof g_path, "%s", path);
+     ini_set_say(say_setting);
++    global_load();
+     for (i = 0; i < g_nover; i++)
+         if (!snx_setting_known(g_over[i].key)) WARN("--%s is not a setting, so it does nothing\n", g_over[i].key);
+     text = snx_read_file(g_path, &size);
+@@ -433,6 +488,9 @@ void ini_open(const char* path) {
+     n = pending_take(taken);
+     say_deprecated();
+     apply_all();
++    if (g_nglobal) LOG("settings: effective global profile: fps=%d docked=%d cursor=%d save_indicator=%d frame_generation=%d frame_trace=%d\n",
++        g_opt_fps, g_settings.tv_mode, g_settings.hide_fullscreen_cursor, g_settings.save_indicator,
++        g_settings.frame_generation, g_settings.frame_time_trace);
+     if (!write_file()) pending_written(taken, n);
+     g_started = 1;
+ }
 diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
 index 408db9e..0439f39 100644
 --- a/src/nx/runtime/options.h
@@ -6248,19 +7555,38 @@ index ac4acd5..55ab33d 100644
 +    return 0;
 +}
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
-index 87dfdc6..bc546a8 100644
+index 87dfdc6..b0c2707 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
 +++ b/src/nx/runtime/platform/backend/sdl3.c
-@@ -342,7 +342,7 @@ static const char* HELP = "Controller: A, B, X and Y where the console's are (ga
+@@ -13,6 +13,7 @@
+ #include "nx/runtime/platform/plat.h"
+ #include "nx/runtime/platform/unattended.h"
+ #include "nx/runtime/platform/overlay.h"
++#include "nx/runtime/platform/save_activity.h"
+ #include "nx/runtime/platform/fatal_screen.h"
+ #include "nx/runtime/platform/touch.h"
+ #include "nx/runtime/platform/ui.h"
+@@ -341,8 +342,9 @@ static const char* HELP = "Controller: A, B, X and Y where the console's are (ga
+                           "  X / Space = A    Z = B    C = X    V = Y\n"
                            "  Q = L   E = R   1 = ZL   3 = ZR   Enter = +   Backspace = -\n\n"
                            "F1 = this help   F2 = the game's menu   F3 = screenshot   F4 = FPS limit on / off\n"
-                           "F5 = thread dump   F6 = showcase on / off   F11 / Alt+Enter = fullscreen\n"
+-                          "F5 = thread dump   F6 = showcase on / off   F11 / Alt+Enter = fullscreen\n"
 -                          "Esc = quit";
++                          "F5 = thread dump   F6 = showcase on / off   F7 = frame-time graph\n"
++                          "F11 / Alt+Enter = fullscreen\n"
 +                          "Esc / right-click = game menu or back   Controller: Home, or hold Back/Share and press Start/Options";
  
  static PadKind gamepad_kind(int type) {
      switch (type) {
-@@ -713,7 +713,8 @@ static void hotkey(SDL_Keycode k) {
+@@ -473,6 +475,7 @@ static int fatal_at(const SnxOverlayError* panel, float x, float y) {
+     return FATAL_OUT;
+ }
+ static int fatal_screen(const char* msg) {
++    SDL_ShowCursor();
+ #ifdef __ANDROID__
+     static const char* const how = "Share log sends the game's log, which has what ran last.";
+ #else
+@@ -713,7 +716,8 @@ static void hotkey(SDL_Keycode k) {
              else if (g_opt_fps)
                  LOG("FPS limit: %d\n", g_opt_fps);
              else
@@ -6270,7 +7596,17 @@ index 87dfdc6..bc546a8 100644
              break;
          }
          case SDLK_F5: kernel_dump_threads(); break;
-@@ -731,8 +732,8 @@ static void hotkey(SDL_Keycode k) {
+@@ -727,12 +731,18 @@ static void hotkey(SDL_Keycode k) {
+                 LOG("showcase: off\n");
+             break;
+         }
++        case SDLK_F7: { /* for this run: the saved choice is the launcher's */
++            int on = !__atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED);
++            __atomic_store_n(&g_settings.frame_time_graph, on, __ATOMIC_RELAXED);
++            LOG("frame-time graph: %s\n", on ? "on" : "off");
++            break;
++        }
+         case SDLK_F11: set_fullscreen(!g_fullscreen); break;
      }
  }
  
@@ -6281,7 +7617,7 @@ index 87dfdc6..bc546a8 100644
     thread */
  /* a finger's id, the pen's apart: SDL gives a pen's touch the id 1 on every platform, the id Android and Wayland
     give a first finger and any finger may have, and no real finger's id sets bit 63 */
-@@ -740,7 +741,18 @@ static u64 finger_id(const SDL_TouchFingerEvent* f) {
+@@ -740,7 +750,18 @@ static u64 finger_id(const SDL_TouchFingerEvent* f) {
      return (u64)f->fingerID | (f->touchID == SDL_PEN_TOUCHID ? 1ull << 63 : 0);
  }
  static void menu_open(int open) {
@@ -6301,7 +7637,7 @@ index 87dfdc6..bc546a8 100644
      vpad_release();
      keys_held = 0;
      /* a finger or button down before this (Home on the on-screen controls opened it) lifts without a tap */
-@@ -757,18 +769,29 @@ static void overlay_do(int action) {
+@@ -757,18 +778,29 @@ static void overlay_do(int action) {
  static int menu_event(const SDL_Event* e) {
      int w, h;
      float d;
@@ -6336,7 +7672,7 @@ index 87dfdc6..bc546a8 100644
      if (!overlay_shown()) return 0;
      if (e->type == SDL_EVENT_KEY_DOWN) {
          switch (e->key.key) {
-@@ -780,7 +803,6 @@ static int menu_event(const SDL_Event* e) {
+@@ -780,7 +812,6 @@ static int menu_event(const SDL_Event* e) {
              case SDLK_SPACE:
                  if (!e->key.repeat) overlay_do(overlay_select());
                  break;
@@ -6344,7 +7680,28 @@ index 87dfdc6..bc546a8 100644
              case SDLK_BACKSPACE:
                  if (!e->key.repeat) overlay_do(overlay_back());
                  break;
-@@ -946,10 +968,6 @@ void video_poll(void) {
+@@ -917,11 +948,18 @@ void video_poll(void) {
+         switch (e.type) {
+             case SDL_EVENT_QUIT: g_quit = 1; break;
+             case SDL_EVENT_WINDOW_MINIMIZED:
+-            case SDL_EVENT_WINDOW_OCCLUDED: __atomic_store_n(&g_minimized, 1, __ATOMIC_RELEASE); break;
++            case SDL_EVENT_WINDOW_OCCLUDED:
++                /* the frame-time trace and a hitch report tell a covered window from a slow game by these lines */
++                if (!__atomic_exchange_n(&g_minimized, 1, __ATOMIC_ACQ_REL))
++                    LOG("window: %s, presenting stops\n", e.type == SDL_EVENT_WINDOW_MINIMIZED ? "minimized" : "covered");
++                break;
+             case SDL_EVENT_WINDOW_RESTORED:
+             case SDL_EVENT_WINDOW_MAXIMIZED:
+             case SDL_EVENT_WINDOW_EXPOSED:
+-            case SDL_EVENT_WINDOW_SHOWN: __atomic_store_n(&g_minimized, 0, __ATOMIC_RELEASE); break;
++            case SDL_EVENT_WINDOW_SHOWN:
++                if (__atomic_exchange_n(&g_minimized, 0, __ATOMIC_ACQ_REL)) LOG("window: shown again\n");
++                break;
++            case SDL_EVENT_WINDOW_FOCUS_GAINED: LOG("window: focus back\n"); break;
+             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                 if (e.window.windowID == SDL_GetWindowID(g_win)) wsize_set(e.window.data1, e.window.data2);
+                 wsafe_set();
+@@ -946,10 +984,6 @@ void video_poll(void) {
                  wsafe_set();
                  break;
              case SDL_EVENT_KEY_DOWN:
@@ -6355,6 +7712,211 @@ index 87dfdc6..bc546a8 100644
                  if (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT)) {
                      if (!e.key.repeat) set_fullscreen(!g_fullscreen);
                      break;
+@@ -962,6 +996,7 @@ void video_poll(void) {
+                 break;
+             case SDL_EVENT_KEY_UP: keys_held &= ~keymap(e.key.scancode); break;
+             case SDL_EVENT_WINDOW_FOCUS_LOST:
++                LOG("window: focus lost\n");
+                 keys_held = 0;
+                 ui_lock();
+                 vpad_release();
+@@ -1094,9 +1129,17 @@ void video_poll(void) {
+ 
+ void frontend_frame(void) {
+     char p[1200];
++    if (g_win && !g_opt_headless) {
++        int hidden = pf_hide_cursor(g_settings.hide_fullscreen_cursor, g_fullscreen,
++            SDL_GetKeyboardFocus() == g_win, overlay_shown() || vpad_editing() || g_given_up,
++            (SDL_GetModState() & SDL_KMOD_GUI) != 0);
++        if (hidden && SDL_CursorVisible()) SDL_HideCursor();
++        else if (!hidden && !SDL_CursorVisible()) SDL_ShowCursor();
++    }
+     /* the controls and the menu stay on the window while the game shows nothing new */
+     if (g_renderer->refresh &&
+-        (overlay_shown() || vpad_shown() || __atomic_load_n(&g_settings.showcase, __ATOMIC_RELAXED)))
++        (overlay_shown() || vpad_shown() || (g_settings.save_indicator && pf_save_message(plat_ns())) ||
++         __atomic_load_n(&g_settings.showcase, __ATOMIC_RELAXED)))
+         g_renderer->refresh();
+     if (g_shot_req) {
+         g_shot_req = 0;
+diff --git a/src/nx/runtime/platform/frame_trace.c b/src/nx/runtime/platform/frame_trace.c
+new file mode 100644
+index 0000000..b5c0c8c
+--- /dev/null
++++ b/src/nx/runtime/platform/frame_trace.c
+@@ -0,0 +1,114 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#include "nx/runtime/platform/frame_trace.h"
++#include <stdlib.h>
++#include <string.h>
++
++static const char* const CAUSES[PF_PARTS + 1] = {"shader translation", "pipeline builds", "compute program builds",
++                                                  "render target creation", "texture uploads", "game file reads",
++                                                  "waiting for the GPU", "GPU finishes", "game code compiling",
++                                                  "presenting to the display", "game or unmeasured work"};
++static const char* const COLUMNS[PF_PARTS] = {"shaders_ms", "pipeline_wait_ms", "compute_build_ms", "render_target_ms",
++                                              "texture_upload_ms", "file_read_ms", "gpu_wait_ms", "gpu_finish_ms",
++                                              "jit_wait_ms", "present_ms"};
++static const char* const COUNTS[PF_COUNTS] = {"shaders", "pipelines", "render_targets", "uploads", "upload_kb",
++                                              "file_reads", "read_kb", "allocations", "compute_programs", "jit_waits"};
++
++const char* pf_trace_cause_name(int cause) { return cause >= 0 && cause <= PF_PARTS ? CAUSES[cause] : CAUSES[PF_PARTS]; }
++
++int pf_trace_cause(const unsigned long long part_ms[PF_PARTS], unsigned long long frame_ms) {
++    int best = PF_CAUSE_GAME, i;
++    unsigned long long most = 0;
++    for (i = 0; i < PF_PARTS; ++i)
++        if (part_ms[i] > most) {
++            most = part_ms[i];
++            best = i;
++        }
++    /* parts run on several threads and can overlap: one names the frame only when it is a real share of it */
++    return most >= 4 && most * 4 >= frame_ms ? best : PF_CAUSE_GAME;
++}
++
++static int compare_ms(const void* a, const void* b) {
++    float x = *(const float*)a, y = *(const float*)b;
++    return x < y ? -1 : x > y;
++}
++
++float pf_trace_typical(const PfTrace* t) {
++    float sorted[PF_TRACE_FRAMES];
++    if (!t->count) return 0;
++    memcpy(sorted, t->ms, sizeof sorted);
++    qsort(sorted, t->count == PF_TRACE_FRAMES ? PF_TRACE_FRAMES : t->count, sizeof *sorted, compare_ms);
++    /* before the ring fills its first slots hold the frames, in order from 0 */
++    return sorted[t->count / 2];
++}
++
++int pf_trace_is_hitch(const PfTrace* t, float frame_ms) {
++    if (t->count < 30) return frame_ms >= 50.0f;
++    return frame_ms >= 25.0f && frame_ms >= 2.0f * pf_trace_typical(t);
++}
++
++int pf_trace_add(PfTrace* t, float frame_ms, int cause) {
++    int hitch = pf_trace_is_hitch(t, frame_ms);
++    t->ms[t->at] = frame_ms;
++    t->cause[t->at] = (unsigned char)cause;
++    t->hitch[t->at] = (unsigned char)hitch;
++    t->at = (t->at + 1) % PF_TRACE_FRAMES;
++    if (t->count < PF_TRACE_FRAMES) t->count++;
++    t->frames++;
++    if (hitch) {
++        t->hitches++;
++        t->last_hitch_ms = frame_ms;
++        t->last_hitch_cause = cause;
++    }
++    return hitch;
++}
++
++void pf_trace_csv_header(FILE* f) {
++    int i;
++    fputs("frame,time_s,frame_ms,hitch,cause", f);
++    for (i = 0; i < PF_PARTS; ++i) fprintf(f, ",%s", COLUMNS[i]);
++    for (i = 0; i < PF_COUNTS; ++i) fprintf(f, ",%s", COUNTS[i]);
++    fputc('\n', f);
++}
++
++void pf_trace_csv_line(FILE* f, unsigned long long frame, double seconds, float frame_ms,
++                       const unsigned long long part_ms[PF_PARTS], const unsigned long long counts[PF_COUNTS], int cause,
++                       int hitch) {
++    int i;
++    fprintf(f, "%llu,%.3f,%.2f,%d,%s", frame, seconds, (double)frame_ms, hitch, pf_trace_cause_name(cause));
++    for (i = 0; i < PF_PARTS; ++i) fprintf(f, ",%llu", part_ms[i]);
++    for (i = 0; i < PF_COUNTS; ++i) fprintf(f, ",%llu", counts[i]);
++    fputc('\n', f);
++}
++
++#define RGBA(r, g, b, a) ((unsigned)(r) | (unsigned)(g) << 8 | (unsigned)(b) << 16 | (unsigned)(a) << 24)
++
++void pf_trace_draw(const PfTrace* t, SnxUiList* l, const int safe[4], int sh) {
++    const float range_ms = 100.0f;
++    int s = sh >= 1440 ? 2 : 1, i;
++    float bar = 2.0f * (float)s, height = 90.0f * (float)s, line = 16.0f * (float)s, pad = 4.0f * (float)s;
++    float x0 = (float)safe[0] + 12.0f, y0 = (float)safe[1] + 12.0f;
++    float w = bar * PF_TRACE_FRAMES + 2 * pad, h = height + 2 * line + 3 * pad, base = y0 + line + pad + height;
++    float typical = pf_trace_typical(t);
++    char text[96];
++    ui_fill(l, x0, y0, w, h, RGBA(16, 16, 16, 200));
++    snprintf(text, sizeof text, "FRAME TIME  typical %.1f ms  hitches %llu", (double)typical, t->hitches);
++    ui_text(l, x0 + pad, y0 + pad / 2, s, text, RGBA(255, 255, 255, 255));
++    /* the 60 and 30 FPS frame times */
++    ui_fill(l, x0 + pad, base - height * (16.7f / range_ms), bar * PF_TRACE_FRAMES, (float)s, RGBA(90, 90, 90, 255));
++    ui_fill(l, x0 + pad, base - height * (33.3f / range_ms), bar * PF_TRACE_FRAMES, (float)s, RGBA(90, 90, 90, 255));
++    for (i = 0; i < (int)t->count; ++i) {
++        unsigned k = (t->at + PF_TRACE_FRAMES - t->count + (unsigned)i) % PF_TRACE_FRAMES;
++        float ms = t->ms[k], bh = height * (ms > range_ms ? 1.0f : ms / range_ms);
++        unsigned color = t->hitch[k]                                ? RGBA(255, 48, 48, 255)
++                         : typical > 0 && ms > 1.5f * typical ? RGBA(255, 208, 32, 255)
++                                                              : RGBA(64, 208, 96, 255);
++        if (bh < 1) bh = 1;
++        ui_fill(l, x0 + pad + bar * (float)(i + PF_TRACE_FRAMES - (int)t->count), base - bh, bar, bh, color);
++    }
++    if (t->hitches)
++        snprintf(text, sizeof text, "last hitch %.0f ms: %s", (double)t->last_hitch_ms,
++                 pf_trace_cause_name(t->last_hitch_cause));
++    else
++        snprintf(text, sizeof text, "no hitches yet");
++    ui_text(l, x0 + pad, base + pad, s, text, RGBA(200, 200, 200, 255));
++}
+diff --git a/src/nx/runtime/platform/frame_trace.h b/src/nx/runtime/platform/frame_trace.h
+new file mode 100644
+index 0000000..6e27f90
+--- /dev/null
++++ b/src/nx/runtime/platform/frame_trace.h
+@@ -0,0 +1,52 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++/* The frame-time trace: every presented frame's time and what the engine spent it on, kept for the in-game graph and
++   written as CSV for the launcher. A frame's cause is the largest measured part when it explains a real share of the
++   frame; otherwise the time went to the game's own CPU work, the GPU thread or something not yet measured */
++#ifndef PF_FRAME_TRACE_H
++#define PF_FRAME_TRACE_H
++#include <stdio.h>
++#include "nx/runtime/platform/ui.h"
++
++enum {
++    PF_PART_SHADERS,   /* shader translation */
++    PF_PART_PIPELINES, /* waits for graphics pipelines */
++    PF_PART_COMPUTE,   /* compute program builds */
++    PF_PART_TARGETS,   /* render target creation */
++    PF_PART_TEXTURES,  /* texture uploads */
++    PF_PART_FILES,     /* game file reads */
++    PF_PART_GPU,       /* waits for the GPU's graphics or compute queue */
++    PF_PART_FINISH,    /* full GPU finishes */
++    PF_PART_JIT,       /* game code compiled while a thread waited */
++    PF_PART_PRESENT,   /* handing frames to the display, and making its swapchain */
++    PF_PARTS
++};
++#define PF_CAUSE_GAME   PF_PARTS /* none of the parts: the game's own work, or a wait not measured */
++#define PF_TRACE_FRAMES 240
++/* counts beside the times, for the CSV */
++enum { PF_COUNT_SHADERS, PF_COUNT_PIPELINES, PF_COUNT_TARGETS, PF_COUNT_UPLOADS, PF_COUNT_UPLOAD_KB, PF_COUNT_READS,
++       PF_COUNT_READ_KB, PF_COUNT_ALLOCS, PF_COUNT_COMPUTE, PF_COUNT_JIT, PF_COUNTS };
++
++typedef struct PfTrace {
++    float ms[PF_TRACE_FRAMES];
++    unsigned char cause[PF_TRACE_FRAMES], hitch[PF_TRACE_FRAMES];
++    unsigned at, count; /* the next slot, and how many hold a frame */
++    unsigned long long frames, hitches;
++    float last_hitch_ms;
++    int last_hitch_cause;
++} PfTrace;
++
++const char* pf_trace_cause_name(int cause);
++int pf_trace_cause(const unsigned long long part_ms[PF_PARTS], unsigned long long frame_ms);
++/* the median of the frames kept, 0 with none */
++float pf_trace_typical(const PfTrace* t);
++/* a hitch: at least 25 ms and twice the typical frame (50 ms while fewer than 30 frames are known) */
++int pf_trace_is_hitch(const PfTrace* t, float frame_ms);
++/* adds a frame; 1 when it was a hitch */
++int pf_trace_add(PfTrace* t, float frame_ms, int cause);
++void pf_trace_csv_header(FILE* f);
++void pf_trace_csv_line(FILE* f, unsigned long long frame, double seconds, float frame_ms,
++                       const unsigned long long part_ms[PF_PARTS], const unsigned long long counts[PF_COUNTS], int cause,
++                       int hitch);
++/* the graph in the top left of the safe area of a picture sh pixels tall */
++void pf_trace_draw(const PfTrace* t, SnxUiList* l, const int safe[4], int sh);
++#endif
 diff --git a/src/nx/runtime/platform/gamepad.h b/src/nx/runtime/platform/gamepad.h
 index 0821ef7..c440b93 100644
 --- a/src/nx/runtime/platform/gamepad.h
@@ -6376,10 +7938,51 @@ index 0821ef7..c440b93 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2..24adebc 100644
+index 441a8c2..be67e7a 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
-@@ -481,24 +481,30 @@ int overlay_pad(u64 button) {
+@@ -14,7 +14,7 @@
+ 
+ enum { FIRST = 3, VISIBLE = OVERLAY_ROWS - FIRST - 1 }; /* the items' first row, and how many show at once */
+ enum { PAGE_MAIN, PAGE_CONTROLS, PAGE_BUTTONS, PAGE_PADS, PAGE_MAP };
+-enum { M_CONTROLS, M_PADS, M_EXIT, M_COUNT };                                          /* the first page's items */
++enum { M_CONTROLS, M_PADS, M_GRAPH, M_FRAMEGEN, M_EXIT, M_COUNT }; /* the first page's items */
+ enum { P_PLAYER, P_SWAP, P_DEADZONE, P_RUMBLE, P_BACKGROUND, P_MAP, P_BACK, P_COUNT }; /* the gamepads' page's */
+ /* the controls page's items */
+ enum {
+@@ -110,9 +110,14 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
+         return;
+     }
+     if (page == PAGE_MAIN) {
+-        static const char* const main_items[M_COUNT] = {SNX_VPAD_PAGE, SNX_GAMEPAD_PAGE, "Exit"};
++        static const char* const main_items[M_COUNT] = {SNX_VPAD_PAGE, SNX_GAMEPAD_PAGE, "Frame-time graph", "Frame generation (experimental)", "Exit"};
+         snprintf(text, size, "%s", main_items[i]);
+-        if (i != M_EXIT) snprintf(value, vsize, ">");
++        if (i == M_GRAPH)
++            snprintf(value, vsize, "%s", __atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED) ? "On" : "Off");
++        else if (i == M_FRAMEGEN)
++            snprintf(value, vsize, "%s", __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED) ? "On" : "Off");
++        else if (i != M_EXIT)
++            snprintf(value, vsize, ">");
+         return;
+     }
+     if (page == PAGE_BUTTONS) {
+@@ -259,6 +264,14 @@ static int act(int i, int step) {
+         return OVERLAY_NONE;
+     }
+     if (page == PAGE_MAIN) {
++        if (i == M_GRAPH) { /* for this run, as F7: the saved choice is the launcher's */
++            __atomic_store_n(&g_settings.frame_time_graph, !g_settings.frame_time_graph, __ATOMIC_RELAXED);
++            return OVERLAY_NONE;
++        }
++        if (i == M_FRAMEGEN) {
++            __atomic_store_n(&g_settings.frame_generation, !g_settings.frame_generation, __ATOMIC_RELAXED);
++            return OVERLAY_NONE;
++        }
+         if (step) return OVERLAY_NONE;
+         if (i == M_EXIT) return OVERLAY_EXIT;
+         page_open(i == M_PADS ? PAGE_PADS : PAGE_CONTROLS);
+@@ -481,24 +494,30 @@ int overlay_pad(u64 button) {
      return OVERLAY_NONE;
  }
  int overlay_controls(u64 buttons, const i32 sticks[4], u64 ms) {
@@ -6417,7 +8020,7 @@ index 441a8c2..24adebc 100644
      for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
          if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
      return did;
-@@ -523,7 +529,7 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
+@@ -523,7 +542,7 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
                          size_t size) {
      static const char* const titles[] = {"SCARLETNX  /  MENU", "SCARLETNX  /  CONTROLS", "SCARLETNX  /  BUTTONS",
                                           "SCARLETNX  /  CONTROLLERS"};
@@ -6696,6 +8299,61 @@ index ebfd9c6..dc8cc1f 100644
          return;
      }
      SetThreadPriority(h, THREAD_PRIORITY_HIGHEST);
+diff --git a/src/nx/runtime/platform/save_activity.c b/src/nx/runtime/platform/save_activity.c
+new file mode 100644
+index 0000000..f09695e
+--- /dev/null
++++ b/src/nx/runtime/platform/save_activity.c
+@@ -0,0 +1,29 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#include "nx/runtime/platform/save_activity.h"
++#include <stddef.h>
++static unsigned active;
++static int pending, pending_error;
++static uint64_t recent_until, error_until;
++void pf_save_begin(void) { __atomic_add_fetch(&active, 1, __ATOMIC_ACQ_REL); }
++void pf_save_end(uint64_t now, int success) {
++    /* Filesystem calls serialize on tree.lock. Error remains visible across subsequent successful chunks. */
++    __atomic_store_n(&recent_until, now + 1200000000ull, __ATOMIC_RELEASE);
++    if (!success) {
++        __atomic_store_n(&error_until, now + 6000000000ull, __ATOMIC_RELEASE);
++        __atomic_store_n(&pending_error, 1, __ATOMIC_RELEASE);
++    }
++    __atomic_store_n(&pending, 1, __ATOMIC_RELEASE);
++    __atomic_sub_fetch(&active, 1, __ATOMIC_ACQ_REL);
++}
++const char* pf_save_message(uint64_t now) {
++    if (__atomic_load_n(&pending_error, __ATOMIC_ACQUIRE) || now < __atomic_load_n(&error_until, __ATOMIC_ACQUIRE)) return "Save write failed";
++    if (__atomic_load_n(&pending, __ATOMIC_ACQUIRE) || __atomic_load_n(&active, __ATOMIC_ACQUIRE) || now < __atomic_load_n(&recent_until, __ATOMIC_ACQUIRE))
++        return "Saving...";
++    return NULL;
++}
++void pf_save_presented(uint64_t now) {
++    if (__atomic_exchange_n(&pending, 0, __ATOMIC_ACQ_REL))
++        __atomic_store_n(&recent_until, now + 1200000000ull, __ATOMIC_RELEASE);
++    if (__atomic_exchange_n(&pending_error, 0, __ATOMIC_ACQ_REL))
++        __atomic_store_n(&error_until, now + 6000000000ull, __ATOMIC_RELEASE);
++}
+diff --git a/src/nx/runtime/platform/save_activity.h b/src/nx/runtime/platform/save_activity.h
+new file mode 100644
+index 0000000..2d0dad9
+--- /dev/null
++++ b/src/nx/runtime/platform/save_activity.h
+@@ -0,0 +1,14 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#ifndef PF_SAVE_ACTIVITY_H
++#define PF_SAVE_ACTIVITY_H
++#include <stdint.h>
++/* File activity, never a claim that the game created a checkpoint. Times are monotonic nanoseconds. */
++void pf_save_begin(void);
++void pf_save_end(uint64_t now, int success);
++const char* pf_save_message(uint64_t now);
++/* A frame has drawn the notice: keep short writes visible even if loading blocked presentation. */
++void pf_save_presented(uint64_t now);
++static inline int pf_hide_cursor(int enabled, int fullscreen, int focused, int menu, int system_key) {
++    return enabled && fullscreen && focused && !menu && !system_key;
++}
++#endif
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
 index 2bd6181..b587bf4 100644
 --- a/src/nx/runtime/present.c
@@ -6772,13 +8430,57 @@ index 2bd6181..b587bf4 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..0a6af92 100644
+index be57ac5..d1bd986 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -80,13 +80,44 @@ setting Game mods off
+@@ -80,13 +80,88 @@ setting Game mods off
      help order. The launcher's list of updates, DLCs and mods writes it. A mod's exefs/ is recompiled into the game
  
  table g_display_ini
++setting Global settings
++    key global_settings
++    int 0 1
++    default 1
++    startup
++    help Use the PortForge settings saved for all games. --global_settings=0 bypasses them for one run.
++setting Hide fullscreen cursor
++    key hide_cursor
++    int 0 1
++    default 1
++    startup
++    help Hide the pointer during focused fullscreen play; show it for menus and when focus leaves the game.
++setting Save indicator
++    key save_indicator
++    int 0 1
++    default 1
++    startup
++    help Show Saving... while the game writes save data. This does not create a save point or save state.
++setting Frame-time graph
++    key frametime_graph
++    int 0 1
++    default 0
++    words Off|On
++    help Draw each frame's time over the game, hitches in red with what the engine spent them on. F7 turns it on and off.
++setting Frame generation
++    key frame_generation
++    int 0 1
++    default 0
++    words Off|On
++    help Show a generated picture between each two of the game's frames: twice the frames on the display, half a frame
++    help later. The game itself runs and reacts at its own pace. Needs a display at least twice as fast as the game.
++setting Frame generation dump
++    key fg_dump
++    text 1024
++    startup
++    help Tests: the path prefix for every 300th generated picture, saved as .ppm with the game frames before and after
++    help it (_a, _b, _c). Frame generation then also runs headless.
++setting Frame-time trace
++    key frame_trace
++    int 0 1
++    default 0
++    startup
++    words Off|On
++    help Write every frame's time and its causes to frametime-trace.csv beside the game's log.
 +setting Protect game graphics
 +    key render_scale_safety
 +    int 0 1
@@ -6821,7 +8523,7 @@ index be57ac5..0a6af92 100644
  setting Fullscreen
      key fullscreen
      int 0 1
-@@ -166,7 +197,17 @@ setting FPS limit
+@@ -166,7 +241,17 @@ setting FPS limit
      default game
      set options_fps_set
      help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
@@ -6840,7 +8542,7 @@ index be57ac5..0a6af92 100644
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -188,8 +229,35 @@ setting Pipeline threads
+@@ -188,8 +273,35 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -6878,7 +8580,7 @@ index be57ac5..0a6af92 100644
      key jit_threads
      int 0 8
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 64bdd9b..e493dd1 100644
+index 64bdd9b..8900efb 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -64,7 +64,11 @@ endif()
@@ -6894,7 +8596,17 @@ index 64bdd9b..e493dd1 100644
      set(snx_test_x86 ON)
  else()
      set(snx_test_x86 OFF)
-@@ -644,6 +648,12 @@ add_test(NAME vi_service COMMAND snx-test-vi-service)
+@@ -312,7 +316,8 @@ if(TARGET hactool_internals)
+     target_compile_options(snx-test-fs-service PRIVATE -Wno-unused-parameter)
+     snx_swipc(snx-test-fs-service ROOT "${PROJECT_SOURCE_DIR}/src/nx" FILES hle/services/types.swipc hle/filesystem/fs.swipc)
+     # fs.c reads a game's dump in place through the driver's container.c and hactool
+-    target_sources(snx-test-fs-service PRIVATE "${PROJECT_SOURCE_DIR}/src/nx/runtime/driver/container.c")
++    target_sources(snx-test-fs-service PRIVATE "${PROJECT_SOURCE_DIR}/src/nx/runtime/driver/container.c"
++        "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/save_activity.c")
+     target_link_libraries(snx-test-fs-service PRIVATE scarletnx-common hactool_internals)
+     add_test(NAME filesystem_raw COMMAND snx-test-fs-fixture $<TARGET_FILE:snx-test-fs-service> raw)
+     add_test(NAME filesystem_addon_overlay COMMAND snx-test-fs-fixture $<TARGET_FILE:snx-test-fs-service> addon-overlay)
+@@ -644,6 +649,12 @@ add_test(NAME vi_service COMMAND snx-test-vi-service)
  add_executable(snx-test-runtime-present runtime_present.c)
  snx_test_target(snx-test-runtime-present 11)
  add_test(NAME runtime_present COMMAND snx-test-runtime-present)
@@ -6907,7 +8619,7 @@ index 64bdd9b..e493dd1 100644
  
  # nvdrv's IPC side (nvdrv.c), with the GPU and host1x stand-ins in the test
  add_executable(snx-test-nvdrv-service nvdrv_service.c)
-@@ -653,6 +663,10 @@ add_test(NAME nvdrv_service COMMAND snx-test-nvdrv-service)
+@@ -653,6 +664,10 @@ add_test(NAME nvdrv_service COMMAND snx-test-nvdrv-service)
  
  # ipc.c's parsing and replies (hle/kernel/ipc.c, included by the test) with raw HIPC messages laid out as libnx
  # writes them, a test service, and the kernel's handles and objects stubbed
@@ -6918,7 +8630,23 @@ index 64bdd9b..e493dd1 100644
  add_executable(snx-test-ipc-message ipc_message.c)
  snx_test_target(snx-test-ipc-message 23)
  add_test(NAME ipc_message COMMAND snx-test-ipc-message)
-@@ -1321,7 +1335,7 @@ add_test(NAME draw_texture COMMAND snx-test-draw-texture)
+@@ -671,6 +686,15 @@ target_link_libraries(snx-test-overlay PRIVATE scarletnx-common snx_splash m)
+ include("${PROJECT_SOURCE_DIR}/cmake/gui_themes.cmake")
+ target_include_directories(snx-test-overlay PRIVATE "${CMAKE_BINARY_DIR}/generated")
+ add_test(NAME overlay COMMAND snx-test-overlay)
++add_executable(snx-test-save-activity save_activity.c "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/save_activity.c")
++snx_test_target(snx-test-save-activity 11)
++add_test(NAME save_activity COMMAND snx-test-save-activity)
++add_executable(snx-test-frame-trace frame_trace.c "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/frame_trace.c"
++    "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/ui.c")
++snx_test_target(snx-test-frame-trace 11)
++target_link_libraries(snx-test-frame-trace PRIVATE scarletnx-common snx_splash m)
++target_include_directories(snx-test-frame-trace PRIVATE "${CMAKE_BINARY_DIR}/generated")
++add_test(NAME frame_trace COMMAND snx-test-frame-trace)
+ 
+ add_executable(snx-test-vpad vpad.c "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/vpad.c"
+     "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/ui.c" "${PROJECT_SOURCE_DIR}/src/nx/runtime/ini.c")
+@@ -1321,7 +1345,7 @@ add_test(NAME draw_texture COMMAND snx-test-draw-texture)
  
  # gpu.c's queue over the real puller, 3D engine and macros: a channel waiting on a semaphore, a syncpoint, a fence or
  # inside a macro lets the others run, and goes on where it stopped (its platform stand-ins are pthreads)
@@ -6940,7 +8668,7 @@ index fda0dea..488b8dd 100644
  void vk_gpuprof_frame_done(u32 slot) { (void)slot; }
  /* cmd.c's waits note themselves for gpu.c's stall report, which isn't here */
 diff --git a/tests/filesystem_service.c b/tests/filesystem_service.c
-index 32905ef..4e39a04 100644
+index 32905ef..cf57f70 100644
 --- a/tests/filesystem_service.c
 +++ b/tests/filesystem_service.c
 @@ -33,6 +33,9 @@ static char test_fatal_text[1024];
@@ -6953,6 +8681,26 @@ index 32905ef..4e39a04 100644
  static void test_fail(const char* expression, int line) {
      fprintf(stderr, "filesystem_service.c:%d: check failed: %s\n", line, expression);
      exit(1);
+@@ -1659,6 +1662,19 @@ int kobj_never_signaled(KObj* o) {
+ 
+ int main(int argc, char** argv) {
+     hle_init();
++    {
++        FsNode root = {0}, save = {.name="save", .parent=&root}, user = {.name="user.123", .parent=&save};
++        FsNode file = {.name="progress", .parent=&user}, cache = {.name="cache", .parent=&save};
++        FsNode sd = {.name="sdmc", .parent=&root}, fake = {.name="save", .parent=&sd};
++        FsNode* before = g_hle.fs.tree.root;
++        g_hle.fs.tree.root = &root;
++        CHECK(save_node(&file));
++        CHECK(save_node(&user));
++        CHECK(!save_node(&cache));
++        CHECK(!save_node(&fake));
++        CHECK(!save_node(&root));
++        g_hle.fs.tree.root = before;
++    }
+     g_hle.kernel.title_id = 0x0100000000010000ull; /* the title the test was written for */
+     CHECK((argc == 3 || argc == 4) && strstr(argv[1], "scarletnx-fs-tree-") != NULL);
+     CHECK(!test_chdir(argv[1]));
 diff --git a/tests/filesystem_tree.c b/tests/filesystem_tree.c
 index 2329b11..7253c07 100644
 --- a/tests/filesystem_tree.c
@@ -7089,6 +8837,99 @@ index 0000000..17e9fa2
 +        return 1;
 +    }
 +    puts("frame time p99: PASS");
++    return 0;
++}
+diff --git a/tests/frame_trace.c b/tests/frame_trace.c
+new file mode 100644
+index 0000000..31a7d6c
+--- /dev/null
++++ b/tests/frame_trace.c
+@@ -0,0 +1,87 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++/* The frame-time trace (runtime/platform/frame_trace.c): hitch detection, cause attribution, the CSV and the graph */
++#include "nx/runtime/platform/frame_trace.h"
++#include "nx/runtime/platform/plat.h"
++#include <assert.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <string.h>
++
++/* ui.c's lock and warning, without the platform layer */
++void pm_lock(PMutex* m) { (void)m; }
++void pm_unlock(PMutex* m) { (void)m; }
++void logf_(int lvl, const char* fmt, ...) {
++    (void)lvl;
++    (void)fmt;
++}
++
++int main(void) {
++    static PfTrace t;
++    unsigned long long part[PF_PARTS] = {0}, count[PF_COUNTS] = {0};
++    int i;
++    /* a quiet frame is the game's; a part names the frame only as a real share of it */
++    assert(pf_trace_cause(part, 33) == PF_CAUSE_GAME);
++    part[PF_PART_FILES] = 3;
++    assert(pf_trace_cause(part, 8) == PF_CAUSE_GAME); /* under 4 ms is noise */
++    part[PF_PART_FILES] = 30;
++    part[PF_PART_PIPELINES] = 400;
++    assert(pf_trace_cause(part, 500) == PF_PART_PIPELINES);
++    assert(pf_trace_cause(part, 2000) == PF_CAUSE_GAME); /* 400 of 2000: under a quarter */
++    part[PF_PART_PIPELINES] = 0;
++    part[PF_PART_JIT] = 90;
++    assert(pf_trace_cause(part, 120) == PF_PART_JIT);
++    assert(!strcmp(pf_trace_cause_name(PF_PART_JIT), "game code compiling"));
++
++    /* before 30 frames are known only 50 ms counts as a hitch; then twice the typical frame, at least 25 ms */
++    assert(!pf_trace_add(&t, 40.0f, PF_CAUSE_GAME) && pf_trace_add(&t, 60.0f, PF_CAUSE_GAME));
++    for (i = 0; i < 100; ++i) assert(!pf_trace_add(&t, 16.7f, PF_CAUSE_GAME));
++    assert(pf_trace_typical(&t) > 16.6f && pf_trace_typical(&t) < 16.8f);
++    assert(!pf_trace_is_hitch(&t, 24.0f) && !pf_trace_is_hitch(&t, 33.0f) && pf_trace_is_hitch(&t, 34.0f));
++    assert(pf_trace_add(&t, 512.0f, PF_PART_SHADERS) && t.hitches == 2 && t.last_hitch_cause == PF_PART_SHADERS);
++    /* a 30 FPS game's frames are no hitches, and the ring keeps the last PF_TRACE_FRAMES */
++    for (i = 0; i < 2 * PF_TRACE_FRAMES; ++i) pf_trace_add(&t, 33.3f, PF_CAUSE_GAME);
++    assert(t.count == PF_TRACE_FRAMES && t.hitches == 2 && pf_trace_typical(&t) > 33.2f);
++    assert(!pf_trace_is_hitch(&t, 50.0f) && pf_trace_is_hitch(&t, 70.0f));
++
++    /* the CSV: a header and one line a frame with as many fields */
++    {
++        char buf[2048], *nl;
++        FILE* f = fopen("frame_trace_test.csv", "w+"); /* tmpfile writes to the drive's root on Windows */
++        static const char HEAD[] = "frame,time_s,frame_ms,hitch,cause,shaders_ms",
++                          LINE[] = "7,1.500,120.00,1,game code compiling,0,0,0,0,0,30,0,0,90,";
++        int header = 1, fields;
++        assert(f);
++        pf_trace_csv_header(f);
++        count[PF_COUNT_JIT] = 2;
++        pf_trace_csv_line(f, 7, 1.5, 120.0f, part, count, PF_PART_JIT, 1);
++        rewind(f);
++        while (fgets(buf, sizeof buf, f)) {
++            const char* c;
++            for (fields = 1, c = buf; *c; ++c) fields += *c == ',';
++            assert(fields == 5 + PF_PARTS + PF_COUNTS);
++            nl = strchr(buf, '\n');
++            assert(nl);
++            if (header)
++                assert(!strncmp(buf, HEAD, sizeof HEAD - 1));
++            else
++                assert(!strncmp(buf, LINE, sizeof LINE - 1));
++            header = 0;
++        }
++        fclose(f);
++        remove("frame_trace_test.csv");
++    }
++
++    /* the graph: a panel, a bar a frame, a hitch red */
++    {
++        static SnxUiQuad quads[1024];
++        SnxUiList l = {quads, 0, 1024};
++        const int safe[4] = {0, 0, 1920, 1080};
++        int red = 0;
++        pf_trace_add(&t, 400.0f, PF_PART_FILES);
++        pf_trace_draw(&t, &l, safe, 1080);
++        for (i = 0; i < l.n; ++i) red += quads[i].rgba == (255u | 48u << 8 | 48u << 16 | 255u << 24);
++        assert(l.n > PF_TRACE_FRAMES && red == 1);
++    }
++    puts("frame trace: PASS");
 +    return 0;
 +}
 diff --git a/tests/gamepad.c b/tests/gamepad.c
@@ -7287,10 +9128,90 @@ index 0000000..130c79d
 +    return 0;
 +}
 diff --git a/tests/overlay.c b/tests/overlay.c
-index 03330d3..0703e36 100644
+index 03330d3..92f4b8c 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
-@@ -768,6 +768,24 @@ int main(void) {
+@@ -179,14 +179,14 @@ int main(void) {
+     overlay_toggle();
+     assert(overlay_shown());
+     /* letters half the screen's height at most, in whole steps, in the middle: a phone held wide, a small window. The
+-       page is as tall as its items (three here, under three rows of head, over a blank one), at the scale of the
++       page is as tall as its items (five here, under three rows of head, over a blank one), at the scale of the
+        tallest page, and as wide as three quarters of the picture hold, between 40 and 72 columns */
+     overlay_place(SW, SH, &px, &py, &s);
+     C = overlay_cols(SW, s);
+-    assert(s == 2 && C == OVERLAY_COLS_MAX && px == (SW - C * 16) / 2 && py == (SH - 7 * 32) / 2);
++    assert(s == 2 && C == OVERLAY_COLS_MAX && px == (SW - C * 16) / 2 && py == (SH - 9 * 32) / 2);
+     assert(overlay_cols(1280, 2) == 60 && overlay_cols(500, 1) == 46 && overlay_cols(400, 1) == OVERLAY_COLS &&
+            overlay_cols(3840, 4) == OVERLAY_COLS_MAX);
+-    overlay_place(500, 120, &x, &y, &sc);
++    overlay_place(500, 152, &x, &y, &sc);
+     assert(sc == 1 && x == (500 - 46 * 8) / 2 && y == 4);
+     /* a phone's display scale: the Poco F8 (408 dpi, 2510x1156) and the Pixel 9 (420 dpi) at 3x, where half the
+        picture gave 2x; a 4K picture at 100% keeps the 4x half of it gives */
+@@ -203,17 +203,26 @@ int main(void) {
+     /* the first page: the title on a band of ink, the items under it, the focused one on a band; the page hides the
+        game, whose text would show through it */
+     draw();
+-    assert(list.q[0].w == (float)(C * 16) && list.q[0].h == 7 * 32 && list.q[1].rgba == ink && list.q[1].h == 32);
++    assert(list.q[0].w == (float)(C * 16) && list.q[0].h == 9 * 32 && list.q[1].rgba == ink && list.q[1].h == 32);
+     assert(list.q[0].rgba >> 24 == 0xFFu);
+     assert(text_at(C - 2, 3, ">") && text_at(C - 2, 4, ">")); /* a page under each */
+     assert(text_at(1, 0, "SCARLETNX  /  MENU") && text_at(1, 3, "\xFE On-screen controls") &&
+-           text_at(1, 4, "\xFE Controllers") && text_at(1, 5, "\xFE Exit"));
++           text_at(1, 4, "\xFE Controllers") && text_at(1, 5, "\xFE Frame-time graph") &&
++           text_at(1, 6, "\xFE Frame generation (experimental)") && text_at(1, 7, "\xFE Exit") && text_at(C - 4, 5, "Off"));
++    /* the frame-time graph turns on and off for this run, nothing kept */
++    stored[0] = 0;
++    assert(tap(2, 3) == OVERLAY_NONE && g_settings.frame_time_graph && !stored[0]);
++    draw();
++    assert(text_at(C - 3, 5, "On"));
++    assert(tap(2, 3) == OVERLAY_NONE && !g_settings.frame_time_graph);
++    assert(tap(3, 3) == OVERLAY_NONE && g_settings.frame_generation && !stored[0]);
++    assert(tap(3, 3) == OVERLAY_NONE && !g_settings.frame_generation);
+     /* a tap on Exit exits; on the title, nothing; outside the panel, it closes */
+-    assert(tap(2, 3) == OVERLAY_EXIT && tap(-3, 3) == OVERLAY_NONE);
++    assert(tap(4, 3) == OVERLAY_EXIT && tap(-3, 3) == OVERLAY_NONE);
+     assert(overlay_tap(5.0f, 5.0f, SW, SH) == OVERLAY_CLOSE);
+     /* the focus goes round, from Exit to the first item and back over the top; Back from here closes */
+     overlay_move(1);
+-    overlay_move(-4);
++    overlay_move(-6);
+     assert(overlay_select() == OVERLAY_EXIT && overlay_back() == OVERLAY_CLOSE);
+ 
+     /* the controls' page: each setting shown with its value, changed and kept */
+@@ -314,18 +323,24 @@ int main(void) {
+            left stick past half way as one, goes on after a while, then on and on; with the menu closed, nothing, and
+            a press held as it opens does not act */
+         assert(overlay_controls(0, still, 1000) == OVERLAY_NONE); /* the focus back on Controllers */
+-        assert(overlay_controls(0, down, 1000) == OVERLAY_NONE);  /* to Exit */
+-        assert(overlay_controls(0, down, 1000 + SNX_OVERLAY_REPEAT_DELAY - 1) == OVERLAY_NONE);
+-        assert(overlay_controls(1ull << 0, down, 1000 + SNX_OVERLAY_REPEAT_DELAY - 1) == OVERLAY_EXIT); /* not yet */
+-        assert(overlay_controls(0, down, 1000 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* round to the top */
+-        assert(overlay_controls(1ull << 0, down, 1001 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* a page */
++        assert(overlay_controls(0, down, 1000) == OVERLAY_NONE);  /* to the graph */
++        assert(overlay_controls(0, still, 1001) == OVERLAY_NONE);
++        overlay_move(1); /* past frame generation, whose toggle is checked above */
++        assert(overlay_controls(0, down, 1002) == OVERLAY_NONE); /* to Exit */
++        assert(overlay_controls(0, down, 1002 + SNX_OVERLAY_REPEAT_DELAY - 1) == OVERLAY_NONE);
++        assert(overlay_controls(1ull << 0, down, 1002 + SNX_OVERLAY_REPEAT_DELAY - 1) == OVERLAY_EXIT); /* not yet */
++        assert(overlay_controls(0, down, 1002 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* round to the top */
++        assert(overlay_controls(1ull << 0, down, 1003 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* a page */
+         draw();
+         assert(text_at(1, 0, "SCARLETNX  /  CONTROLS"));
+         assert(overlay_controls(1ull << 1, still, 2000) == OVERLAY_NONE);  /* B: back to the menu, on its first */
+         assert(overlay_controls(1ull << 15, still, 2001) == OVERLAY_NONE); /* the D-pad down: Controllers */
+-        assert(overlay_controls(1ull << 15, still, 2001 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* Exit */
++        assert(overlay_controls(1ull << 15, still, 2001 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* the graph */
++        overlay_move(1); /* past frame generation */
+         assert(overlay_controls(1ull << 15, still, 2001 + SNX_OVERLAY_REPEAT_DELAY + SNX_OVERLAY_REPEAT_MS - 1) ==
+                OVERLAY_NONE);
++        assert(overlay_controls(1ull << 15, still, 2001 + SNX_OVERLAY_REPEAT_DELAY + SNX_OVERLAY_REPEAT_MS) ==
++               OVERLAY_NONE); /* Exit */
+         assert(overlay_controls(1ull << 0, still, 3000) == OVERLAY_EXIT);
+         assert(overlay_controls(1ull << 13, still, 3001) == OVERLAY_NONE &&
+                overlay_controls(0, left, 3002) == OVERLAY_NONE);
+@@ -768,6 +783,24 @@ int main(void) {
          for (i = 0, pictures = 0; i < list.n; ++i) pictures += list.q[i].v == SNX_CONTROLS_ATLAS_HEIGHT;
          assert(!pictures && !shows("Player"));
      }
@@ -7315,6 +9236,19 @@ index 03330d3..0703e36 100644
      puts("overlay: placing, pages, taps, keys, values, scrolling, look, the error's panel, the atlas and the user "
           "passed");
      return 0;
+diff --git a/tests/pipeline_file.c b/tests/pipeline_file.c
+index da5b015..25b630e 100644
+--- a/tests/pipeline_file.c
++++ b/tests/pipeline_file.c
+@@ -98,7 +98,7 @@ static void make_shader(int n, PfShader* s, u32* cbr, u32* spv) {
+     s->hash = 0x1234567890ABCDEFull * (u64)(n + 1);
+     s->qh = 0xFEDCBA0987654321ull ^ (u64)n;
+     s->qh_a = n == 1 ? 0x55AA55AA55AA55AAull : 0;
+-    s->stage = n == 1 ? ST_FS : ST_VS;
++    s->stage = n == 1 ? ST_FS : n == 2 ? ST_CS : ST_VS;
+     s->clen = 0x100 + 8 * (u32)n;
+     s->clen_a = n == 1 ? 0x80 : 0;
+     s->ncbr = (u32)n % 3; /* 0, 1 or 2 reads */
 diff --git a/tests/render_scale.c b/tests/render_scale.c
 new file mode 100644
 index 0000000..98d5ba0
@@ -7442,6 +9376,44 @@ index 53c5e45..3c043fc 100644
      test_renderer.present_buffer = test_present;
      vi_show_buffer(7, 0x40, 1, 1, 4, 1, 0, 1, crop, 0);
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
+diff --git a/tests/save_activity.c b/tests/save_activity.c
+new file mode 100644
+index 0000000..5f9ff48
+--- /dev/null
++++ b/tests/save_activity.c
+@@ -0,0 +1,32 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#include "nx/runtime/platform/save_activity.h"
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++int main(void) {
++    assert(!pf_save_message(0));
++    pf_save_begin();
++    assert(!strcmp(pf_save_message(9000000000ull), "Saving..."));
++    pf_save_end(9000000000ull, 1);
++    pf_save_presented(9000000000ull);
++    assert(pf_save_message(10000000000ull));
++    assert(!pf_save_message(11000000000ull));
++    pf_save_begin(); pf_save_end(12000000000ull, 0);
++    pf_save_presented(12000000000ull);
++    assert(!strcmp(pf_save_message(13000000000ull), "Save write failed"));
++    pf_save_begin(); pf_save_end(14000000000ull, 1);
++    pf_save_presented(14000000000ull);
++    assert(!strcmp(pf_save_message(15000000000ull), "Save write failed"));
++    assert(!pf_save_message(19000000000ull));
++    pf_save_begin(); pf_save_end(20000000000ull, 1);
++    assert(pf_save_message(30000000000ull)); /* a ten-second loading pause cannot swallow the notice */
++    pf_save_presented(30000000000ull);
++    assert(pf_save_message(31000000000ull));
++    assert(!pf_save_message(32000000000ull));
++    for (int bits = 0; bits < 32; ++bits) {
++        int hide = pf_hide_cursor(bits & 1, bits & 2, bits & 4, bits & 8, bits & 16);
++        assert(hide == (bits == 7));
++    }
++    puts("save_activity: expiry, write failure, fullscreen/menu/focus/system-key policy passed");
++    return 0;
++}
 diff --git a/tests/tex_upload_rows.c b/tests/tex_upload_rows.c
 index a9d357a..6d09d89 100644
 --- a/tests/tex_upload_rows.c
@@ -7455,7 +9427,7 @@ index a9d357a..6d09d89 100644
      (void)what, (void)file, (void)line;
      return r == VK_SUCCESS;
 diff --git a/tests/vulkan_headless.c b/tests/vulkan_headless.c
-index 25f0af2..e079e58 100644
+index 25f0af2..24a5377 100644
 --- a/tests/vulkan_headless.c
 +++ b/tests/vulkan_headless.c
 @@ -14,6 +14,7 @@
@@ -7466,7 +9438,7 @@ index 25f0af2..e079e58 100644
  #include <stdlib.h>
  #include <string.h>
  
-@@ -795,6 +796,221 @@ static int check_rt_overlap(void) {
+@@ -795,6 +796,299 @@ static int check_rt_overlap(void) {
      return 0;
  }
  
@@ -7685,10 +9657,88 @@ index 25f0af2..e079e58 100644
 +    return 0;
 +}
 +
++/* Actual interpolation shaders and image lifetime, without game assets. A textured plane moves eight pixels;
++   its halfway position is known, and a fixed HUD band must remain exact. Include odd sizes, sRGB and BGRA. */
++static u32 fg_pixel(int x, int y, int shift) {
++    if (y < 8) return 0xff3264c8u;
++    x -= shift;
++    u32 v = (u32)(((x + 128) / 8 * 9 + y / 8 * 17) % 127 + 50);
++    return 0xff000000u | v | ((v + 20) << 8) | ((v + 40) << 16);
++}
++static int fg_upload(Surf* src, int shift) {
++    VkBuffer staged; u64 offset;
++    u32* pixels = (u32*)vk_stage((u64)src->w * src->h * 4, 4, &staged, &offset);
++    CHECK(pixels);
++    for (u32 y = 0; y < src->h; y++) for (u32 x = 0; x < src->w; x++)
++        pixels[y * src->w + x] = fg_pixel((int)x, (int)y, shift);
++    VkCommandBuffer cb = vk_cmd();
++    vk_surf_use(cb, src, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
++    VkBufferImageCopy copy = {.bufferOffset = offset, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++                              .imageExtent = {src->w, src->h, 1}};
++    rec_CmdCopyBufferToImage(cb, staged, src->img, src->layout, 1, &copy);
++    return 0;
++}
++static int check_frame_generation(void) {
++    const VkFormat formats[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_UNORM};
++    for (int f = 0; f < 3; f++) {
++        u32 w = 96 + (f & 1), h = 64 + (f & 1);
++        Surf src = {.w = w, .h = h, .sw = w, .sh = h, .layers = 1, .levels = 1,
++                    .type = VK_IMAGE_VIEW_TYPE_2D, .f = {.vk = formats[f], .bpp = 4, .bw = 1, .bh = 1}};
++        VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
++            .format = src.f.vk, .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1,
++            .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
++            .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
++        CHECK(vk_image_create(&ii, &src.img, &src.mem));
++        CHECK(!fg_upload(&src, 0));
++        CHECK(!vk_fg_capture(vk_cmd(), &src, 0, 0, w, h)); /* format/size change: no prior frame */
++        CHECK(vk_fg_current());
++        for (int moving = 0; moving < 2; moving++) {
++            CHECK(!fg_upload(&src, moving ? 8 : 0));
++            CHECK(vk_fg_capture(vk_cmd(), &src, 0, 0, w, h));
++            Surf* mid = vk_fg_interpolate(vk_cmd());
++            CHECK(mid && mid->sw == w && mid->sh == h && mid->f.vk == src.f.vk);
++            VkBuffer rb; u8* result = vk_readback_buffer((u64)w * h * 4, &rb);
++            CHECK(result);
++            VkCommandBuffer cb = vk_cmd();
++            vk_surf_use(cb, mid, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
++            VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {w, h, 1}};
++            rec_CmdCopyImageToBuffer(cb, mid->img, mid->layout, rb, 1, &copy);
++            vk_finish(); vk_readback_ready();
++            u64 error = 0, blend_error = 0;
++            for (u32 y = 0; y < h; y++) for (u32 x = 0; x < w; x++) {
++                u32 expected = fg_pixel((int)x, (int)y, moving ? 4 : 0);
++                u32 before = fg_pixel((int)x, (int)y, 0), after = fg_pixel((int)x, (int)y, moving ? 8 : 0);
++                for (u32 c = 0; c < 3; c++) {
++                    int actual = result[(y * w + x) * 4 + c], want = (expected >> (c * 8)) & 255;
++                    if (!moving || y < 8) CHECK(abs(actual - want) <= 1);
++                    if (moving && y > 16 && x > 16 && x < w - 16) {
++                        error += abs(actual - want);
++                        blend_error += abs((int)((((before >> (c * 8)) & 255) + ((after >> (c * 8)) & 255)) / 2) - want);
++                    }
++                }
++            }
++            if (moving) {
++                printf("frame generation format %d: midpoint error %llu, unwarped blend %llu\n", f,
++                       (unsigned long long)error, (unsigned long long)blend_error);
++                CHECK(error < blend_error * 3 / 4);
++            }
++        }
++        /* Bad crop and disabled/reset history must not interpolate from old pixels. */
++        CHECK(!vk_fg_capture(vk_cmd(), &src, w, 0, w, h));
++        CHECK(!vk_fg_current());
++        CHECK(!vk_fg_capture(vk_cmd(), &src, 0, 0, w, h));
++        vk_fg_reset(); CHECK(!vk_fg_current());
++        vk_finish(); vk_defer_image(src.img, src.mem, VK_NULL_HANDLE, VK_NULL_HANDLE);
++    }
++    vk_fg_destroy();
++    puts("PASS frame generation: stationary colors/HUD, moving midpoint, odd resize, sRGB/BGRA, invalid crop, reset");
++    return 0;
++}
++
  int main(int argc, char** argv) {
      const u32 w = 32, h = 16;
      const u64 address = HEAP_BASE;
-@@ -811,9 +1027,14 @@ int main(int argc, char** argv) {
+@@ -811,9 +1105,18 @@ int main(int argc, char** argv) {
      CHECK(mem_map(HEAP_BASE, 0x800000, MS_NORMAL, PERM_RW) == 0);
      nv_init(); /* color targets may import guest memory through the GPU page table */
      g_settings.vulkan_video_decode = 1; /* a Vulkan Video decode queue where the device has one (lavapipe has none) */
@@ -7696,6 +9746,10 @@ index 25f0af2..e079e58 100644
 +    g_settings.protect_game_graphics = 1;
      video_init("Headless Vulkan fixture", "");
 +    CHECK(g_vk_scale == 1.0f);
++    CHECK(!check_frame_generation());
++    for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--fg-only")) {
++        vk_finish(); CHECK(!snx_remove_tree(root)); free(root); free(shot); free(ppm); return 0;
++    }
      CHECK(g_opt_headless && g_renderer_up && g_vk.dev && !g_vk.surface && !g_vk.swapchain && !g_vk.sc_count);
      CHECK(!check_viewport_orientation());
 +    CHECK(!check_upscaler());
@@ -7703,7 +9757,7 @@ index 25f0af2..e079e58 100644
      CHECK(!check_packed_depth());
      CHECK(!check_depth_array());
      CHECK(!check_srgb_write());
-@@ -826,7 +1047,7 @@ int main(int argc, char** argv) {
+@@ -826,7 +1129,7 @@ int main(int argc, char** argv) {
      CHECK(!check_blit());
      CHECK(!check_rt_overlap());
      /* the pipeline workers: pipeline_threads when given, else a quarter of the CPUs, two to six */

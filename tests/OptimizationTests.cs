@@ -19,7 +19,34 @@ internal static class OptimizationTests
         try
         {
             string root = Path.Combine(Path.GetDirectoryName(args[0]), "optimization-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var traceRows = FrameTrace.Parse("frame,time_s,frame_ms,hitch,cause,pipeline_wait_ms\n1,0,33.33,0,game or unmeasured work,0\n2,0.2,200,1,pipeline builds,170\n3,0.24,33.33,0,game or unmeasured work,0\n4,0.3,NaN,0,unknown,0\n5,0.4,-5,0,unknown,0\n6,0.5,Infinity,0,unknown,0\n7,0.6");
+            var traceSummary = FrameTrace.Summarize(traceRows);
+            Check(traceRows.Count==3 && traceSummary.Hitches==1 && traceSummary.WorstMs==200 && traceSummary.TypicalMs==33.33 &&
+                traceSummary.HitchCauses[0].Key=="pipeline builds" && FrameTrace.Describe(traceSummary.Worst[0]).Contains("170 ms"),
+                "Trace viewer identifies a pipeline hitch and ignores truncated or invalid frame times");
+            Check(FrameTrace.Summarize(FrameTrace.Parse("frame,frame_ms\n")).Frames==0,
+                "An empty trace is safe to display");
             ControllerSettings.PathOverride = Path.Combine(root, "controller-settings.txt");
+            string globalPath = Path.Combine(root, "global-settings.ini");
+            var global = new GlobalSettings(); global.Graphics.FpsLimit="144"; global.Graphics.Docked=false;
+            global.Graphics.PixelSmoothing=true; global.HideCursor=false;
+            global.FrameGeneration=true; global.FrameTrace=true; global.FrameTimeGraph=true; global.Save(globalPath);
+            var reloadedGlobal = GlobalSettings.Load(globalPath);
+            Check(reloadedGlobal.Enabled && reloadedGlobal.Graphics.FpsLimit=="144" && !reloadedGlobal.Graphics.Docked && reloadedGlobal.Graphics.PixelSmoothing && !reloadedGlobal.HideCursor,
+                "Global settings round-trip without choosing a game");
+            Check(reloadedGlobal.FrameGeneration && reloadedGlobal.FrameTrace && reloadedGlobal.FrameTimeGraph,
+                "Engine frame generation, trace recording and graph survive saving for all games");
+            var offPath=Path.Combine(root,"global-defaults.ini"); new GlobalSettings().Save(offPath);
+            Check(!GlobalSettings.Load(offPath).FrameGeneration && File.ReadAllText(offPath).Contains("frame_generation=0"),
+                "Frame generation defaults off and saves an explicit off value");
+            string globalOriginal=File.ReadAllText(globalPath);
+            global.Enabled=false; global.Save(globalPath);
+            Check(!GlobalSettings.Load(globalPath).Enabled && File.ReadAllText(globalPath+".bak")==globalOriginal,
+                "Disabling global settings is saved atomically with a backup");
+            Check(File.ReadAllText(globalPath).Contains("render_scale_safety=1") && File.ReadAllText(globalPath).Contains("pipeline_threads=0"),
+                "Global settings preserve rendering safety and automatic core-based worker selection");
+            global.Graphics.FpsLimit="invalid";
+            Fails(()=>global.Save(globalPath),"Invalid global settings cannot overwrite the saved file");
             string exe = Path.Combine(root, "Tuning game.exe"), config = Path.ChangeExtension(exe, ".ini");
             File.Copy(args[0], exe); File.Copy(args[0], Path.Combine(root, "Tuning game_code.dll"));
             var cap = RuntimeCapabilities.Read(exe, CancellationToken.None);
