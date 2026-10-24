@@ -1,8 +1,12 @@
-# PortForge 0.40 / Engine 1.23
+# PortForge 0.42 / Engine 1.25
 
-**New in 0.40:** In-app updates no longer fail when a release ZIP contains `Source/.../.git` (or other VCS junk). Unpack skips `.git` / `.cache` / `Source`; release packaging excludes them. See [VALIDATION-0.40.md](VALIDATION-0.40.md).
+**New in 0.42:** The FPS limit is what you see. With PortForge FSR 3, a numeric cap is the game-side rate and the display runs at about 2× it (60 → ~120, 120 → ~240). Display FPS, the HUD and the frame-time graph count those pictures, including while Esc is open. Without FSR 3, a higher cap still cannot speed the game past its own pace, and the counter shows that real rate; a lower cap (30) no longer stays at 60. Update the app and **Doctor → Engine** on existing games. See [VALIDATION-0.42.md](VALIDATION-0.42.md).
 
-**0.39:** FPS limit from Settings / global ini / Esc-Home actually sticks and applies with PortForge FSR 3 (session override over global re-apply; FG honors frame dropping; game-side limit so 60 → ~120 on screen). Frame-time graph shows live display FPS. See [VALIDATION-0.39.md](VALIDATION-0.39.md).
+**0.41:** PortForge FSR 3 present mode and Esc Display FPS. See [VALIDATION-0.41.md](VALIDATION-0.41.md).
+
+**0.40:** In-app updates no longer fail when a release ZIP contains `Source/.../.git`. See [VALIDATION-0.40.md](VALIDATION-0.40.md).
+
+**0.39:** FPS limit session override / FG frame dropping. See [VALIDATION-0.39.md](VALIDATION-0.39.md).
 
 **0.38:** Fixes BOTW-class ghosting (no selective RT scale under protect; hardened FG; safe-area reject) and on-screen FPS shows ~2x with PortForge FSR 3. See [VALIDATION-0.38.md](VALIDATION-0.38.md).
 

@@ -27,12 +27,12 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.23 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. Esc / Home toggles PortForge FSR 3 and FPS; the in-game FPS counter and frame-time graph show on-screen rate (~120 when FSR 3 doubles a 60 limit).", 10);
+            AddText(layout, "Save once. Every game using Engine 1.25 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. Esc shows live Display FPS and toggles PortForge FSR 3 / FPS. With FSR 3, the number you pick is the game-side cap and the display runs at about 2× it (60 → ~120, 120 → ~240). Update the app and use Doctor → Engine on existing games.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             AddText(layout, "720p through 4K size the window/swapchain; FSR / PortForge FSR 3 enlarge the finished image. Internal game buffers stay native (scaling them broke titles like Breath of the Wild). Auto keeps the game's layout.", 10);
             AddChoice(layout, "Upscaling", upscale);
-            upscaleNote.Text = "PortForge FSR 3 is built from scratch from FSR 3 / AFMF ideas (optical flow, disocclusion, HUD lock) plus AMD FSR 1 spatial upscale — not the AMD FidelityFX SDK. Esc/Home → PortForge FSR 3 On/Off. Numeric FPS doubles on screen (60 → ~120).";
+            upscaleNote.Text = "PortForge FSR 3 is built from scratch from FSR 3 / AFMF ideas (optical flow, disocclusion, HUD lock) plus AMD FSR 1 spatial upscale — not the AMD FidelityFX SDK. Esc/Home → PortForge FSR 3 On/Off. A numeric FPS limit is the game-side cap; the display runs at about 2× that (60 → ~120, 120 → ~240). Esc Display FPS shows that live rate.";
             layout.Controls.Add(upscaleNote);
             AddChoice(layout, "Rendering mode", mode);
             AddChoice(layout, "FPS limit", fps);
@@ -94,11 +94,11 @@ namespace PortForge
             string limit = fps.SelectedIndex == 0 ? "game" : fps.SelectedIndex == 5 ? "0" : fps.Text;
             int n;
             if (fsr3 && Int32.TryParse(limit, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) && n > 0)
-                fpsNote.Text = n + " game → ~" + (n <= 500 ? n * 2 : 1000) + " on screen with PortForge FSR 3. The engine doubles the display cadence automatically.";
+                fpsNote.Text = n + " is the game-side cap. With PortForge FSR 3 the display runs at about " + (n <= 500 ? n * 2 : 1000) + " (2× that cap). Esc Display FPS shows the live rate.";
             else if (fsr3)
-                fpsNote.Text = "PortForge FSR 3 is on. Pick a numeric FPS limit (for example 60) to get about twice that many pictures on screen.";
+                fpsNote.Text = "PortForge FSR 3 is on. A numeric FPS limit is the game-side cap and the display runs at about 2× it (60 → ~120, 120 → ~240). Esc shows that live Display FPS. Game speed and Unlimited stay at the game's own pace, doubled on screen.";
             else
-                fpsNote.Text = "Game speed keeps the console pace. Unlimited removes the limiter (speed lock still protects game speed).";
+                fpsNote.Text = "Without PortForge FSR 3, speed lock keeps the game at its own pace when the cap is higher, and Display FPS shows that real rate. A lower cap drops frames (30 does not stay 60).";
         }
         private static string ResolutionKey(int index)
         {

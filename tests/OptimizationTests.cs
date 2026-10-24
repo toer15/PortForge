@@ -30,7 +30,7 @@ internal static class OptimizationTests
             string globalPath = Path.Combine(root, "global-settings.ini");
             var global = new GlobalSettings(); global.Graphics.FpsLimit="144"; global.Graphics.Docked=false;
             global.Graphics.PixelSmoothing=true; global.HideCursor=false;
-            global.FrameGeneration=true; global.FrameTrace=true; global.FrameTimeGraph=true; global.Save(globalPath);
+            global.UpscaleMode=2; global.ApplyUpscaleMode(); global.FrameTrace=true; global.FrameTimeGraph=true; global.Save(globalPath);
             var reloadedGlobal = GlobalSettings.Load(globalPath);
             Check(reloadedGlobal.Enabled && reloadedGlobal.Graphics.FpsLimit=="144" && !reloadedGlobal.Graphics.Docked && reloadedGlobal.Graphics.PixelSmoothing && !reloadedGlobal.HideCursor,
                 "Global settings round-trip without choosing a game");
