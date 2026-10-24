@@ -97,24 +97,21 @@ namespace PortForge
             return result;
         }
 
-        /// <summary>When global Settings ask for 60 FPS with FSR 3-style, enable FG + FSR so display hits ~120.</summary>
+        /// <summary>The saved global FPS limit, upscaling and PortForge FSR 3 choice, copied exactly: "game" stays the game's
+        /// speed (it became 60 with FSR 3), Unlimited stays 0 (it was skipped) and FSR 3 off writes frame_generation=0 (a
+        /// matched game kept generating).</summary>
         public static void ApplyGlobalPreferences(Dictionary<string,string> settings, RuntimeCapabilities cap)
         {
             if (settings == null) return;
             try
             {
+                if (!File.Exists(GlobalSettings.FilePath)) return;
                 var g = GlobalSettings.Load(GlobalSettings.FilePath);
                 if (!g.Enabled) return;
-                if (g.IsFsr3Style || g.UpscaleMode == 2)
-                {
-                    if (cap == null || cap.Keys.Contains("upscaler")) settings["upscaler"] = "1";
-                    if (cap == null || cap.Keys.Contains("frame_generation")) settings["frame_generation"] = "1";
-                    if (g.Graphics.FpsLimit == "60" || g.Graphics.FpsLimit == "game")
-                        settings["fps_limit"] = g.Graphics.FpsLimit == "game" ? "60" : "60";
-                    else if (g.Graphics.FpsLimit != "game" && g.Graphics.FpsLimit != "0")
-                        settings["fps_limit"] = g.Graphics.FpsLimit;
-                }
-                if (GlobalSettings.IsDisplayResolution(g.DisplayResolution) && g.DisplayResolution != "auto")
+                if (cap == null || cap.Keys.Contains("upscaler")) settings["upscaler"] = g.Graphics.Upscaler.ToString(CultureInfo.InvariantCulture);
+                if (cap == null || cap.Keys.Contains("frame_generation")) settings["frame_generation"] = g.FrameGeneration ? "1" : "0";
+                if (cap == null || cap.Keys.Contains("fps_limit")) settings["fps_limit"] = g.Graphics.FpsLimit;
+                if ((cap == null || cap.Keys.Contains("display_resolution")) && GlobalSettings.IsDisplayResolution(g.DisplayResolution))
                     settings["display_resolution"] = g.DisplayResolution;
             }
             catch (IOException) { }

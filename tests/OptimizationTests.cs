@@ -19,6 +19,7 @@ internal static class OptimizationTests
         try
         {
             string root = Path.Combine(Path.GetDirectoryName(args[0]), "optimization-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            GlobalSettings.PathOverride = Path.Combine(root, "runtime-global-settings.ini");
             var traceRows = FrameTrace.Parse("frame,time_s,frame_ms,hitch,cause,pipeline_wait_ms\n1,0,33.33,0,game or unmeasured work,0\n2,0.2,200,1,pipeline builds,170\n3,0.24,33.33,0,game or unmeasured work,0\n4,0.3,NaN,0,unknown,0\n5,0.4,-5,0,unknown,0\n6,0.5,Infinity,0,unknown,0\n7,0.6");
             var traceSummary = FrameTrace.Summarize(traceRows);
             Check(traceRows.Count==3 && traceSummary.Hitches==1 && traceSummary.WorstMs==200 && traceSummary.TypicalMs==33.33 &&
@@ -260,6 +261,17 @@ internal static class OptimizationTests
             var tilt = new MotionTracker(); var side = new MotionSample { Valid = true, AccelX = 9.81 };
             for (int i = 0; i <= 200; i++) tilt.Update(side, clock.AddMilliseconds(10 * i));
             Check(tilt.Up()[0] > 0.97, "With no rotation the accelerometer brings the tilt to where gravity is");
+            foreach (string limit in new[] {"game", "0", "30", "60", "120", "144", "240"})
+            foreach (int upscaleMode in new[] {0, 1, 2})
+            {
+                var preference = new GlobalSettings { UpscaleMode = upscaleMode };
+                preference.Graphics.FpsLimit = limit;
+                preference.Save(GlobalSettings.FilePath);
+                var appliedGlobal = new Dictionary<string,string> { {"fps_limit","120"}, {"frame_generation","1"}, {"upscaler","1"} };
+                PcOptimization.ApplyGlobalPreferences(appliedGlobal, null);
+                Check(appliedGlobal["fps_limit"] == limit && appliedGlobal["frame_generation"] == (upscaleMode == 2 ? "1" : "0") && appliedGlobal["upscaler"] == (upscaleMode == 0 ? "0" : "1"),
+                    "Global preference " + limit + "/" + upscaleMode + " keeps the exact limit and turns FSR 3 off when it is off");
+            }
             Console.WriteLine(checks + " optimization checks passed. Evidence: " + root); return 0;
         }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }

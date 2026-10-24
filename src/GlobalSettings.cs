@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -15,7 +15,9 @@ namespace PortForge
         /// <summary>0 Linear, 1 FSR 1, 2 PortForge FSR 3 (FSR 1 + from-scratch optical-flow FG).</summary>
         public int UpscaleMode;
         public GraphicsProfile Graphics = new GraphicsProfile();
-        public static string FilePath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PortForge", "global-settings.ini"); } }
+        /// <summary>Tests point this at a scratch file so they never touch the user's own settings.</summary>
+        public static string PathOverride;
+        public static string FilePath { get { return String.IsNullOrEmpty(PathOverride) ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PortForge", "global-settings.ini") : PathOverride; } }
 
         public bool IsFsr3Style { get { return UpscaleMode == 2 || (FrameGeneration && Graphics.Upscaler == 1 && UpscaleMode != 0); } }
 
@@ -65,11 +67,9 @@ namespace PortForge
         public string EffectiveDisplayFpsNote()
         {
             int fps;
-            if (!Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
+            if (!FrameGeneration || !Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
                 return "";
-            return FrameGeneration
-                ? "With PortForge FSR 3 the screen shows " + (2 * fps) + " (twice the limit of " + fps + "), never more than the monitor refreshes. The game keeps its own speed."
-                : "The screen shows " + fps + ". When the game makes fewer real frames, pictures are added between them, so the game keeps its own speed.";
+            return "Limit " + fps + " with PortForge FSR 3 shows " + (fps * 2) + " FPS (at most your monitor's refresh with VSync). The game keeps its own speed.";
         }
 
         public void Save(string path)
