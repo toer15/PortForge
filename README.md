@@ -1,6 +1,6 @@
-# PortForge 0.37 / Engine 1.21
+# PortForge 0.38 / Engine 1.22
 
-**New in 0.37:** PortForge FSR 3 from scratch (optical-flow FG from FSR 3/AFMF research: scene-cut, disocclusion, HUD lock, inpaint) with Settings + Esc/Home On/Off. Not the AMD SDK. See [VALIDATION-0.37.md](VALIDATION-0.37.md).
+**New in 0.38:** Fixes BOTW-class ghosting (no selective RT scale under protect; hardened FG; safe-area reject) and on-screen FPS shows ~2x with PortForge FSR 3. See [VALIDATION-0.38.md](VALIDATION-0.38.md).
 
 **0.34:** a global Settings tab applies preferences to updated games launched directly, focused fullscreen play hides the cursor, actual save writes show a Saving... indicator, and compute shaders are cached and prepared on later launches. F7/Escape shows a frame-time graph; optional CSV recording and an app viewer help investigate hitches. Experimental PortForge frame generation can be selected globally or toggled in Escape. It is not AMD FSR 3. Universal save-anywhere, native 720p-through-4K overrides and AMD FSR 2/3 remain unsupported.
 

@@ -27,10 +27,10 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.21 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. In-game Esc / Home can toggle PortForge FSR 3 and change FPS for the session.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.22 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. Esc / Home toggles PortForge FSR 3 and FPS; the in-game FPS counter shows on-screen rate (~120 when FSR 3 doubles a 60 limit).", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
-            AddText(layout, "720p through 4K raise presentable color buffers toward that height and size the window. Game-data textures stay protected. Auto keeps the game's own layout.", 10);
+            AddText(layout, "720p through 4K size the window/swapchain; FSR / PortForge FSR 3 enlarge the finished image. Internal game buffers stay native (scaling them broke titles like Breath of the Wild). Auto keeps the game's layout.", 10);
             AddChoice(layout, "Upscaling", upscale);
             upscaleNote.Text = "PortForge FSR 3 is built from scratch from FSR 3 / AFMF ideas (optical flow, disocclusion, HUD lock) plus AMD FSR 1 spatial upscale — not the AMD FidelityFX SDK. Esc/Home → PortForge FSR 3 On/Off. Numeric FPS doubles on screen (60 → ~120).";
             layout.Controls.Add(upscaleNote);

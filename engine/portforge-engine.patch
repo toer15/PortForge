@@ -5783,7 +5783,7 @@ index 0000000..c48f96e
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..9041818 100644
+index f3ac2e2..2141046 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -15,6 +15,7 @@
@@ -5857,32 +5857,28 @@ index f3ac2e2..9041818 100644
  
  static VkSemaphore g_acquired[VK_FRAMES];
  /* the CPU fallback's image, and the last presented frame for screenshots */
-@@ -72,13 +128,36 @@ static void vkr_mapping_end(void) { vk_unlock(); }
+@@ -72,13 +128,32 @@ static void vkr_mapping_end(void) { vk_unlock(); }
  /* 0 when Vulkan can't run here */
  static int vkr_start(void) {
      if (!vk_init()) return 0;
 -    g_vk_scale = g_settings.resolution_scale;       /* the .ini keeps resolution within 0.25 to 4 (options.c) */
 +    {
++        /* Never selectively scale color RTs under protection: depth stays native and BOTW-class titles corrupt
++           (ghost geometry, translucent characters, shattered meshes). display_resolution only sizes the window /
++           swapchain; FSR 1 enlarges the finished image. Experimental full scale still needs render_scale_safety=0. */
 +        int display_h = pf_display_height(g_settings.display_resolution);
-+        int source_h = g_settings.tv_mode ? 1080 : 720;
 +        g_vk_scale_selective = 0;
-+        if (display_h > 0 && g_settings.protect_game_graphics) {
-+            /* True resolution: raise presentable color RTs toward the chosen output; data RTs stay 1.0. */
-+            g_vk_scale = pf_display_scale(display_h, source_h);
-+            g_vk_scale_selective = 1;
-+            LOG("vulkan: display_resolution=%s — selective color RT scale %.2fx (guest layout ~%dp → %dp output); "
-+                "depth/data targets stay native; FSR covers remaining enlargement\n",
-+                g_settings.display_resolution, g_vk_scale, source_h, display_h);
-+        } else {
-+            g_vk_scale = pf_render_scale(g_settings.resolution_scale, g_settings.protect_game_graphics);
-+            if (g_vk_scale != g_settings.resolution_scale)
-+                LOG("vulkan: graphics protection keeps internal render scale at 100%% (requested %.0f%%); "
-+                    "intermediate game data remains native-sized, presentation upscaling stays available\n",
-+                    100.0f * g_settings.resolution_scale);
-+            if (display_h > 0 && !g_settings.protect_game_graphics)
-+                LOG("vulkan: display_resolution=%s with render_scale_safety=0 — using experimental full RT scale\n",
-+                    g_settings.display_resolution);
-+        }
++        g_vk_scale = pf_render_scale(g_settings.resolution_scale, g_settings.protect_game_graphics);
++        if (g_vk_scale != g_settings.resolution_scale)
++            LOG("vulkan: graphics protection keeps internal render scale at 100%% (requested %.0f%%); "
++                "intermediate game data remains native-sized, presentation upscaling stays available\n",
++                100.0f * g_settings.resolution_scale);
++        if (display_h > 0 && g_settings.protect_game_graphics)
++            LOG("vulkan: display_resolution=%s — window/swapchain target %dp; internals stay native, FSR enlarges\n",
++                g_settings.display_resolution, display_h);
++        else if (display_h > 0 && !g_settings.protect_game_graphics)
++            LOG("vulkan: display_resolution=%s with render_scale_safety=0 — using experimental full RT scale\n",
++                g_settings.display_resolution);
 +    }
      g_vk_anisotropy = g_settings.anisotropic_filtering; /* the sampler table keeps what it makes: anisotropy applies at start */
      if (g_vk_anisotropy > 1 && !g_vk.feat.samplerAnisotropy)
@@ -5896,7 +5892,7 @@ index f3ac2e2..9041818 100644
      vk_own_init(); /* GPU engines' results stay on the GPU where guest memory can be trapped (memory/own.c) */
      g_gpu_before_write = vkr_before_write;
      g_gpu_mapping_begin = vkr_mapping_begin;
-@@ -289,6 +368,7 @@ static int is_srgb(VkFormat f) {
+@@ -289,6 +364,7 @@ static int is_srgb(VkFormat f) {
  }
  
  static int g_sc_srgb; /* what the swapchain was asked for (the surface may not have it) */
@@ -5904,7 +5900,7 @@ index f3ac2e2..9041818 100644
  /* the window's surface: lost while the app is in the background (Android), made anew when it comes back */
  static u32 g_generation;
  static int g_lost;
-@@ -307,13 +387,17 @@ static void flip_src(VkImageBlit* b, u32 transform) {
+@@ -307,13 +383,17 @@ static void flip_src(VkImageBlit* b, u32 transform) {
      }
  }
  
@@ -5925,7 +5921,7 @@ index f3ac2e2..9041818 100644
      backend_window_size(&ww, &wh);
      if (shown && (g_lost || backend_window_generation() != g_generation)) {
          vk_finish();
-@@ -326,9 +410,11 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -326,9 +406,11 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      if (shown && ww > 0 && wh > 0 &&
          (ww != g_vk.sc_win_w || wh != g_vk.sc_win_h || srgb != g_sc_srgb ||
           __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) != g_vk.sc_vsync)) {
@@ -5937,7 +5933,19 @@ index f3ac2e2..9041818 100644
          tried = 1;
      }
      VkSemaphore wait = VK_NULL_HANDLE, signal = VK_NULL_HANDLE;
-@@ -388,12 +474,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -372,8 +454,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+             u32 sw = g_vk.sc_extent.width, sh = g_vk.sc_extent.height, cx = 0, cy = 0, cw = sw, ch = sh, dw, dh;
+             int sx, sy, sww, swh;
+             backend_window_safe(&sx, &sy, &sww, &swh);
++            /* Reject a bogus safe area that would letterbox the game into a corner (BOTW: map on black outside). */
+             if (g_vk.sc_win_w > 0 && g_vk.sc_win_h > 0 && sww > 0 && swh > 0 && sx + sww <= g_vk.sc_win_w &&
+-                sy + swh <= g_vk.sc_win_h) {
++                sy + swh <= g_vk.sc_win_h &&
++                (u64)sww * (u64)swh * 20 >= (u64)g_vk.sc_win_w * (u64)g_vk.sc_win_h * 17) {
+                 cx = (u32)((u64)sw * (u32)sx / (u32)g_vk.sc_win_w);
+                 cy = (u32)((u64)sh * (u32)sy / (u32)g_vk.sc_win_h);
+                 cw = (u32)((u64)sw * (u32)sww / (u32)g_vk.sc_win_w);
+@@ -388,12 +472,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  }
                  i32 dx = (i32)(cx + (cw - dw) / 2), dy = (i32)(cy + (ch - dh) / 2);
                  VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
@@ -5958,7 +5966,7 @@ index f3ac2e2..9041818 100644
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
              }
              {
-@@ -411,24 +502,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -411,24 +500,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
@@ -6008,7 +6016,7 @@ index f3ac2e2..9041818 100644
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -441,6 +552,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -441,6 +550,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          vk_buf_frame();
          vk_mem_trim(0, 0);
          if (g_vk_present % 600 == 0) {
@@ -6021,7 +6029,7 @@ index f3ac2e2..9041818 100644
              char cs_why[256];
              u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
              LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
-@@ -467,6 +584,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +582,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -6035,7 +6043,7 @@ index f3ac2e2..9041818 100644
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -518,8 +642,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -518,8 +640,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      }
      /* Offscreen frames still submit and advance the frame ring. g_last remains available for readback. */
      vk_submit(wait, VK_PIPELINE_STAGE_2_CLEAR_BIT, signal);
@@ -6046,7 +6054,7 @@ index f3ac2e2..9041818 100644
      if (signal) {
          VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                                 .waitSemaphoreCount = 1,
-@@ -528,7 +654,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -528,7 +652,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                                 .pSwapchains = &g_vk.swapchain,
                                 .pImageIndices = &idx};
          vk_rec_queue(g_vk.gfx); /* the present waits on the frame's submission's semaphore */
@@ -6057,7 +6065,7 @@ index f3ac2e2..9041818 100644
          if (r == VK_ERROR_OUT_OF_DATE_KHR || (r == VK_SUBOPTIMAL_KHR && !g_vk.sc_turned))
              recreate = 1;
          else if (r == VK_ERROR_SURFACE_LOST_KHR)
-@@ -544,6 +673,178 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -544,6 +671,185 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
@@ -6069,6 +6077,13 @@ index f3ac2e2..9041818 100644
 +   frame generation is on so the counter matches what is on screen. */
 +static u32 g_vk_display;
 +u32 vk_display_presents(void) { return g_vk_display; }
++/* FPS HUD: with PortForge FSR 3 / frame generation, count swapchain pictures (≈2x game), not guest frames. */
++u32 vk_fps_presents(void) {
++    if (__atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
++        __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED))
++        return g_vk_display;
++    return g_vk_present;
++}
 +/* ---- frame generation (fg.c): when a game frame arrives the picture halfway between it and the one before is shown,
 +   and the frame itself half a game frame later, from fg_thread. Every displayed picture then lands between two of the
 +   game's, at twice its rate, half a frame behind it */
@@ -6101,9 +6116,8 @@ index f3ac2e2..9041818 100644
 +    cw = sw;
 +    ch = sh;
 +    if (g_vk.sc_win_w > 0 && g_vk.sc_win_h > 0 && sww > 0 && swh > 0 && sx + sww <= g_vk.sc_win_w &&
-+        sy + swh <= g_vk.sc_win_h) {
-+        cx = (u32)((u64)sw * (u32)sx / (u32)g_vk.sc_win_w);
-+        cy = (u32)((u64)sh * (u32)sy / (u32)g_vk.sc_win_h);
++        sy + swh <= g_vk.sc_win_h &&
++        (u64)sww * (u64)swh * 20 >= (u64)g_vk.sc_win_w * (u64)g_vk.sc_win_h * 17) {
 +        cw = (u32)((u64)sw * (u32)sww / (u32)g_vk.sc_win_w);
 +        ch = (u32)((u64)sh * (u32)swh / (u32)g_vk.sc_win_h);
 +        (void)cx;
@@ -6222,10 +6236,11 @@ index f3ac2e2..9041818 100644
 +            if (cur) surf_save(cur, 0, 0, cur->sw, cur->sh, 0, path);
 +        }
 +    }
-+    if (show(mid, whole, fw, fh, transform, 0)) fg_note_display(1);
++    /* Aspect from the image we are showing (already letterbox-sized when FSR ran), not the guest crop alone. */
++    if (show(mid, whole, mid->sw, mid->sh, transform, 0)) fg_note_display(1);
 +    pm_lock(&g_fg_lock);
-+    g_fg_fw = fw;
-+    g_fg_fh = fh;
++    g_fg_fw = cur && cur->sw && cur->sh ? cur->sw : fw;
++    g_fg_fh = cur && cur->sw && cur->sh ? cur->sh : fh;
 +    g_fg_transform = transform;
 +    g_fg_pending_src = cur; /* already filtered when FSR ran before interpolate */
 +    /* Time from the submitted midpoint, not from before an expensive interpolation/driver stall. */
@@ -6236,7 +6251,7 @@ index f3ac2e2..9041818 100644
  }
  
  /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
-@@ -583,7 +884,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+@@ -583,7 +889,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
          g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
          g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
      }
@@ -6248,7 +6263,7 @@ index f3ac2e2..9041818 100644
      __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
      vk_unlock();
  }
-@@ -600,7 +904,10 @@ static void vkr_refresh(void) {
+@@ -600,7 +909,10 @@ static void vkr_refresh(void) {
      if (!vk_trylock()) return;
      last = now;
      vk_render_end();
@@ -6262,10 +6277,10 @@ index f3ac2e2..9041818 100644
  
 diff --git a/src/nx/gpu/vk/shaders/fg.comp b/src/nx/gpu/vk/shaders/fg.comp
 new file mode 100644
-index 0000000..5bee361
+index 0000000..9fe0f53
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/fg.comp
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,155 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// PortForge FSR 3 (from scratch): display-only upscale + frame generation inspired by AMD FSR 3's
 +// published optical-flow + interpolation design (GPUOpen manuals), without game motion vectors.
@@ -6394,8 +6409,6 @@ index 0000000..5bee361
 +    vec4 a = vec4(0.0), b = vec4(0.0);
 +    float e = 1e9;
 +    vec2 h_best = vec2(0.0);
-+    // Candidate motions (center + neighbors): FSR 3 picks among game-MV and optical-flow fields;
-+    // we only have optical flow, so search local candidates for the lowest bidirectional error.
 +    for (int i = 0; i < 5; i++) {
 +        vec2 o = i == 0 ? vec2(0.0) : vec2(i == 1 ? -3.0 : i == 2 ? 3.0 : 0.0, i == 3 ? -3.0 : i == 4 ? 3.0 : 0.0);
 +        vec2 h = texture(srcC, uv + o * field).xy * scale;
@@ -6404,36 +6417,23 @@ index 0000000..5bee361
 +        float ce = d.r + d.g + d.b + (i == 0 ? 0.0 : 0.01);
 +        if (ce < e) { e = ce; a = ca; b = cb; h_best = h; }
 +    }
-+    // Bidirectional consistency (FSR 3 disocclusion idea without depth): warp current back by -h
-+    // and compare to previous; large mismatch marks a hole.
 +    vec4 back = texture(srcB, uv - h_best / size);
 +    vec4 fwd = texture(srcA, uv + h_best / size);
 +    float e_bi = length(abs(a.rgb - back.rgb)) + length(abs(b.rgb - fwd.rgb));
-+    e = max(e, 0.55 * e_bi);
++    e = max(e, 0.7 * e_bi);
 +
 +    vec4 a0 = texelFetch(srcA, p, 0), b0 = texelFetch(srcB, p, 0);
 +    float e0 = length(abs(a0.rgb - b0.rgb));
-+    // HUD / static lock (FSR 3 HUD-less path analogue): unchanged pixels stay exact.
-+    if (e0 < 0.018) {
-+        imageStore(dst8, p, vec4(b0.rgb, 1.0));
-+        return;
-+    }
-+    // Hard hole → present the latest real pixel (FSR 3 inpainting fallback without a color pyramid).
-+    if (e > 0.38) {
++    float motion = length(h_best);
++    /* Artifact-first policy: any doubt → latest real pixel. BOTW showed multi-layer ruin/UI ghosts when weak
++       warps were blended; only excellent low-motion matches may invent a midpoint. */
++    if (e0 < 0.022 || e > 0.06 || motion > 10.0 || e_bi > 0.10) {
 +        imageStore(dst8, p, vec4(b0.rgb, 1.0));
 +        return;
 +    }
 +    vec4 moved = 0.5 * (a + b);
-+    float reliable = 1.0 - smoothstep(0.05, 0.26, e);
-+    // Soft inpaint: pull toward a small neighborhood of the current frame when partially unreliable.
-+    vec4 n = 0.25 * (
-+        texelFetch(srcB, clamp(p + ivec2(1, 0), ivec2(0), pc.dsize - 1), 0) +
-+        texelFetch(srcB, clamp(p + ivec2(-1, 0), ivec2(0), pc.dsize - 1), 0) +
-+        texelFetch(srcB, clamp(p + ivec2(0, 1), ivec2(0), pc.dsize - 1), 0) +
-+        texelFetch(srcB, clamp(p + ivec2(0, -1), ivec2(0), pc.dsize - 1), 0));
-+    vec4 fill = mix(b0, n, 0.4);
-+    vec4 c = mix(fill, moved, reliable);
-+    imageStore(dst8, p, vec4(c.rgb, 1.0));
++    float reliable = 1.0 - smoothstep(0.015, 0.055, e);
++    imageStore(dst8, p, vec4(mix(b0, moved, reliable * reliable).rgb, 1.0));
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/shaders/fsr1.comp b/src/nx/gpu/vk/shaders/fsr1.comp
@@ -6710,11 +6710,14 @@ index 6096f99..ed57f58 100644
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/ui.c b/src/nx/gpu/vk/ui.c
-index e32e8bd..55ee132 100644
+index e32e8bd..e2c00c0 100644
 --- a/src/nx/gpu/vk/ui.c
 +++ b/src/nx/gpu/vk/ui.c
-@@ -9,6 +9,8 @@
+@@ -7,8 +7,11 @@
+ #include <string.h>
+ #include "nx/gpu/vk/vk.h"
  #include "nx/gpu/vk/ui_spv.h"
++#include "nx/runtime/options.h"
  #include "nx/runtime/platform/log.h"
  #include "nx/runtime/platform/overlay.h"
 +#include "nx/runtime/platform/save_activity.h"
@@ -6722,7 +6725,7 @@ index e32e8bd..55ee132 100644
  #include "nx/runtime/platform/plat.h"
  #include "nx/runtime/platform/vpad.h"
  
-@@ -253,7 +255,7 @@ static void vertex(Vertex* v, float x, float y, float u, float t, u32 rgba) {
+@@ -253,7 +256,7 @@ static void vertex(Vertex* v, float x, float y, float u, float t, u32 rgba) {
  }
  void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
      SnxUiList list = {g_quads, 0, MAX_QUADS};
@@ -6731,17 +6734,13 @@ index e32e8bd..55ee132 100644
      VkImageView view;
      Vertex* v;
      VkBuffer buf;
-@@ -266,11 +268,32 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
+@@ -266,11 +269,28 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
      ui_lock();
      atlas_upload(cb);
      vpad_draw(&list, safe);
 -    vpad_showcase_draw(&list, safe, vpad_showcase_fps(g_vk_present, plat_ns()));
-+    /* With frame generation, count display submissions so the FPS readout matches what is on screen (≈2x game). */
-+    vpad_showcase_draw(&list, safe,
-+                       vpad_showcase_fps(__atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED)
-+                                             ? vk_display_presents()
-+                                             : g_vk_present,
-+                                         plat_ns()));
++    /* PortForge FSR 3 / FG: showcase FPS is display rate (60 limit → ~120), using live g_opt as well as settings. */
++    vpad_showcase_draw(&list, safe, vpad_showcase_fps(vk_fps_presents(), plat_ns()));
 +    if (__atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED) && !overlay_shown())
 +        pf_trace_draw(vk_frame_trace(), &list, safe, sh);
      overlay_draw(&list, sw, sh);
@@ -7052,7 +7051,7 @@ index 0000000..628464e
 +    g_upscale.frames = 0; g_upscale.status = 0;
 +}
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..16f87ee 100644
+index db13c2d..b13fd03 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -74,6 +74,7 @@ typedef struct {
@@ -7158,7 +7157,7 @@ index db13c2d..16f87ee 100644
  VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
-@@ -888,6 +926,24 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
+@@ -888,6 +926,25 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
     safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
  void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
  void vk_ui_swapchain_gone(void); /* its images' views go before the swapchain does */
@@ -7180,6 +7179,7 @@ index db13c2d..16f87ee 100644
 +void vk_fg_reset(void);   /* the next frame starts a new history: a menu, a hitch or a scene the motion can't bridge */
 +void vk_fg_destroy(void); /* GPU idle before this */
 +u32 vk_display_presents(void); /* swapchain pictures shown, including generated frames */
++u32 vk_fps_presents(void);     /* counter for on-screen FPS: display presents when FG is on, else g_vk_present */
  void vk_render_clear(GpuChannel* ch, u32 v);
  VkViewport vk_render_viewport(const u32* r);
  int vk_render_depth_clamp(const u32* r);
