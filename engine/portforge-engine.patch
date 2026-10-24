@@ -1,5 +1,5 @@
 diff --git a/src/3ds/runtime/process.c b/src/3ds/runtime/process.c
-index 5e113bb..45ad2dc 100644
+index 5e113bb..bdb6ab1 100644
 --- a/src/3ds/runtime/process.c
 +++ b/src/3ds/runtime/process.c
 @@ -255,7 +255,7 @@ static bool mount(SnxCtrProcess* p, const char* directory, const SnxCtrCia* cia)
@@ -12,7 +12,7 @@ index 5e113bb..45ad2dc 100644
      pm_unlock(&tree->lock);
      if (cia) {
 diff --git a/src/3ds/services/romfs.c b/src/3ds/services/romfs.c
-index b08cfa1..64e648b 100644
+index b08cfa1..10bba92 100644
 --- a/src/3ds/services/romfs.c
 +++ b/src/3ds/services/romfs.c
 @@ -219,7 +219,7 @@ bool snx_ctr_romfs_open(FsTree* tree, SnxCtrRomfs** out) {
@@ -25,7 +25,7 @@ index b08cfa1..64e648b 100644
          goto fail;
      }
 diff --git a/src/common/cpu/aarch64/cpu.h b/src/common/cpu/aarch64/cpu.h
-index c33b962..49299f0 100644
+index c33b962..bc7a530 100644
 --- a/src/common/cpu/aarch64/cpu.h
 +++ b/src/common/cpu/aarch64/cpu.h
 @@ -426,8 +426,9 @@ SNX_INLINE void dc_zva(u8* M, u64 a) { memset(MP(a & ~(u64)63), 0, 64); }
@@ -52,7 +52,7 @@ index c33b962..49299f0 100644
              stored = snx_cas8((u8*)MP(a), (u8)c->excl_val, (u8)v);
          else if (sz == 1)
 diff --git a/src/common/cpu/recompiler/llvm/ir_helpers.c b/src/common/cpu/recompiler/llvm/ir_helpers.c
-index 8a0f8b1..e97f91c 100644
+index 8a0f8b1..81007a0 100644
 --- a/src/common/cpu/recompiler/llvm/ir_helpers.c
 +++ b/src/common/cpu/recompiler/llvm/ir_helpers.c
 @@ -400,10 +400,13 @@ static LLVMValueRef exclusive_match(SnxIr* ir, LLVMValueRef a, LLVMValueRef size
@@ -71,7 +71,7 @@ index 8a0f8b1..e97f91c 100644
  /* stx(c,M,a,sz,v) */
  static void build_stx(SnxIr* ir, LLVMValueRef function) {
 diff --git a/src/common/cpu/recompiler/llvm/jit_service.c b/src/common/cpu/recompiler/llvm/jit_service.c
-index 07e8b78..bff47bf 100644
+index 07e8b78..83d6a75 100644
 --- a/src/common/cpu/recompiler/llvm/jit_service.c
 +++ b/src/common/cpu/recompiler/llvm/jit_service.c
 @@ -581,7 +581,8 @@ static char* cache_key(const SnxJitService* s) {
@@ -85,7 +85,7 @@ index 07e8b78..bff47bf 100644
                  (unsigned long long)fnv(snx_rtlib_object, snx_rtlib_object_size, 0xCBF29CE484222325ULL), cpu,
                  s->config.opt, s->config.hook_direct_calls, s->config.direct_svc, features);
 diff --git a/src/common/filesystem/tree.c b/src/common/filesystem/tree.c
-index cf4fe32..e05db5a 100644
+index cf4fe32..c596635 100644
 --- a/src/common/filesystem/tree.c
 +++ b/src/common/filesystem/tree.c
 @@ -675,17 +675,18 @@ FsTreeResult fs_tree_mtime(FsTree* tree, const FsNode* node, uint64_t* unix_ms)
@@ -110,7 +110,7 @@ index cf4fe32..e05db5a 100644
      FsTreeResult rc = fs_tree_path(tree, node, path, sizeof path);
      if (rc) return rc;
 diff --git a/src/common/filesystem/tree.h b/src/common/filesystem/tree.h
-index 9d34b9e..cf09b08 100644
+index 9d34b9e..e13b5cb 100644
 --- a/src/common/filesystem/tree.h
 +++ b/src/common/filesystem/tree.h
 @@ -79,9 +79,9 @@ FsTreeResult fs_tree_rename(FsTree* tree, FsNode* scope, const char* src, const
@@ -127,7 +127,7 @@ index 9d34b9e..cf09b08 100644
  void fs_tree_release(FsNode* node);
  
 diff --git a/src/nx/CMakeLists.txt b/src/nx/CMakeLists.txt
-index f6a4f52..dcd4eb6 100644
+index f6a4f52..819cfaa 100644
 --- a/src/nx/CMakeLists.txt
 +++ b/src/nx/CMakeLists.txt
 @@ -71,7 +71,7 @@ target_link_libraries(snx_gpu PRIVATE snx_llvm)
@@ -198,7 +198,7 @@ index f6a4f52..dcd4eb6 100644
      snx_test_target(snx-test-shader-direct 11)
      target_link_libraries(snx-test-shader-direct PRIVATE snx_shader)
 diff --git a/src/nx/gpu/gpu.c b/src/nx/gpu/gpu.c
-index d7caa73..76aa267 100644
+index d7caa73..2dcd82d 100644
 --- a/src/nx/gpu/gpu.c
 +++ b/src/nx/gpu/gpu.c
 @@ -567,6 +567,8 @@ struct GpuItem {
@@ -306,7 +306,7 @@ index d7caa73..76aa267 100644
      queue_init();
      stale = !g_gpu.chan[channel] || g_scan_stale[channel];
 diff --git a/src/nx/gpu/shader/shader.c b/src/nx/gpu/shader/shader.c
-index 43d443b..9835fe1 100644
+index 43d443b..5866e24 100644
 --- a/src/nx/gpu/shader/shader.c
 +++ b/src/nx/gpu/shader/shader.c
 @@ -14,7 +14,7 @@
@@ -319,7 +319,7 @@ index 43d443b..9835fe1 100644
  const u64* shader_words(const u8* code, u32 bytes, u64** copy) {
      u32 i, n = bytes / 8;
 diff --git a/src/nx/gpu/shader/shader.h b/src/nx/gpu/shader/shader.h
-index 4e94d17..0e67068 100644
+index 4e94d17..7cdb310 100644
 --- a/src/nx/gpu/shader/shader.h
 +++ b/src/nx/gpu/shader/shader.h
 @@ -138,7 +138,8 @@ u32* shader_compute_to_spirv(const u8* code, u32 max_bytes, ShaderInfo* si, size
@@ -333,7 +333,7 @@ index 4e94d17..0e67068 100644
  int shader_brx_targets(const u64* words, u32 index, u32 count, u32* targets, int max_targets);
  /* the program's hash, and its length in bytes in out_len */
 diff --git a/src/nx/gpu/vk/cmd.c b/src/nx/gpu/vk/cmd.c
-index cd9e27e..3f4ebcf 100644
+index cd9e27e..08c51fd 100644
 --- a/src/nx/gpu/vk/cmd.c
 +++ b/src/nx/gpu/vk/cmd.c
 @@ -222,9 +222,11 @@ static void ring_reset(Ring* r, const VmaBudget* budget) {
@@ -349,7 +349,7 @@ index cd9e27e..3f4ebcf 100644
  /* the storage results of every submission up to value, which has finished, land in guest memory, in order */
  static void land_through(u64 value) {
 diff --git a/src/nx/gpu/vk/compute.c b/src/nx/gpu/vk/compute.c
-index e74a30c..3a15e74 100644
+index e74a30c..b83c51c 100644
 --- a/src/nx/gpu/vk/compute.c
 +++ b/src/nx/gpu/vk/compute.c
 @@ -31,8 +31,16 @@ typedef struct CsPipe {
@@ -563,7 +563,7 @@ index e74a30c..3a15e74 100644
          LOG_LIMIT(12, "vulkan: compute %016llx ready: block %ux%ux%u, %d global buffers, %d textures, %d images\n",
                    (unsigned long long)key, lx, ly, lz, p->si.ngbuf, p->si.ntex, p->si.nimg);
 diff --git a/src/nx/gpu/vk/device.c b/src/nx/gpu/vk/device.c
-index 8579250..c2953b2 100644
+index 8579250..751a78b 100644
 --- a/src/nx/gpu/vk/device.c
 +++ b/src/nx/gpu/vk/device.c
 @@ -18,6 +18,13 @@ VkShaderStageFlags g_vk_subgroup_stages;
@@ -656,7 +656,7 @@ index 8579250..c2953b2 100644
      memcpy(g_vk.sc_done, done, sizeof done[0] * nimg);
 diff --git a/src/nx/gpu/vk/fg.c b/src/nx/gpu/vk/fg.c
 new file mode 100644
-index 0000000..39b0119
+index 0000000..ad5980a
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
 @@ -0,0 +1,433 @@
@@ -1095,7 +1095,7 @@ index 0000000..39b0119
 +}
 diff --git a/src/nx/gpu/vk/fg_spv.h b/src/nx/gpu/vk/fg_spv.h
 new file mode 100644
-index 0000000..5b4e29e
+index 0000000..457edb8
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg_spv.h
 @@ -0,0 +1,5 @@
@@ -1106,7 +1106,7 @@ index 0000000..5b4e29e
 +extern const u64 fg_luma_spv_size, fg_search_spv_size, fg_median_spv_size, fg_interp_spv_size;
 diff --git a/src/nx/gpu/vk/frame_policy.h b/src/nx/gpu/vk/frame_policy.h
 new file mode 100644
-index 0000000..f7c0808
+index 0000000..a298fde
 --- /dev/null
 +++ b/src/nx/gpu/vk/frame_policy.h
 @@ -0,0 +1,31 @@
@@ -1143,7 +1143,7 @@ index 0000000..f7c0808
 +#endif
 diff --git a/src/nx/gpu/vk/frame_times.c b/src/nx/gpu/vk/frame_times.c
 new file mode 100644
-index 0000000..57f71f4
+index 0000000..faec9fa
 --- /dev/null
 +++ b/src/nx/gpu/vk/frame_times.c
 @@ -0,0 +1,35 @@
@@ -1184,7 +1184,7 @@ index 0000000..57f71f4
 +}
 diff --git a/src/nx/gpu/vk/fsr1/LICENSE.txt b/src/nx/gpu/vk/fsr1/LICENSE.txt
 new file mode 100644
-index 0000000..efd020e
+index 0000000..324cba5
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/LICENSE.txt
 @@ -0,0 +1,19 @@
@@ -1209,14 +1209,14 @@ index 0000000..efd020e
 +THE SOFTWARE.
 diff --git a/src/nx/gpu/vk/fsr1/UPSTREAM.txt b/src/nx/gpu/vk/fsr1/UPSTREAM.txt
 new file mode 100644
-index 0000000..08d55e1
+index 0000000..dcb65fb
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/UPSTREAM.txt
 @@ -0,0 +1 @@
 +AMD FidelityFX FSR 1, https://github.com/GPUOpen-Effects/FidelityFX-FSR, commit a21ffb8f6c13233ba336352bdff293894c706575
 diff --git a/src/nx/gpu/vk/fsr1/ffx_a.h b/src/nx/gpu/vk/fsr1/ffx_a.h
 new file mode 100644
-index 0000000..3fa315b
+index 0000000..d04bff5
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/ffx_a.h
 @@ -0,0 +1,2656 @@
@@ -3878,7 +3878,7 @@ index 0000000..3fa315b
 +#endif
 diff --git a/src/nx/gpu/vk/fsr1/ffx_fsr1.h b/src/nx/gpu/vk/fsr1/ffx_fsr1.h
 new file mode 100644
-index 0000000..ca571c9
+index 0000000..4e0b3d5
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/ffx_fsr1.h
 @@ -0,0 +1,1199 @@
@@ -5083,7 +5083,7 @@ index 0000000..ca571c9
 +#endif
 diff --git a/src/nx/gpu/vk/fsr1_spv.h b/src/nx/gpu/vk/fsr1_spv.h
 new file mode 100644
-index 0000000..c75b1f7
+index 0000000..8ac3788
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1_spv.h
 @@ -0,0 +1,7 @@
@@ -5095,7 +5095,7 @@ index 0000000..c75b1f7
 +extern const u32 smooth_spv[];
 +extern const u64 smooth_spv_size;
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..a0de2f7 100644
+index 33f94b6..539626e 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
 @@ -16,6 +16,7 @@
@@ -5659,7 +5659,7 @@ index 33f94b6..a0de2f7 100644
               (unsigned)sizeof(ShaderInfo), (unsigned)sizeof(PipeKey), (unsigned)sizeof(PfShader));
  }
 diff --git a/src/nx/gpu/vk/pipeline_file.c b/src/nx/gpu/vk/pipeline_file.c
-index 1e659d4..42553dc 100644
+index 1e659d4..7b43c30 100644
 --- a/src/nx/gpu/vk/pipeline_file.c
 +++ b/src/nx/gpu/vk/pipeline_file.c
 @@ -194,7 +194,7 @@ static size_t pf_read(PFile* pf, const u8* buf, size_t at, size_t size, const Pf
@@ -5672,7 +5672,7 @@ index 1e659d4..42553dc 100644
                  u32 c = cap ? cap * 2 : 1024;
                  u64* a = (u64*)realloc(check, c * sizeof *a);
 diff --git a/src/nx/gpu/vk/query.c b/src/nx/gpu/vk/query.c
-index 2b46a4c..c1476c0 100644
+index 2b46a4c..7648ada 100644
 --- a/src/nx/gpu/vk/query.c
 +++ b/src/nx/gpu/vk/query.c
 @@ -131,6 +131,10 @@ static u32 msaa_samples(u32 mode) {
@@ -5687,7 +5687,7 @@ index 2b46a4c..c1476c0 100644
      QCounter* c = counter(chan, 0);
      u32 mul = msaa_samples(msaa_mode);
 diff --git a/src/nx/gpu/vk/record.c b/src/nx/gpu/vk/record.c
-index b3b0e2c..9836150 100644
+index b3b0e2c..305079d 100644
 --- a/src/nx/gpu/vk/record.c
 +++ b/src/nx/gpu/vk/record.c
 @@ -155,6 +155,11 @@ void vk_rec_queue(VkQueue q) {
@@ -5712,7 +5712,7 @@ index b3b0e2c..9836150 100644
  }
  typedef struct {
 diff --git a/src/nx/gpu/vk/render.c b/src/nx/gpu/vk/render.c
-index b8247c0..705900e 100644
+index b8247c0..f1fb7dc 100644
 --- a/src/nx/gpu/vk/render.c
 +++ b/src/nx/gpu/vk/render.c
 @@ -822,6 +822,45 @@ u32 vk_gbuf_desc(int stage, u32 off, const u32* v, u64* addr) {
@@ -5835,7 +5835,7 @@ index b8247c0..705900e 100644
          rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 diff --git a/src/nx/gpu/vk/render_scale.h b/src/nx/gpu/vk/render_scale.h
 new file mode 100644
-index 0000000..04a02f9
+index 0000000..e9e61a1
 --- /dev/null
 +++ b/src/nx/gpu/vk/render_scale.h
 @@ -0,0 +1,34 @@
@@ -5874,7 +5874,7 @@ index 0000000..04a02f9
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..2af7b7b 100644
+index f3ac2e2..d0eb644 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -6,8 +6,9 @@
@@ -6083,7 +6083,7 @@ index f3ac2e2..2af7b7b 100644
      }
      VkSemaphore wait = VK_NULL_HANDLE, signal = VK_NULL_HANDLE;
      u32 idx = 0;
-@@ -337,9 +454,16 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -337,12 +454,25 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
      if (shown && (src || !game) && (g_vk.swapchain || (!tried && vk_swapchain_create(srgb)))) {
          VkCommandBuffer cb = vk_cmd(); /* waits for this frame slot, so its acquire semaphore is free */
          VkSemaphore acq = g_acquired[vk_frame_id() % VK_FRAMES];
@@ -6093,17 +6093,27 @@ index f3ac2e2..2af7b7b 100644
 +        /* The guest present does not wait: vk_lock is held, and the game's pace is present_pace's (speed lock).
 +           A generated picture is not a guest frame — present_show_due is not called (game == 0) and present_pace is
 +           not called. A zero timeout dropped it whenever the previous present still held the images, so Display FPS
-+           stayed at the game's 60 no matter which limit was chosen. Wait up to half a 60 Hz frame, then once more. */
++           stayed at the game's 60 no matter which limit was chosen. Wait up to ~16 ms twice (not the game's pace). */
 +        int fg_pic = !game && (__atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
 +                               __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED));
-+        u64 acq_ns = fg_pic ? 8000000ull : 0ull;
++        u64 acq_ns = fg_pic ? 16000000ull : 0ull;
 +        VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, acq_ns, acq, VK_NULL_HANDLE, &idx);
++        if (fg_pic && (r == VK_NOT_READY || r == VK_TIMEOUT))
++            r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, acq_ns, acq, VK_NULL_HANDLE, &idx);
 +        if (fg_pic && (r == VK_NOT_READY || r == VK_TIMEOUT))
 +            r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, acq_ns, acq, VK_NULL_HANDLE, &idx);
          if (r == VK_NOT_READY || r == VK_TIMEOUT) {
              /* the game faster than the display (vsync=1 with fps_limit over its refresh, or a 59.94 Hz one) */
-             static u64 dropped;
-@@ -372,8 +496,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+-            static u64 dropped;
++            static u64 dropped, fg_dropped;
++            if (fg_pic && ++fg_dropped % 120 == 1)
++                LOG("vulkan: %llu generated pictures not shown (swapchain acquire timed out); Display FPS stays near "
++                    "the game rate until a spare image is free\n",
++                    (unsigned long long)fg_dropped);
+             if (game && ++dropped % 600 == 1)
+                 LOG("vulkan: %llu frames not shown, the display had every swapchain image\n",
+                     (unsigned long long)dropped);
+@@ -372,8 +502,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
              u32 sw = g_vk.sc_extent.width, sh = g_vk.sc_extent.height, cx = 0, cy = 0, cw = sw, ch = sh, dw, dh;
              int sx, sy, sww, swh;
              backend_window_safe(&sx, &sy, &sww, &swh);
@@ -6115,7 +6125,7 @@ index f3ac2e2..2af7b7b 100644
                  cx = (u32)((u64)sw * (u32)sx / (u32)g_vk.sc_win_w);
                  cy = (u32)((u64)sh * (u32)sy / (u32)g_vk.sc_win_h);
                  cw = (u32)((u64)sw * (u32)sww / (u32)g_vk.sc_win_w);
-@@ -388,12 +514,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -388,12 +520,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  }
                  i32 dx = (i32)(cx + (cw - dw) / 2), dy = (i32)(cy + (ch - dh) / 2);
                  VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
@@ -6136,7 +6146,7 @@ index f3ac2e2..2af7b7b 100644
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
              }
              {
-@@ -411,24 +542,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -411,24 +548,44 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             runs at) and the slowest, since the last line */
          static u64 last_present_ns, slow_frames, slowest_ns;
          /* the counters as of the last present: a slow frame says what it did, which names what a hitch waited for */
@@ -6186,7 +6196,7 @@ index f3ac2e2..2af7b7b 100644
              }
              if (d > slowest_ns) slowest_ns = d;
          }
-@@ -441,6 +592,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -441,6 +598,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          vk_buf_frame();
          vk_mem_trim(0, 0);
          if (g_vk_present % 600 == 0) {
@@ -6199,7 +6209,7 @@ index f3ac2e2..2af7b7b 100644
              char cs_why[256];
              u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
              LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
-@@ -467,6 +624,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +630,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
@@ -6213,7 +6223,7 @@ index f3ac2e2..2af7b7b 100644
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -516,10 +680,18 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -516,10 +686,18 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  (unsigned long long)own_landings(), (unsigned long long)g_vk_rt_readbacks);
          }
      }
@@ -6234,7 +6244,7 @@ index f3ac2e2..2af7b7b 100644
      if (signal) {
          VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                                 .waitSemaphoreCount = 1,
-@@ -528,7 +700,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -528,7 +706,10 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                                 .pSwapchains = &g_vk.swapchain,
                                 .pImageIndices = &idx};
          vk_rec_queue(g_vk.gfx); /* the present waits on the frame's submission's semaphore */
@@ -6245,7 +6255,7 @@ index f3ac2e2..2af7b7b 100644
          if (r == VK_ERROR_OUT_OF_DATE_KHR || (r == VK_SUBOPTIMAL_KHR && !g_vk.sc_turned))
              recreate = 1;
          else if (r == VK_ERROR_SURFACE_LOST_KHR)
-@@ -544,6 +719,201 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -544,6 +725,201 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
@@ -6447,7 +6457,7 @@ index f3ac2e2..2af7b7b 100644
  }
  
  /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
-@@ -583,7 +953,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+@@ -583,7 +959,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
          g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
          g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
      }
@@ -6459,7 +6469,7 @@ index f3ac2e2..2af7b7b 100644
      __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
      vk_unlock();
  }
-@@ -600,7 +973,10 @@ static void vkr_refresh(void) {
+@@ -600,7 +979,10 @@ static void vkr_refresh(void) {
      if (!vk_trylock()) return;
      last = now;
      vk_render_end();
@@ -6473,7 +6483,7 @@ index f3ac2e2..2af7b7b 100644
  
 diff --git a/src/nx/gpu/vk/shaders/fg.comp b/src/nx/gpu/vk/shaders/fg.comp
 new file mode 100644
-index 0000000..7754dc3
+index 0000000..56cee6b
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/fg.comp
 @@ -0,0 +1,162 @@
@@ -6641,7 +6651,7 @@ index 0000000..7754dc3
 +#endif
 diff --git a/src/nx/gpu/vk/shaders/fsr1.comp b/src/nx/gpu/vk/shaders/fsr1.comp
 new file mode 100644
-index 0000000..deba12b
+index 0000000..88e1851
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/fsr1.comp
 @@ -0,0 +1,60 @@
@@ -6707,7 +6717,7 @@ index 0000000..deba12b
 +}
 diff --git a/src/nx/gpu/vk/shaders/smooth.comp b/src/nx/gpu/vk/shaders/smooth.comp
 new file mode 100644
-index 0000000..17d4c91
+index 0000000..9b5ef9f
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/smooth.comp
 @@ -0,0 +1,91 @@
@@ -6803,7 +6813,7 @@ index 0000000..17d4c91
 +    imageStore(outputImage, p, vec4(color, 1.0));
 +}
 diff --git a/src/nx/gpu/vk/surface.c b/src/nx/gpu/vk/surface.c
-index 355bd29..d5cdda4 100644
+index 355bd29..cb3d42b 100644
 --- a/src/nx/gpu/vk/surface.c
 +++ b/src/nx/gpu/vk/surface.c
 @@ -151,22 +151,31 @@ void vk_surf_use(VkCommandBuffer cb, Surf* s, VkImageLayout layout, VkPipelineSt
@@ -6880,7 +6890,7 @@ index 355bd29..d5cdda4 100644
      if (s->in_drawn) return;
      if (g_ndrawn == g_capdrawn) {
 diff --git a/src/nx/gpu/vk/texture.c b/src/nx/gpu/vk/texture.c
-index 6096f99..256e90e 100644
+index 6096f99..ed57f58 100644
 --- a/src/nx/gpu/vk/texture.c
 +++ b/src/nx/gpu/vk/texture.c
 @@ -10,6 +10,7 @@
@@ -6915,7 +6925,7 @@ index 6096f99..256e90e 100644
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/ui.c b/src/nx/gpu/vk/ui.c
-index e32e8bd..d6c6b68 100644
+index e32e8bd..936b4e9 100644
 --- a/src/nx/gpu/vk/ui.c
 +++ b/src/nx/gpu/vk/ui.c
 @@ -7,8 +7,11 @@
@@ -6976,7 +6986,7 @@ index e32e8bd..d6c6b68 100644
      for (i = 0; i < n; ++i) {
 diff --git a/src/nx/gpu/vk/upscale.c b/src/nx/gpu/vk/upscale.c
 new file mode 100644
-index 0000000..b6130fb
+index 0000000..b800061
 --- /dev/null
 +++ b/src/nx/gpu/vk/upscale.c
 @@ -0,0 +1,312 @@
@@ -7293,7 +7303,7 @@ index 0000000..b6130fb
 +    g_upscale.frames = 0; g_upscale.status = 0;
 +}
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..608f6db 100644
+index db13c2d..931f27c 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -68,12 +68,14 @@ typedef struct {
@@ -7445,7 +7455,7 @@ index db13c2d..608f6db 100644
  VkViewport vk_render_viewport(const u32* r);
  int vk_render_depth_clamp(const u32* r);
 diff --git a/src/nx/hle/filesystem/fs.c b/src/nx/hle/filesystem/fs.c
-index 354a1fc..bcc10cc 100644
+index 354a1fc..72d60bf 100644
 --- a/src/nx/hle/filesystem/fs.c
 +++ b/src/nx/hle/filesystem/fs.c
 @@ -391,9 +391,9 @@ void fs_init(void) {
@@ -7530,7 +7540,7 @@ index 354a1fc..bcc10cc 100644
  }
  static int nn_fssrv_sf_IFile_Flush(SvcObj* self) {
 diff --git a/src/nx/hle/filesystem/fs.h b/src/nx/hle/filesystem/fs.h
-index fd64ad4..b22be6b 100644
+index fd64ad4..2845a4a 100644
 --- a/src/nx/hle/filesystem/fs.h
 +++ b/src/nx/hle/filesystem/fs.h
 @@ -115,4 +115,5 @@ typedef struct {
@@ -7540,7 +7550,7 @@ index fd64ad4..b22be6b 100644
 +void hle_fs_stats(u64* reads, u64* bytes, u64* ms); /* the game's file reads so far: how many, their bytes, the time they took */
  #endif
 diff --git a/src/nx/hle/services/nvdrv.c b/src/nx/hle/services/nvdrv.c
-index ebff4f0..d8d2841 100644
+index ebff4f0..29a1c84 100644
 --- a/src/nx/hle/services/nvdrv.c
 +++ b/src/nx/hle/services/nvdrv.c
 @@ -368,6 +368,19 @@ int syncpt_wait(u32 id, u32 thresh, i64 timeout_ns) {
@@ -7580,7 +7590,7 @@ index ebff4f0..d8d2841 100644
              return ok ? 0 : 5;
          }
 diff --git a/src/nx/hle/services/nvdrv.h b/src/nx/hle/services/nvdrv.h
-index c42fc3d..0ca93b3 100644
+index c42fc3d..f6be192 100644
 --- a/src/nx/hle/services/nvdrv.h
 +++ b/src/nx/hle/services/nvdrv.h
 @@ -38,6 +38,9 @@ void syncpt_add(u32 id, u32 n); /* n increments, one wakeup */
@@ -7604,7 +7614,7 @@ index c42fc3d..0ca93b3 100644
      u8 syncpt_used[SYNCPT_N];
 diff --git a/src/nx/memory/layout.h b/src/nx/memory/layout.h
 new file mode 100644
-index 0000000..bbd8b96
+index 0000000..3a4d381
 --- /dev/null
 +++ b/src/nx/memory/layout.h
 @@ -0,0 +1,31 @@
@@ -7640,7 +7650,7 @@ index 0000000..bbd8b96
 +}
 +#endif
 diff --git a/src/nx/memory/mem.c b/src/nx/memory/mem.c
-index 1753319..1e62c81 100644
+index 1753319..1145db5 100644
 --- a/src/nx/memory/mem.c
 +++ b/src/nx/memory/mem.c
 @@ -7,6 +7,7 @@
@@ -7662,7 +7672,7 @@ index 1753319..1e62c81 100644
  u64 g_heap_size, g_phys_mapped, g_heap_max, g_code_memory, g_main_stack_size;
  u64 g_pool_size = 64 * GIB; /* sparse: only the pages in use take memory */
 diff --git a/src/nx/runtime/driver/hactool/nca.c b/src/nx/runtime/driver/hactool/nca.c
-index 2f956fa..17f2495 100644
+index 2f956fa..23ac531 100644
 --- a/src/nx/runtime/driver/hactool/nca.c
 +++ b/src/nx/runtime/driver/hactool/nca.c
 @@ -1420,13 +1420,15 @@ void nca_save_section_file(nca_section_ctx_t *ctx, uint64_t ofs, uint64_t total_
@@ -7685,7 +7695,7 @@ index 2f956fa..17f2495 100644
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
 diff --git a/src/nx/runtime/guest_jit.c b/src/nx/runtime/guest_jit.c
-index b259c30..5ad63c2 100644
+index b259c30..e06079b 100644
 --- a/src/nx/runtime/guest_jit.c
 +++ b/src/nx/runtime/guest_jit.c
 @@ -164,7 +164,21 @@ GuestFn jit_resolve_or_add(u64 pc) {
@@ -7712,7 +7722,7 @@ index b259c30..5ad63c2 100644
  const char* jit_failure(void) { return g_jit ? "the JIT could not compile it" : g_jit_error; }
  
 diff --git a/src/nx/runtime/guest_jit.h b/src/nx/runtime/guest_jit.h
-index 894d8e7..dc7e012 100644
+index 894d8e7..00f0695 100644
 --- a/src/nx/runtime/guest_jit.h
 +++ b/src/nx/runtime/guest_jit.h
 @@ -18,6 +18,8 @@ GuestFn jit_resolve(u64 pc);
@@ -7725,7 +7735,7 @@ index 894d8e7..dc7e012 100644
  const char* jit_failure(void);
  /* Code the game maps while it runs (an NRO, hle/services/ldr.c), text_size bytes of text at base out of size: the
 diff --git a/src/nx/runtime/main.c b/src/nx/runtime/main.c
-index 6a667e6..16e05a9 100644
+index 6a667e6..5ae8e43 100644
 --- a/src/nx/runtime/main.c
 +++ b/src/nx/runtime/main.c
 @@ -19,6 +19,7 @@
@@ -7832,10 +7842,10 @@ index 6a667e6..16e05a9 100644
      {
          char version[16];
 diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
-index addf082..d0f5cca 100644
+index addf082..c24ae65 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
-@@ -38,5 +38,14 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -38,5 +38,16 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
  /* the wait before vi hands the game a buffer for its next frame, as fps_limit says: with fps_limit=game until the
     frame before has been on the display for interval refreshes (its swap interval) */
  void present_pace(u32 interval);
@@ -7848,10 +7858,12 @@ index addf082..d0f5cca 100644
 +   With frame generation, expected display FPS is about 2x the frames actually shown, not 2x a cap above the game. */
 +int present_game_side_fps(int fps_limit);
 +int present_expected_display_fps(int fps_limit, int frame_generation);
++/* Esc/Home/F4 or Settings live change: drop the display-drop schedule so a new lower limit takes effect at once */
++void present_limit_changed(void);
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
-index a0ef76b..7f02e25 100644
+index a0ef76b..51f91a8 100644
 --- a/src/nx/runtime/options.c
 +++ b/src/nx/runtime/options.c
 @@ -58,6 +58,20 @@ void options_fps_set(const IniOpt* o, const char* v) {
@@ -7875,7 +7887,7 @@ index a0ef76b..7f02e25 100644
  void fps_limit_text(int fps, char* out, size_t n) {
      if (fps == SNX_FPS_GAME)
          snprintf(out, n, "game");
-@@ -135,6 +149,108 @@ typedef struct {
+@@ -135,6 +149,109 @@ typedef struct {
  } Override;
  static Override g_over[OVERRIDE_MAX];
  static int g_nover;
@@ -7914,6 +7926,7 @@ index a0ef76b..7f02e25 100644
 +       and put the limiter back, which left every choice presenting at the game's 60. */
 +    pm_lock(&g_poll_lock);
 +    __atomic_store_n(&g_opt_fps, fps, __ATOMIC_RELAXED);
++    present_limit_changed();
 +    fps_limit_text(fps, v, sizeof v);
 +    session_put("fps_limit", v);
 +    pm_unlock(&g_poll_lock);
@@ -7984,7 +7997,7 @@ index a0ef76b..7f02e25 100644
  /* the menu's, from any thread, until a write of the file has them. g_pending_lock is a leaf: nothing is called while
     it is held */
  typedef struct {
-@@ -144,7 +260,6 @@ typedef struct {
+@@ -144,7 +261,6 @@ typedef struct {
  static Pending g_pending[PENDING_MAX];
  static int g_npending;
  static PMutex g_pending_lock = PMUTEX_INIT;
@@ -7992,7 +8005,7 @@ index a0ef76b..7f02e25 100644
  
  static char g_path[1400];
  static int g_started; /* ini_open is done: the startup settings are kept from now on */
-@@ -203,6 +318,10 @@ static const char* value_of(const IniOpt* o) {
+@@ -203,6 +319,10 @@ static const char* value_of(const IniOpt* o) {
      const char* v = override_of(o->key);
      const Entry* e;
      if (v) return v;
@@ -8003,7 +8016,7 @@ index a0ef76b..7f02e25 100644
      e = store_find(o->key);
      return e ? e->value : o->def;
  }
-@@ -224,7 +343,7 @@ void ini_override(const char* k, const char* v) {
+@@ -224,7 +344,7 @@ void ini_override(const char* k, const char* v) {
  void ini_set(const char* k, const char* v) {
      size_t kn = strlen(k), vn = strlen(v);
      int i;
@@ -8012,7 +8025,7 @@ index a0ef76b..7f02e25 100644
      if (kn >= KEY_MAX || vn >= PENDING_VALUE) {
          WARN_LIMIT(1, "settings: %s's value is too long to save\n", k);
          return;
-@@ -414,6 +533,7 @@ void ini_open(const char* path) {
+@@ -414,6 +534,7 @@ void ini_open(const char* path) {
      char why[256];
      snprintf(g_path, sizeof g_path, "%s", path);
      ini_set_say(say_setting);
@@ -8020,7 +8033,7 @@ index a0ef76b..7f02e25 100644
      for (i = 0; i < g_nover; i++)
          if (!snx_setting_known(g_over[i].key)) WARN("--%s is not a setting, so it does nothing\n", g_over[i].key);
      text = snx_read_file(g_path, &size);
-@@ -433,6 +553,9 @@ void ini_open(const char* path) {
+@@ -433,6 +554,9 @@ void ini_open(const char* path) {
      n = pending_take(taken);
      say_deprecated();
      apply_all();
@@ -8031,7 +8044,7 @@ index a0ef76b..7f02e25 100644
      g_started = 1;
  }
 diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
-index 408db9e..d682e50 100644
+index 408db9e..1f9e98b 100644
 --- a/src/nx/runtime/options.h
 +++ b/src/nx/runtime/options.h
 @@ -34,7 +34,13 @@ void ini_poll(int final);
@@ -8049,7 +8062,7 @@ index 408db9e..d682e50 100644
     (hle/services/network/ldn.c) */
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
-index ac4acd5..023ef05 100644
+index ac4acd5..55ab33d 100644
 --- a/src/nx/runtime/platform/backend/gamepad.c
 +++ b/src/nx/runtime/platform/backend/gamepad.c
 @@ -370,6 +370,11 @@ u64 gamepad_button(u32 id, int button) {
@@ -8150,7 +8163,7 @@ index ac4acd5..023ef05 100644
 +    return 0;
 +}
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
-index 87dfdc6..2b30e37 100644
+index 87dfdc6..7bcd768 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
 +++ b/src/nx/runtime/platform/backend/sdl3.c
 @@ -13,6 +13,7 @@
@@ -8380,7 +8393,7 @@ index 87dfdc6..2b30e37 100644
          g_shot_req = 0;
 diff --git a/src/nx/runtime/platform/frame_trace.c b/src/nx/runtime/platform/frame_trace.c
 new file mode 100644
-index 0000000..fdc2052
+index 0000000..4f497ef
 --- /dev/null
 +++ b/src/nx/runtime/platform/frame_trace.c
 @@ -0,0 +1,118 @@
@@ -8504,7 +8517,7 @@ index 0000000..fdc2052
 +}
 diff --git a/src/nx/runtime/platform/frame_trace.h b/src/nx/runtime/platform/frame_trace.h
 new file mode 100644
-index 0000000..ffc1b48
+index 0000000..37ce839
 --- /dev/null
 +++ b/src/nx/runtime/platform/frame_trace.h
 @@ -0,0 +1,53 @@
@@ -8562,7 +8575,7 @@ index 0000000..ffc1b48
 +void pf_trace_draw(const PfTrace* t, SnxUiList* l, const int safe[4], int sh, int display_fps);
 +#endif
 diff --git a/src/nx/runtime/platform/gamepad.h b/src/nx/runtime/platform/gamepad.h
-index 0821ef7..5edd58c 100644
+index 0821ef7..c440b93 100644
 --- a/src/nx/runtime/platform/gamepad.h
 +++ b/src/nx/runtime/platform/gamepad.h
 @@ -25,10 +25,15 @@ u32 gamepad_slot_id(int slot); /* SDL joystick instance ID, 0 for an empty slot
@@ -8582,19 +8595,20 @@ index 0821ef7..5edd58c 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2..b5f1f3c 100644
+index 441a8c2..17ec665 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,9 @@
  #include "nx/runtime/platform/fatal_screen.h"
  #include "nx/runtime/platform/gamepad.h"
  #include "nx/runtime/platform/vpad.h"
 +#include "nx/runtime/options.h"
 +#include "nx/runtime/main.h"
++#include "nx/runtime/pf_engine_version.h"
  #include "gui_theme_colors.h"
  #include "common/utilities/pad_screen.h"
  #include "common/utilities/users.h"
-@@ -14,7 +16,7 @@
+@@ -14,7 +17,7 @@
  
  enum { FIRST = 3, VISIBLE = OVERLAY_ROWS - FIRST - 1 }; /* the items' first row, and how many show at once */
  enum { PAGE_MAIN, PAGE_CONTROLS, PAGE_BUTTONS, PAGE_PADS, PAGE_MAP };
@@ -8603,15 +8617,16 @@ index 441a8c2..b5f1f3c 100644
  enum { P_PLAYER, P_SWAP, P_DEADZONE, P_RUMBLE, P_BACKGROUND, P_MAP, P_BACK, P_COUNT }; /* the gamepads' page's */
  /* the controls page's items */
  enum {
-@@ -55,6 +57,7 @@ static const char* const PADS[P_COUNT] = {SNX_GAMEPAD_PLAYERS,
+@@ -55,6 +58,8 @@ static const char* const PADS[P_COUNT] = {SNX_GAMEPAD_PLAYERS,
                                            "Back"};
  static int shown, page, focus, top; /* top: the first item showing */
  static int pad_player;              /* the player the gamepads' page shows: 0 every player's, 1 to SNX_GAMEPADS */
-+static int g_display_fps = -1;      /* last in-game display FPS; frozen while Esc is open */
++static int g_display_fps = -1;      /* last in-game display FPS */
++static int g_display_fps_hold;      /* 1 while Esc is open: ignore live samples so the line does not jump */
  /* the YoRHa menu's colours, from its theme.ini (gui_theme_colors.h), as R G B A bytes; the page hides the game under
     it, whose text would show through its letters */
  #define SNX_OVERLAY_RGBA(rgb, a) ((u32)(a) << 24 | ((rgb) & 0xFFu) << 16 | ((rgb) & 0xFF00u) | ((rgb) >> 16 & 0xFFu))
-@@ -110,9 +113,46 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
+@@ -110,9 +115,46 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
          return;
      }
      if (page == PAGE_MAIN) {
@@ -8660,7 +8675,7 @@ index 441a8c2..b5f1f3c 100644
          return;
      }
      if (page == PAGE_BUTTONS) {
-@@ -259,6 +299,30 @@ static int act(int i, int step) {
+@@ -259,6 +301,30 @@ static int act(int i, int step) {
          return OVERLAY_NONE;
      }
      if (page == PAGE_MAIN) {
@@ -8691,19 +8706,25 @@ index 441a8c2..b5f1f3c 100644
          if (step) return OVERLAY_NONE;
          if (i == M_EXIT) return OVERLAY_EXIT;
          page_open(i == M_PADS ? PAGE_PADS : PAGE_CONTROLS);
-@@ -285,12 +349,23 @@ static int act(int i, int step) {
+@@ -285,12 +351,28 @@ static int act(int i, int step) {
  }
  
  int overlay_shown(void) { return __atomic_load_n(&shown, __ATOMIC_ACQUIRE); }
 +void overlay_note_display_fps(int fps) {
-+    /* Live display presents. Frame generation keeps running while Esc is open, so this does not collapse to the
-+       game's own pace. A negative sample (the counter has not had half a second yet) leaves the last good reading. */
-+    if (fps < 0) return;
++    /* Live display presents. While Esc is open the sample is held so a mid-menu limit change does not look like the
++       old 60 until the half-second window refills — Limit on the status line still updates immediately. A negative
++       sample (not measured yet) leaves the last good reading. */
++    if (fps < 0 || __atomic_load_n(&g_display_fps_hold, __ATOMIC_RELAXED)) return;
 +    __atomic_store_n(&g_display_fps, fps, __ATOMIC_RELAXED);
 +}
 +int overlay_display_fps(void) { return __atomic_load_n(&g_display_fps, __ATOMIC_RELAXED); }
  void overlay_toggle(void) {
-     if (!shown) page_open(PAGE_MAIN);
+-    if (!shown) page_open(PAGE_MAIN);
++    if (!shown) {
++        page_open(PAGE_MAIN);
++        __atomic_store_n(&g_display_fps_hold, 1, __ATOMIC_RELAXED);
++    } else
++        __atomic_store_n(&g_display_fps_hold, 0, __ATOMIC_RELAXED);
      __atomic_store_n(&shown, !shown, __ATOMIC_RELEASE);
  }
 -/* the panel's rows: the page's items under the head, a blank row under them */
@@ -8717,7 +8738,7 @@ index 441a8c2..b5f1f3c 100644
  static int display_percent = 100; /* set on the event thread, read by the renderer's */
  void overlay_set_display_scale(float scale) {
      __atomic_store_n(&display_percent, scale > 0.0f ? (int)(scale * 100.0f) : 100, __ATOMIC_RELAXED);
-@@ -461,7 +536,10 @@ void overlay_scroll(int rows) {
+@@ -461,7 +543,10 @@ void overlay_scroll(int rows) {
  void overlay_side(int step) {
      if (page == PAGE_MAP)
          map_key(step < 0 ? SNX_PAD_KEY_LEFT : SNX_PAD_KEY_RIGHT);
@@ -8729,7 +8750,7 @@ index 441a8c2..b5f1f3c 100644
          act(focus, step);
  }
  int overlay_pad(u64 button) {
-@@ -481,24 +559,30 @@ int overlay_pad(u64 button) {
+@@ -481,24 +566,30 @@ int overlay_pad(u64 button) {
      return OVERLAY_NONE;
  }
  int overlay_controls(u64 buttons, const i32 sticks[4], u64 ms) {
@@ -8767,7 +8788,7 @@ index 441a8c2..b5f1f3c 100644
      for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
          if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
      return did;
-@@ -523,15 +607,28 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
+@@ -523,15 +614,41 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
                          size_t size) {
      static const char* const titles[] = {"SCARLETNX  /  MENU", "SCARLETNX  /  CONTROLS", "SCARLETNX  /  BUTTONS",
                                           "SCARLETNX  /  CONTROLLERS"};
@@ -8775,21 +8796,34 @@ index 441a8c2..b5f1f3c 100644
 +    static const char* const hints[] = {"Esc / right-click / Home: return to game.", "Esc / Back: the menu.",
                                          "Tap one to show or hide it."};
 -    int r, n = items();
-+    static char fps_line[40];
-+    int r, n = items(), live;
++    static char fps_line[OVERLAY_COLS_MAX + 1];
++    int r, n = items(), live, fps, fg, expect;
++    char limit_word[32], limit_part[48];
      memset(d, 0, sizeof *d);
      d->title = titles[page];
      d->user = 1;
      d->para[0].text = page == PAGE_PADS ? pads_hint(pads, size) : hints[page];
      d->para[0].rgba = SOFT;
      d->paras = 1;
-+    /* Always show live display FPS on the main Esc page (same counter as the frame-time graph). */
++    /* Engine version + held Display FPS + live Limit. Limit updates on left/right even while Display FPS is frozen. */
 +    if (page == PAGE_MAIN) {
 +        live = overlay_display_fps();
-+        if (live >= 0)
-+            snprintf(fps_line, sizeof fps_line, "Display FPS: %d", live);
++        fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
++        fg = __atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
++             (__atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED) &&
++              __atomic_load_n(&g_settings.upscaler, __ATOMIC_RELAXED));
++        fps_limit_text(fps, limit_word, sizeof limit_word);
++        expect = present_expected_display_fps(fps, fg);
++        if (expect > 0 && ((fps > 0 && expect != fps) || (fps <= 0 && expect > 0) || fps == SNX_FPS_GAME))
++            snprintf(limit_part, sizeof limit_part, "%s (~%d)", limit_word, expect);
 +        else
-+            snprintf(fps_line, sizeof fps_line, "Display FPS: measuring...");
++            snprintf(limit_part, sizeof limit_part, "%s", limit_word);
++        if (live >= 0)
++            snprintf(fps_line, sizeof fps_line, "Engine %s | Display FPS: %d | Limit: %s", PF_ENGINE_VERSION, live,
++                     limit_part);
++        else
++            snprintf(fps_line, sizeof fps_line, "Engine %s | Display FPS: -- | Limit: %s", PF_ENGINE_VERSION,
++                     limit_part);
 +        d->para[1].text = fps_line;
 +        d->para[1].rgba = INK;
 +        d->para[1].on = 1;
@@ -8798,7 +8832,7 @@ index 441a8c2..b5f1f3c 100644
      d->items = n;
      d->top = top;
      d->focus = focus;
-@@ -557,6 +654,7 @@ int overlay_tap(float x, float y, int sw, int sh) {
+@@ -557,6 +674,7 @@ int overlay_tap(float x, float y, int sw, int sh) {
      focus = d.top + r;
      col = (int)((x - at.box.x) / (8.0f * (float)at.scale));
      /* a value's arrows: the left half of its last ten columns steps it down */
@@ -8807,7 +8841,7 @@ index 441a8c2..b5f1f3c 100644
      return act(focus, 0);
  }
 diff --git a/src/nx/runtime/platform/overlay.h b/src/nx/runtime/platform/overlay.h
-index 8e29f7b..d9c5445 100644
+index 8e29f7b..03a8aec 100644
 --- a/src/nx/runtime/platform/overlay.h
 +++ b/src/nx/runtime/platform/overlay.h
 @@ -1,6 +1,6 @@
@@ -8822,15 +8856,15 @@ index 8e29f7b..d9c5445 100644
  /* whether it is open, for the renderer's thread too */
  int overlay_shown(void);
  void overlay_toggle(void);
-+/* Live display FPS from vk_fps_presents / showcase (ui.c). Held while the Esc menu is open so FG pause does not
-+   collapse the readout. -1 until measured. */
++/* Live display FPS from vk_fps_presents / showcase (ui.c). Held while the Esc menu is open so the status line stays
++   stable; Limit on that line still follows left/right immediately. -1 until measured. */
 +void overlay_note_display_fps(int fps);
 +int overlay_display_fps(void);
  /* the display's own scale (SDL's: dpi / 160 on a phone), which the panel's letters follow; 1 until told */
  void overlay_set_display_scale(float scale);
  /* where the panel goes on a picture of sw x sh pixels: its corner and the whole number it is scaled by */
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
-index d3e4e35..124c284 100644
+index d3e4e35..b50e68e 100644
 --- a/src/nx/runtime/platform/plat.h
 +++ b/src/nx/runtime/platform/plat.h
 @@ -42,6 +42,9 @@ int plat_thread(PThreadFn fn, void* arg, size_t stack);
@@ -8853,7 +8887,7 @@ index d3e4e35..124c284 100644
  
  #endif
 diff --git a/src/nx/runtime/platform/plat_posix.c b/src/nx/runtime/platform/plat_posix.c
-index cd639e4..ab81e43 100644
+index cd639e4..0502a88 100644
 --- a/src/nx/runtime/platform/plat_posix.c
 +++ b/src/nx/runtime/platform/plat_posix.c
 @@ -219,6 +219,9 @@ void plat_thread_cpus(const int* ids, int n) {
@@ -8867,7 +8901,7 @@ index cd639e4..ab81e43 100644
  /* the text after "key" (and a '=' or ':' with the spaces around it) on the first line of path that starts with it,
     unquoted; out empty when there's none */
 diff --git a/src/nx/runtime/platform/plat_win32.c b/src/nx/runtime/platform/plat_win32.c
-index 1f9eebc..9c04ff8 100644
+index 1f9eebc..e9cbd58 100644
 --- a/src/nx/runtime/platform/plat_win32.c
 +++ b/src/nx/runtime/platform/plat_win32.c
 @@ -112,6 +112,27 @@ void plat_thread_cpus(const int* ids, int n) {
@@ -8899,7 +8933,7 @@ index 1f9eebc..9c04ff8 100644
  void plat_system_info(char* out, size_t cap) {
      static const char key[] = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
 diff --git a/src/nx/runtime/platform/profiler_win32.c b/src/nx/runtime/platform/profiler_win32.c
-index ebfd9c6..7d8326a 100644
+index ebfd9c6..dc8cc1f 100644
 --- a/src/nx/runtime/platform/profiler_win32.c
 +++ b/src/nx/runtime/platform/profiler_win32.c
 @@ -38,6 +38,24 @@ typedef struct {
@@ -9089,7 +9123,7 @@ index ebfd9c6..7d8326a 100644
      SetThreadPriority(h, THREAD_PRIORITY_HIGHEST);
 diff --git a/src/nx/runtime/platform/save_activity.c b/src/nx/runtime/platform/save_activity.c
 new file mode 100644
-index 0000000..6ca941d
+index 0000000..f09695e
 --- /dev/null
 +++ b/src/nx/runtime/platform/save_activity.c
 @@ -0,0 +1,29 @@
@@ -9124,7 +9158,7 @@ index 0000000..6ca941d
 +}
 diff --git a/src/nx/runtime/platform/save_activity.h b/src/nx/runtime/platform/save_activity.h
 new file mode 100644
-index 0000000..2a82efe
+index 0000000..2d0dad9
 --- /dev/null
 +++ b/src/nx/runtime/platform/save_activity.h
 @@ -0,0 +1,14 @@
@@ -9143,10 +9177,10 @@ index 0000000..2a82efe
 +}
 +#endif
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181..033f7e1 100644
+index 2bd6181..61a20a9 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
-@@ -31,14 +31,96 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +31,98 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -9173,6 +9207,8 @@ index 2bd6181..033f7e1 100644
 +    if (fps == SNX_FPS_GAME || (lock && game)) return game;
 +    return cap;
 +}
++
++void present_limit_changed(void) { g_show_next = 0; }
 +
 +int present_show_due(void) {
 +    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
@@ -9247,7 +9283,7 @@ index 2bd6181..033f7e1 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..2f5a871 100644
+index be57ac5..fe392fc 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
 @@ -80,13 +80,105 @@ setting Game mods off
@@ -9416,7 +9452,7 @@ index be57ac5..2f5a871 100644
      key jit_threads
      int 0 8
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 64bdd9b..fbf03f8 100644
+index 64bdd9b..8900efb 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -64,7 +64,11 @@ endif()
@@ -9492,7 +9528,7 @@ index 64bdd9b..fbf03f8 100644
          "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/engines.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/maxwell3d.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/write_pages.c"
          "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/mme.c" "${PROJECT_SOURCE_DIR}/src/nx/gpu/maxwell/mme_hle.c"
 diff --git a/tests/astc_vulkan.c b/tests/astc_vulkan.c
-index fda0dea..b833977 100644
+index fda0dea..488b8dd 100644
 --- a/tests/astc_vulkan.c
 +++ b/tests/astc_vulkan.c
 @@ -72,6 +72,7 @@ void vk_lock(void) {}
@@ -9504,7 +9540,7 @@ index fda0dea..b833977 100644
  void vk_gpuprof_frame_done(u32 slot) { (void)slot; }
  /* cmd.c's waits note themselves for gpu.c's stall report, which isn't here */
 diff --git a/tests/filesystem_service.c b/tests/filesystem_service.c
-index 32905ef..a8daadf 100644
+index 32905ef..cf57f70 100644
 --- a/tests/filesystem_service.c
 +++ b/tests/filesystem_service.c
 @@ -33,6 +33,9 @@ static char test_fatal_text[1024];
@@ -9538,7 +9574,7 @@ index 32905ef..a8daadf 100644
      CHECK((argc == 3 || argc == 4) && strstr(argv[1], "scarletnx-fs-tree-") != NULL);
      CHECK(!test_chdir(argv[1]));
 diff --git a/tests/filesystem_tree.c b/tests/filesystem_tree.c
-index 2329b11..41d9119 100644
+index 2329b11..7253c07 100644
 --- a/tests/filesystem_tree.c
 +++ b/tests/filesystem_tree.c
 @@ -64,18 +64,18 @@ void pm_unlock(PMutex* m) { pthread_mutex_unlock(&m->l); }
@@ -9608,7 +9644,7 @@ index 2329b11..41d9119 100644
      CHECK(fs_tree_create(&other, dir, "new.bin", 0, 1, NULL) == FS_TREE_READONLY);
 diff --git a/tests/frame_policy.c b/tests/frame_policy.c
 new file mode 100644
-index 0000000..c877f89
+index 0000000..8404f8a
 --- /dev/null
 +++ b/tests/frame_policy.c
 @@ -0,0 +1,36 @@
@@ -9650,7 +9686,7 @@ index 0000000..c877f89
 +}
 diff --git a/tests/frame_times.c b/tests/frame_times.c
 new file mode 100644
-index 0000000..759c0e2
+index 0000000..17e9fa2
 --- /dev/null
 +++ b/tests/frame_times.c
 @@ -0,0 +1,21 @@
@@ -9677,7 +9713,7 @@ index 0000000..759c0e2
 +}
 diff --git a/tests/frame_trace.c b/tests/frame_trace.c
 new file mode 100644
-index 0000000..46de470
+index 0000000..eafe9e1
 --- /dev/null
 +++ b/tests/frame_trace.c
 @@ -0,0 +1,87 @@
@@ -9769,7 +9805,7 @@ index 0000000..46de470
 +    return 0;
 +}
 diff --git a/tests/gamepad.c b/tests/gamepad.c
-index 685599a..a4fc789 100644
+index 685599a..63836f9 100644
 --- a/tests/gamepad.c
 +++ b/tests/gamepad.c
 @@ -247,6 +247,33 @@ int main(void) {
@@ -9807,7 +9843,7 @@ index 685599a..a4fc789 100644
         key, and gamepad_buttons is one no longer (docs/DEPRECATIONS.md) */
      CHECK(gamepad_ini("gamepad_swap_ab", "1"));
 diff --git a/tests/gpu_park.c b/tests/gpu_park.c
-index b1bebd4..52d595a 100644
+index b1bebd4..631ab1e 100644
 --- a/tests/gpu_park.c
 +++ b/tests/gpu_park.c
 @@ -104,6 +104,11 @@ void syncpt_add(u32 id, u32 n) {
@@ -9875,7 +9911,7 @@ index b1bebd4..52d595a 100644
         the CPU immediately reuses; a later fetched entry survives, while a second SYNC sees the new bytes. */
      for (u32 barrier = 0; barrier < 2; barrier++) {
 diff --git a/tests/jit_service.c b/tests/jit_service.c
-index a91eb5f..c11ac08 100644
+index a91eb5f..13f12cc 100644
 --- a/tests/jit_service.c
 +++ b/tests/jit_service.c
 @@ -14,6 +14,7 @@
@@ -9934,7 +9970,7 @@ index a91eb5f..c11ac08 100644
      printf("jit service: passed\n");
 diff --git a/tests/memory_layout.c b/tests/memory_layout.c
 new file mode 100644
-index 0000000..20decbd
+index 0000000..130c79d
 --- /dev/null
 +++ b/tests/memory_layout.c
 @@ -0,0 +1,25 @@
@@ -9964,10 +10000,10 @@ index 0000000..20decbd
 +    return 0;
 +}
 diff --git a/tests/overlay.c b/tests/overlay.c
-index 03330d3..81ec159 100644
+index 03330d3..09edfb8 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
-@@ -10,11 +10,37 @@
+@@ -10,11 +10,41 @@
  #include "nx/runtime/platform/vpad.h"
  #include "nx/runtime/platform/controls_atlas.h"
  #include "nx/runtime/platform/plat.h"
@@ -9987,7 +10023,11 @@ index 03330d3..81ec159 100644
 +    else
 +        snprintf(out, n, "%d", fps);
 +}
-+void options_fps_live(int fps) { __atomic_store_n(&g_opt_fps, fps, __ATOMIC_RELAXED); }
++void present_limit_changed(void) {}
++void options_fps_live(int fps) {
++    __atomic_store_n(&g_opt_fps, fps, __ATOMIC_RELAXED);
++    present_limit_changed();
++}
 +void options_fsr3_live(int on) {
 +    __atomic_store_n(&g_settings.frame_generation, on ? 1 : 0, __ATOMIC_RELAXED);
 +    __atomic_store_n(&g_opt_frame_generation, on ? 1 : 0, __ATOMIC_RELAXED);
@@ -10005,7 +10045,7 @@ index 03330d3..81ec159 100644
  /* the menu's page colour, its letters on the head's band, as R G B A bytes */
  #define LIGHT_RGBA                                                                                                     \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_PAGE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_PAGE & 0xFF00u) |                   \
-@@ -95,11 +121,12 @@ static void store(const char* key, const char* value) {
+@@ -95,11 +125,12 @@ static void store(const char* key, const char* value) {
  
  enum { SW = 2424, SH = 1080 };
  static int px, py, s, C; /* C: the panel's columns, overlay_cols' */
@@ -10019,7 +10059,7 @@ index 03330d3..81ec159 100644
  }
  /* ui.c's warning for a picture that does not draw */
  void logf_(int lvl, const char* fmt, ...) {
-@@ -179,15 +206,17 @@ int main(void) {
+@@ -179,15 +210,17 @@ int main(void) {
      overlay_toggle();
      assert(overlay_shown());
      /* letters half the screen's height at most, in whole steps, in the middle: a phone held wide, a small window. The
@@ -10041,7 +10081,7 @@ index 03330d3..81ec159 100644
      /* a phone's display scale: the Poco F8 (408 dpi, 2510x1156) and the Pixel 9 (420 dpi) at 3x, where half the
         picture gave 2x; a 4K picture at 100% keeps the 4x half of it gives */
      overlay_set_display_scale(408.0f / 160);
-@@ -202,22 +231,46 @@ int main(void) {
+@@ -202,22 +235,53 @@ int main(void) {
  
      /* the first page: the title on a band of ink, the items under it, the focused one on a band; the page hides the
         game, whose text would show through it */
@@ -10055,10 +10095,17 @@ index 03330d3..81ec159 100644
 -    assert(text_at(1, 0, "SCARLETNX  /  MENU") && text_at(1, 3, "\xFE On-screen controls") &&
 -           text_at(1, 4, "\xFE Controllers") && text_at(1, 5, "\xFE Exit"));
 +    assert(text_at(C - 2, 4, ">") && text_at(C - 2, 5, ">")); /* a page under each */
-+    assert(text_at(1, 0, "SCARLETNX  /  MENU") && shows("Display FPS: 118") &&
++    assert(text_at(1, 0, "SCARLETNX  /  MENU") && shows("Engine 1.29 | Display FPS: 118 | Limit:") &&
 +           text_at(1, 4, "\xFE On-screen controls") && text_at(1, 5, "\xFE Controllers") &&
 +           text_at(1, 6, "\xFE Frame-time graph") && text_at(1, 7, "\xFE PortForge FSR 3") &&
 +           text_at(1, 8, "\xFE FPS limit") && text_at(1, 9, "\xFE Exit") && text_at(C - 4, 6, "Off"));
++    /* left/right on FPS limit updates Limit on the status line immediately while Display FPS stays held */
++    g_opt_fps = 60;
++    draw();
++    assert(shows("Limit: 60"));
++    assert(tap(4, C - 2) == OVERLAY_NONE && g_opt_fps == 120);
++    draw();
++    assert(shows("Display FPS: 118") && shows("Limit: 120"));
 +    /* the frame-time graph turns on and off for this run, nothing kept */
 +    stored[0] = 0;
 +    assert(tap(2, 3) == OVERLAY_NONE && g_settings.frame_time_graph && !stored[0]);
@@ -10094,7 +10141,7 @@ index 03330d3..81ec159 100644
      draw();
      assert(text_at(1, 0, "SCARLETNX  /  CONTROLS") && text_at(1, 3, "\xFE Show controls"));
      assert(list.q[0].h == 16 * 32 && text_at(C - 2, 12, ">")); /* twelve items: the tallest; Buttons opens a page */
-@@ -314,18 +367,26 @@ int main(void) {
+@@ -314,18 +378,26 @@ int main(void) {
             left stick past half way as one, goes on after a while, then on and on; with the menu closed, nothing, and
             a press held as it opens does not act */
          assert(overlay_controls(0, still, 1000) == OVERLAY_NONE); /* the focus back on Controllers */
@@ -10127,7 +10174,7 @@ index 03330d3..81ec159 100644
          assert(overlay_controls(1ull << 0, still, 3000) == OVERLAY_EXIT);
          assert(overlay_controls(1ull << 13, still, 3001) == OVERLAY_NONE &&
                 overlay_controls(0, left, 3002) == OVERLAY_NONE);
-@@ -368,7 +429,9 @@ int main(void) {
+@@ -368,7 +440,9 @@ int main(void) {
  
      /* the controllers' page: the ones connected, the Player row (every player's, or one's own), Swap A/B, the dead
         zone by fives, the vibration by tens down to Off and the background input, each kept */
@@ -10137,7 +10184,7 @@ index 03330d3..81ec159 100644
      draw();
      assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS") && text_at(1, 1, "None connected."));
      assert(list.q[0].h == 11 * 32 && text_at(1, 3, "\xFE Player") && shows("< All >"));
-@@ -494,6 +557,7 @@ int main(void) {
+@@ -494,6 +568,7 @@ int main(void) {
      assert(shows("< All >"));
      /* Back, on its item or the key, comes up to the controllers' item */
      assert(tap(6, 3) == OVERLAY_NONE);
@@ -10145,7 +10192,7 @@ index 03330d3..81ec159 100644
      draw();
      assert(text_at(1, 0, "SCARLETNX  /  MENU") && overlay_select() == OVERLAY_NONE);
      draw();
-@@ -768,6 +832,24 @@ int main(void) {
+@@ -768,6 +843,24 @@ int main(void) {
          for (i = 0, pictures = 0; i < list.n; ++i) pictures += list.q[i].v == SNX_CONTROLS_ATLAS_HEIGHT;
          assert(!pictures && !shows("Player"));
      }
@@ -10171,7 +10218,7 @@ index 03330d3..81ec159 100644
           "passed");
      return 0;
 diff --git a/tests/pipeline_file.c b/tests/pipeline_file.c
-index da5b015..69f3e5f 100644
+index da5b015..25b630e 100644
 --- a/tests/pipeline_file.c
 +++ b/tests/pipeline_file.c
 @@ -98,7 +98,7 @@ static void make_shader(int n, PfShader* s, u32* cbr, u32* spv) {
@@ -10185,7 +10232,7 @@ index da5b015..69f3e5f 100644
      s->ncbr = (u32)n % 3; /* 0, 1 or 2 reads */
 diff --git a/tests/render_scale.c b/tests/render_scale.c
 new file mode 100644
-index 0000000..cd81534
+index 0000000..9c264d5
 --- /dev/null
 +++ b/tests/render_scale.c
 @@ -0,0 +1,29 @@
@@ -10219,7 +10266,7 @@ index 0000000..cd81534
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45..19548cc 100644
+index 53c5e45..f837735 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,8 @@
@@ -10373,7 +10420,7 @@ index 53c5e45..19548cc 100644
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
 diff --git a/tests/save_activity.c b/tests/save_activity.c
 new file mode 100644
-index 0000000..a20482f
+index 0000000..5f9ff48
 --- /dev/null
 +++ b/tests/save_activity.c
 @@ -0,0 +1,32 @@
@@ -10410,7 +10457,7 @@ index 0000000..a20482f
 +    return 0;
 +}
 diff --git a/tests/tex_upload_rows.c b/tests/tex_upload_rows.c
-index a9d357a..eee950b 100644
+index a9d357a..6d09d89 100644
 --- a/tests/tex_upload_rows.c
 +++ b/tests/tex_upload_rows.c
 @@ -130,6 +130,7 @@ VkState g_vk;
@@ -10422,7 +10469,7 @@ index a9d357a..eee950b 100644
      (void)what, (void)file, (void)line;
      return r == VK_SUCCESS;
 diff --git a/tests/vulkan_headless.c b/tests/vulkan_headless.c
-index 25f0af2..3963b94 100644
+index 25f0af2..24a5377 100644
 --- a/tests/vulkan_headless.c
 +++ b/tests/vulkan_headless.c
 @@ -14,6 +14,7 @@
@@ -10761,3 +10808,15 @@ index 25f0af2..3963b94 100644
            vk_pipeline_worker_count(0, 0) == 2 && vk_pipeline_worker_count(0, 64) == 6);
      CHECK(vk_pipeline_worker_count(5, 12) == 5 && vk_pipeline_worker_count(32, 4) == 32 &&
            vk_pipeline_worker_count(1, 64) == 1);
+diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
+new file mode 100644
+index 0000000..992024a
+--- /dev/null
++++ b/src/nx/runtime/pf_engine_version.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#ifndef PF_ENGINE_VERSION_H
++#define PF_ENGINE_VERSION_H
++/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
++#define PF_ENGINE_VERSION "1.29"
++#endif

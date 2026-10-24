@@ -1,6 +1,8 @@
-# PortForge 0.45 / Engine 1.28
+# PortForge 0.46 / Engine 1.29
 
-**New in 0.45:** The FPS limit changes the pictures on screen again. Speed lock still keeps the game at its own pace, so physics does not run fast. A 60 FPS game at 30 shows about 30 (about 60 with PortForge FSR 3). At 60 it shows about 60, or about 120 with frame generation. At 120, 144, 240 or unlimited it stays at the game's own rate without frame generation (about 60) and about twice that rate with frame generation (about 120). The HUD, the Escape Display FPS line and the frame-time graph all count those pictures, including generated ones. Update the app and **Doctor → Engine** on existing games. See [VALIDATION-0.45.md](VALIDATION-0.45.md).
+**New in 0.46:** Esc shows `Engine X.Y | Display FPS: N | Limit: L` so you can see whether the game is actually on Engine 1.29. App updates replace `PortForge\Engine\`; each game still needs that binary copied into its folder (**Doctor → Engine**, or close the game so Doctor installs it). Limit on Esc updates immediately; Display FPS is held while Esc is open and moves again after you return to play. See [VALIDATION-0.46.md](VALIDATION-0.46.md).
+
+**0.45:** The FPS limit changes the pictures on screen again. Speed lock still keeps the game at its own pace. See [VALIDATION-0.45.md](VALIDATION-0.45.md).
 
 **0.44:** PortForge FSR 3 keeps the in-between picture when the optical-flow match agrees, instead of copying the current frame and flattening detail. A static HUD stays the current pixel. A bad warp still copies it, so the old multi-ghost guard remains. On a headless RX 9070 XT fixture the midpoint error fell from 81156 (no better than a plain blend) to 48036. Sharpening after the enlarge stays stronger when pixel smoothing is off. This is not the AMD SDK, and the engine still has no game motion vectors. Update the app and **Doctor → Engine** on existing games. See [VALIDATION-0.44.md](VALIDATION-0.44.md).
 

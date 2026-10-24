@@ -86,7 +86,8 @@ namespace PortForge
     /// </summary>
     public sealed class LiveDoctor : IDisposable
     {
-        private sealed class Game { public string Exe; public bool Running, Seen; public long Offset; public LogWatch Watch = new LogWatch(); public string Name { get { return Path.GetFileNameWithoutExtension(Exe); } } }
+        private sealed class Game { public string Exe; public bool Running, Seen, EngineChecked; public long Offset; public LogWatch Watch = new LogWatch(); public string Name { get { return Path.GetFileNameWithoutExtension(Exe); } } }
+        private string engineStamp = "";
         private readonly Dictionary<string, Game> games = new Dictionary<string, Game>(StringComparer.OrdinalIgnoreCase);
         private readonly string listPath, reportsRoot;
         private readonly object sync = new object();
@@ -199,6 +200,13 @@ namespace PortForge
             try
             {
                 Game[] snapshot; lock (sync) snapshot = games.Values.ToArray();
+                var package = EngineManager.Find();
+                string stamp = package == null || !File.Exists(package.Exe) ? "" : package.Version + ":" + new FileInfo(package.Exe).Length;
+                if (stamp != engineStamp)
+                {
+                    engineStamp = stamp;
+                    foreach (var g in snapshot) g.EngineChecked = false;
+                }
                 foreach (var game in snapshot)
                 {
                     if (stop.IsCancellationRequested) return;
@@ -207,17 +215,23 @@ namespace PortForge
                     if (running && !game.Running)
                     {
                         game.Running = true; game.Offset = 0; game.Watch = new LogWatch();
-                        Report(new DoctorEvent { Game = game.Name, Kind = "start", Title = "Game started", Text = "Watching for stutter, slowdowns and crashes." });
+                        Report(new DoctorEvent { Game = game.Name, Kind = "start", Title = "Game started", Text = "Watching for stutter, slowdowns and crashes. Esc shows the Engine version — update with Doctor → Engine if it is older than the app." });
                     }
                     bool first = !game.Seen; game.Seen = true;
                     if (running) ReadNew(game, log);
-                    else if (first) AfterSession(game.Exe);
+                    else if (first) { AfterSession(game.Exe); game.EngineChecked = true; }
                     else if (game.Running)
                     {
                         game.Running = false; ReadNew(game, log);
                         var w = game.Watch;
                         Report(new DoctorEvent { Game = game.Name, Kind = "end", Title = "Game closed", Text = "Session summary: " + w.CompileFrames + " shader-stutter frames (" + w.CompileWaitMs + " ms waited), " + w.LoadingFrames + " loading freezes, " + w.UnexplainedFrames + " other slow frames, worst " + w.WorstMs + " ms." });
                         AfterSession(game.Exe);
+                        game.EngineChecked = true;
+                    }
+                    else if (!game.EngineChecked)
+                    {
+                        game.EngineChecked = true;
+                        if (AutoFix && AutoEngine) InstallEngine(game.Exe, game.Name);
                     }
                 }
             }

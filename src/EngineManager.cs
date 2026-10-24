@@ -58,9 +58,18 @@ namespace PortForge
         public static string Describe(string gameExe, EnginePackage package)
         {
             if (!File.Exists(gameExe)) return "No game loaded.";
+            if (package == null) return "The PortForge Engine is not included in this copy of the app (Engine folder missing).";
             if (IsInstalled(gameExe, package)) return "This game runs on the " + package.Name + ".";
             bool backup = File.Exists(Path.Combine(Path.GetDirectoryName(gameExe), BackupFolderName, Path.GetFileName(gameExe)));
-            return "This game runs on its original engine" + (backup ? " (a PortForge Engine backup exists)." : ".");
+            string marker = Path.Combine(Path.GetDirectoryName(gameExe), "ENGINE.txt");
+            string have = "";
+            if (File.Exists(marker))
+            {
+                foreach (string line in File.ReadAllLines(marker))
+                    if (line.StartsWith("version=", StringComparison.OrdinalIgnoreCase)) { have = line.Substring(8).Trim(); break; }
+            }
+            return "This game needs the " + package.Name + (have.Length > 0 ? " (it still has Engine " + have + ")" : " (its scarletnx.exe does not match the app Engine folder)") +
+                   (backup ? ". A backup of the previous engine is kept." : ". Use Install, or let the Doctor update it when the game is closed.");
         }
 
         /// <summary>Puts the PortForge Engine in place of the game's runtime, keeping the original, then proves the game still starts.</summary>
@@ -70,8 +79,18 @@ namespace PortForge
             gameExe = Path.GetFullPath(gameExe); GameOptimization.ValidateGame(gameExe); GameOptimization.EnsureStopped(gameExe);
             string folder = Path.GetDirectoryName(gameExe), backup = Path.Combine(folder, BackupFolderName);
             if (!File.Exists(Path.Combine(folder, Path.GetFileNameWithoutExtension(gameExe) + "_code.dll"))) throw new IOException("This is not a converted game: its _code.dll is missing.");
-            if (IsInstalled(gameExe, package)) { CopyLicenses(package.Folder, folder, token); return "The " + package.Name + " is already installed for this game."; }
+            if (IsInstalled(gameExe, package)) { CopyLicenses(package.Folder, folder, token); CopyEngineInfo(package, folder, token); return "The " + package.Name + " is already installed for this game."; }
             using (PlayFirst.Begin(gameExe)) return InstallUnheld(gameExe, folder, backup, package, progress, token);
+        }
+        /// <summary>True when the game exe is missing or does not match the app's Engine package (size or hash).</summary>
+        public static bool NeedsUpdate(string gameExe, EnginePackage package)
+        {
+            return package != null && File.Exists(gameExe) && !IsInstalled(gameExe, package);
+        }
+        private static void CopyEngineInfo(EnginePackage package, string folder, CancellationToken token)
+        {
+            string info = Path.Combine(package.Folder, "ENGINE.txt");
+            if (File.Exists(info)) CopyVerified(info, Path.Combine(folder, "ENGINE.txt"), token);
         }
         private static string InstallUnheld(string gameExe, string folder, string backup, EnginePackage package, IProgress<string> progress, CancellationToken token)
         {
@@ -88,6 +107,7 @@ namespace PortForge
             {
                 foreach (string lib in package.Libraries) CopyVerified(Path.Combine(package.Folder, lib), Path.Combine(folder, lib), token);
                 CopyLicenses(package.Folder, folder, token);
+                CopyEngineInfo(package, folder, token);
                 CopyVerified(package.Exe, gameExe, token);
                 if (progress != null) progress.Report("Checking that the game starts on the new engine (about 15 seconds). Your save and settings are protected.");
                 string output = TimedRun(gameExe, "-H --seconds=4 --log=1 --fullscreen=0", null, token);
