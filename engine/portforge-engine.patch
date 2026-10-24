@@ -592,17 +592,17 @@ index 8579250..f3ffe2c 100644
                                    .preferredLargeHeapBlockSize = g_vk.alloc_cap < (256ull << 20) ? g_vk.alloc_cap : 0,
 diff --git a/src/nx/gpu/vk/fg.c b/src/nx/gpu/vk/fg.c
 new file mode 100644
-index 0000000..09ca749
+index 0000000..5c154e9
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,407 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* PortForge frame generation (shaders/fg.comp): each of the game's frames is copied into one of two history images,
 +   in the game image's own format, with a luma pyramid beside it. With the frame before it, the motion between the
-+   two is found on the GPU, coarse to fine, and the picture halfway between them is made into out, which presents as
-+   the game's own image does (filters, FSR 1, the HUD and menu). The renderer shows out at once and the copy of the
-+   game's frame half a frame later (renderer.c). Display only: guest targets, timing, saves and game data are
-+   untouched. Under vk_lock. */
++   two is found on the GPU, coarse to fine, and the picture halfway between them is made. When FSR 1 is also on, each
++   real frame is upscaled once into an output-sized history and the midpoint is warped from those (never FSR on an
++   interpolated picture, which caused edge shimmer). The renderer shows the midpoint at once and the real copy half a
++   frame later (renderer.c). Display only: guest targets, timing, saves and game data are untouched. Under vk_lock. */
 +#include <string.h>
 +#include "nx/gpu/vk/vk.h"
 +#include "nx/gpu/vk/fg_spv.h"
@@ -621,6 +621,9 @@ index 0000000..09ca749
 +    VkPipeline pipe[PASSES];
 +    VkSampler nearest, bilinear;
 +    Pic hist[2], out, dummy8;
++    Pic up[2], up_out; /* FSR'd (or filtered) history at the letterbox size, and the midpoint between them */
++    int up_ready[2];   /* up[i] matches up_w x up_h for the current hist slot */
++    u32 up_w, up_h;
 +    Surf lum[2][LEVELS]; /* each history image's luma at 1/4, 1/8 and 1/16 */
 +    Surf vec[LEVELS], med[LEVELS]; /* the motion at each level, and its median: what the next level starts from */
 +    Surf dummy, dummy_w; /* sampled, and written, where a pass has no image for a binding */
@@ -853,12 +856,9 @@ index 0000000..09ca749
 +Surf* vk_fg_current(void) { return g_fg.have_prev ? &g_fg.hist[g_fg.cur].s : NULL; }
 +Surf* vk_fg_previous(void) { return g_fg.have_prev ? &g_fg.hist[g_fg.cur ^ 1].s : NULL; }
 +
-+Surf* vk_fg_interpolate(VkCommandBuffer cb) {
++/* Motion field into med[], shared by native and FSR-present paths. 0 on failure. */
++static int fg_motion(VkCommandBuffer cb) {
 +    int c = g_fg.cur, p = c ^ 1;
-+    if (!g_fg.have_prev || !g_fg.out.s.img) return NULL;
-+    vk_render_end();
-+    /* coarse to fine: the 1/16 level searches widely, the finer ones around what the coarser found, each level's
-+       motion smoothed by a median before the next starts from it */
 +    for (int l = LEVELS - 1; l >= 0; l--) {
 +        Surf *la = &g_fg.lum[p][l], *lb = &g_fg.lum[c][l], *v = &g_fg.vec[l], *m = &g_fg.med[l];
 +        Surf* coarser = l + 1 < LEVELS ? &g_fg.med[l + 1] : NULL;
@@ -868,12 +868,40 @@ index 0000000..09ca749
 +        writes(cb, v);
 +        i32 extra[6] = {(i32)la->sw, (i32)la->sh, coarser ? (i32)coarser->sw : 1, coarser ? (i32)coarser->sh : 1,
 +                        coarser ? 1 : 6, (coarser ? 1 : 0) | (l == 0 ? 2 : 0)};
-+        if (!pass(cb, P_SEARCH, la->att, lb->att, coarser ? coarser->att : NULL, g_fg.nearest, v, NULL, v->sw, v->sh, extra)) goto unavailable;
++        if (!pass(cb, P_SEARCH, la->att, lb->att, coarser ? coarser->att : NULL, g_fg.nearest, v, NULL, v->sw, v->sh,
++                  extra))
++            return 0;
 +        reads(cb, v);
 +        writes(cb, m);
 +        i32 mextra[6] = {1, 1, (i32)v->sw, (i32)v->sh, 0, 0};
-+        if (!pass(cb, P_MEDIAN, NULL, NULL, v->att, g_fg.nearest, m, NULL, m->sw, m->sh, mextra)) goto unavailable;
++        if (!pass(cb, P_MEDIAN, NULL, NULL, v->att, g_fg.nearest, m, NULL, m->sw, m->sh, mextra)) return 0;
 +    }
++    return 1;
++}
++
++/* Copy an FSR/float (or filtered) image into an 8-bit present Pic at dw x dh. */
++static int blit_to_pic(VkCommandBuffer cb, Surf* src, Pic* dst, u32 dw, u32 dh) {
++    if (!pic(dst, g_fg.fmt, dw, dh)) return 0;
++    vk_surf_use(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
++                VK_ACCESS_2_TRANSFER_READ_BIT);
++    vk_surf_use(cb, &dst->s, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
++                VK_ACCESS_2_TRANSFER_WRITE_BIT);
++    VkImageBlit b = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++                     .srcOffsets = {{0, 0, 0}, {(i32)src->sw, (i32)src->sh, 1}},
++                     .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
++                     .dstOffsets = {{0, 0, 0}, {(i32)dw, (i32)dh, 1}}};
++    rec_CmdBlitImage(cb, src->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst->s.img,
++                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_LINEAR);
++    return 1;
++}
++
++Surf* vk_fg_interpolate(VkCommandBuffer cb) {
++    int c = g_fg.cur, p = c ^ 1;
++    if (!g_fg.have_prev || !g_fg.out.s.img) return NULL;
++    vk_render_end();
++    /* coarse to fine: the 1/16 level searches widely, the finer ones around what the coarser found, each level's
++       motion smoothed by a median before the next starts from it */
++    if (!fg_motion(cb)) goto unavailable;
 +    Pic *a = &g_fg.hist[p], *b = &g_fg.hist[c];
 +    reads(cb, &a->s);
 +    reads(cb, &b->s);
@@ -894,11 +922,68 @@ index 0000000..09ca749
 +    return NULL;
 +}
 +
-+void vk_fg_reset(void) { g_fg.have_prev = 0; }
++/* Midpoint and current frame for presenting at the letterbox size. When FSR (or smoothing+FSR) would enlarge, real
++   frames are filtered once into up[], the midpoint is made from those, and *out_cur is the upscaled current frame so
++   show() does not run FSR again on an interpolated picture. */
++Surf* vk_fg_interpolate_present(VkCommandBuffer cb, u32 dw, u32 dh, Surf** out_cur) {
++    int c = g_fg.cur, p = c ^ 1;
++    int enlarge = g_settings.upscaler && dw && dh && (dw > g_fg.w || dh > g_fg.h) && dw >= g_fg.w && dh >= g_fg.h;
++    *out_cur = vk_fg_current();
++    if (!enlarge) return vk_fg_interpolate(cb);
++    if (!g_fg.have_prev) return NULL;
++    vk_render_end();
++    cb = vk_cmd(); /* present filters may retire the caller's buffer while allocating scratch */
++    if (!fg_motion(cb)) goto fallback;
++    if (g_fg.up_w != dw || g_fg.up_h != dh) {
++        g_fg.up_ready[0] = g_fg.up_ready[1] = 0;
++        g_fg.up_w = dw;
++        g_fg.up_h = dh;
++    }
++    {
++        Surf* scaled = vk_present_filters(cb, &g_fg.hist[c].s, 0, 0, g_fg.w, g_fg.h, dw, dh);
++        cb = vk_cmd(); /* filters may retire the buffer while making FSR scratch */
++        if (!scaled || !blit_to_pic(cb, scaled, &g_fg.up[c], dw, dh)) goto fallback;
++        g_fg.up_ready[c] = 1;
++    }
++    if (!g_fg.up_ready[p]) {
++        /* First steady pair after a resize: show the upscaled real frame only. */
++        *out_cur = &g_fg.up[c].s;
++        vk_render_forget_state();
++        return NULL;
++    }
++    if (!pic(&g_fg.up_out, g_fg.fmt, dw, dh)) goto fallback;
++    reads(cb, &g_fg.up[p].s);
++    reads(cb, &g_fg.up[c].s);
++    reads(cb, &g_fg.med[0]);
++    writes(cb, &g_fg.up_out.s);
++    {
++        /* Motion is in native luma units; INTERP scales by dsize/csize so dw x dh receives the right warp. */
++        i32 extra[6] = {(i32)dw, (i32)dh, (i32)g_fg.med[0].sw, (i32)g_fg.med[0].sh, 0, 0};
++        if (!pass(cb, P_INTERP, g_fg.up[p].rgba8, g_fg.up[c].rgba8, g_fg.med[0].att, g_fg.bilinear, NULL,
++                  g_fg.up_out.rgba8, dw, dh, extra))
++            goto fallback;
++    }
++    vk_render_forget_state();
++    if (++g_fg.made == 1 || g_fg.made % 1800 == 0)
++        LOG("vulkan: frame generation made %llu frames, FSR then interpolate %ux%u to %ux%u\n",
++            (unsigned long long)g_fg.made, g_fg.w, g_fg.h, dw, dh);
++    *out_cur = &g_fg.up[c].s;
++    return &g_fg.up_out.s;
++fallback:
++    vk_render_forget_state();
++    *out_cur = vk_fg_current();
++    return vk_fg_interpolate(cb);
++}
++
++void vk_fg_reset(void) {
++    g_fg.have_prev = 0;
++    g_fg.up_ready[0] = g_fg.up_ready[1] = 0;
++}
 +
 +void vk_fg_destroy(void) {
 +    for (int i = 0; i < 2; i++) {
 +        pic_drop(&g_fg.hist[i]);
++        pic_drop(&g_fg.up[i]);
 +        for (int l = 0; l < LEVELS; l++) drop(&g_fg.lum[i][l]);
 +    }
 +    for (int l = 0; l < LEVELS; l++) {
@@ -906,6 +991,7 @@ index 0000000..09ca749
 +        drop(&g_fg.med[l]);
 +    }
 +    pic_drop(&g_fg.out);
++    pic_drop(&g_fg.up_out);
 +    drop(&g_fg.dummy);
 +    drop(&g_fg.dummy_w);
 +    pic_drop(&g_fg.dummy8);
@@ -1033,7 +1119,7 @@ index 0000000..324cba5
 +THE SOFTWARE.
 diff --git a/src/nx/gpu/vk/fsr1/UPSTREAM.txt b/src/nx/gpu/vk/fsr1/UPSTREAM.txt
 new file mode 100644
-index 0000000..08d55e1
+index 0000000..dcb65fb
 --- /dev/null
 +++ b/src/nx/gpu/vk/fsr1/UPSTREAM.txt
 @@ -0,0 +1 @@
@@ -5674,7 +5760,7 @@ index 0000000..3f0bee2
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..32aa4b8 100644
+index f3ac2e2..02db94d 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -15,6 +15,7 @@
@@ -5929,7 +6015,7 @@ index f3ac2e2..32aa4b8 100644
          if (r == VK_ERROR_OUT_OF_DATE_KHR || (r == VK_SUBOPTIMAL_KHR && !g_vk.sc_turned))
              recreate = 1;
          else if (r == VK_ERROR_SURFACE_LOST_KHR)
-@@ -544,6 +655,132 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -544,6 +655,178 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
@@ -5937,6 +6023,10 @@ index f3ac2e2..32aa4b8 100644
 +}
 +
 +static u64 surf_save(Surf* s, u32 x, u32 y, u32 w, u32 h, u32 transform, const char* path);
++/* Display pictures actually handed to the swapchain (includes generated frames). The overlay FPS uses this when
++   frame generation is on so the counter matches what is on screen. */
++static u32 g_vk_display;
++u32 vk_display_presents(void) { return g_vk_display; }
 +/* ---- frame generation (fg.c): when a game frame arrives the picture halfway between it and the one before is shown,
 +   and the frame itself half a game frame later, from fg_thread. Every displayed picture then lands between two of the
 +   game's, at twice its rate, half a frame behind it */
@@ -5945,15 +6035,48 @@ index f3ac2e2..32aa4b8 100644
 +static int g_fg_started, g_fg_pending, g_fg_active;
 +static u64 g_fg_due, g_fg_last_ns, g_fg_period;
 +static u32 g_fg_fw, g_fg_fh, g_fg_transform;
++static Surf* g_fg_pending_src; /* scheduled real frame (often already FSR'd); NULL uses vk_fg_current */
 +static void fg_note_display(int generated) {
 +    static u64 first, real, mid;
 +    u64 now = plat_ns();
 +    if (!first) first = now;
 +    if (generated) ++mid; else ++real;
++    g_vk_display++;
 +    if (generated && mid % 300 == 0) {
 +        double seconds = (double)(now - first) / 1e9;
 +        LOG("vulkan: frame generation display submissions: %llu generated, %llu real over %.3f s (%.1f/s); display scanout is not measured\n",
 +            (unsigned long long)mid, (unsigned long long)real, seconds, seconds > 0 ? (double)(mid + real) / seconds : 0);
++    }
++}
++/* Letterbox destination size for fw x fh in the current window/swapchain, same math as show(). */
++static void present_dest_size(u32 fw, u32 fh, u32* dw, u32* dh) {
++    int ww, wh, sx, sy, sww, swh;
++    u32 sw, sh, cx = 0, cy = 0, cw, ch;
++    backend_window_size(&ww, &wh);
++    backend_window_safe(&sx, &sy, &sww, &swh);
++    sw = g_vk.sc_extent.width ? g_vk.sc_extent.width : (u32)(ww > 0 ? ww : 1);
++    sh = g_vk.sc_extent.height ? g_vk.sc_extent.height : (u32)(wh > 0 ? wh : 1);
++    cw = sw;
++    ch = sh;
++    if (g_vk.sc_win_w > 0 && g_vk.sc_win_h > 0 && sww > 0 && swh > 0 && sx + sww <= g_vk.sc_win_w &&
++        sy + swh <= g_vk.sc_win_h) {
++        cx = (u32)((u64)sw * (u32)sx / (u32)g_vk.sc_win_w);
++        cy = (u32)((u64)sh * (u32)sy / (u32)g_vk.sc_win_h);
++        cw = (u32)((u64)sw * (u32)sww / (u32)g_vk.sc_win_w);
++        ch = (u32)((u64)sh * (u32)swh / (u32)g_vk.sc_win_h);
++        (void)cx;
++        (void)cy;
++    }
++    if (!fw || !fh) {
++        *dw = cw;
++        *dh = ch;
++        return;
++    }
++    *dw = cw;
++    *dh = (u32)((u64)cw * fh / fw);
++    if (*dh > ch) {
++        *dh = ch;
++        *dw = (u32)((u64)ch * fw / fh);
 +    }
 +}
 +/* the copy of the game's newest frame, while it waits to be shown: shown now. Under vk_lock */
@@ -5962,8 +6085,10 @@ index f3ac2e2..32aa4b8 100644
 +    /* A new game frame may have replaced the scheduled one while the timer waited for vk_lock. */
 +    int pending = g_fg_pending && (!due_only || plat_ns() >= g_fg_due);
 +    if (pending) g_fg_pending = 0;
++    Surf* cur = g_fg_pending_src;
++    if (pending) g_fg_pending_src = NULL;
 +    pm_unlock(&g_fg_lock);
-+    Surf* cur = vk_fg_current();
++    if (!cur) cur = vk_fg_current();
 +    if (!pending || !cur) return;
 +    const u32 rect[4] = {0, 0, cur->sw, cur->sh};
 +    vk_render_end();
@@ -6001,7 +6126,7 @@ index f3ac2e2..32aa4b8 100644
 +            vk_fg_reset();
 +            g_fg_active = 0;
 +        }
-+        show(src, rect, fw, fh, transform, 1);
++        if (show(src, rect, fw, fh, transform, 1)) g_vk_display++;
 +        return;
 +    }
 +    if (!g_fg_started) {
@@ -6013,7 +6138,7 @@ index f3ac2e2..32aa4b8 100644
 +        }
 +    }
 +    if (g_fg_started < 0) {
-+        show(src, rect, fw, fh, transform, 1);
++        if (show(src, rect, fw, fh, transform, 1)) g_vk_display++;
 +        return;
 +    }
 +    fg_flush(0); /* a frame sooner than half a frame after the last: its copy goes first */
@@ -6021,17 +6146,23 @@ index f3ac2e2..32aa4b8 100644
 +    /* 14 to 120 game frames a second, without a hitch just now: a pace the halfway picture can fall between */
 +    int steady = g_fg_period >= 8000000ull && g_fg_period <= 70000000ull && interval && interval < g_fg_period * 3 / 2;
 +    int pair = vk_fg_capture(vk_cmd(), src, rect[0], rect[1], rect[2], rect[3]);
-+    Surf *mid = NULL, *cur;
++    Surf *mid = NULL, *cur = NULL;
++    u32 dw = 0, dh = 0;
 +    int hidden = g_show_hidden = pair && steady;
-+    show(src, rect, fw, fh, transform, 1); /* the frame's own bookkeeping, and the copy submitted */
++    int shown_game = show(src, rect, fw, fh, transform, 1); /* bookkeeping; displayed only when not hidden */
 +    g_show_hidden = 0;
-+    if (!hidden) return; /* shown as it is */
-+    mid = vk_fg_interpolate(vk_cmd());
-+    cur = vk_fg_current();
-+    if (!mid) { /* its copy instead, at once */
++    if (!hidden) {
++        if (shown_game) g_vk_display++;
++        return; /* shown as it is */
++    }
++    present_dest_size(fw, fh, &dw, &dh);
++    mid = vk_fg_interpolate_present(vk_cmd(), dw, dh, &cur);
++    if (!mid) { /* its copy instead, at once (or FSR'd current after a resize) */
 +        if (cur) {
 +            const u32 all[4] = {0, 0, cur->sw, cur->sh};
-+            show(cur, all, fw, fh, transform, 0);
++            if (show(cur, all, fw, fh, transform, 0)) {
++                fg_note_display(0);
++            }
 +        }
 +        return;
 +    }
@@ -6046,7 +6177,7 @@ index f3ac2e2..32aa4b8 100644
 +            snprintf(path, sizeof path, "%s_%04llu_b", g_settings.frame_generation_dump, (unsigned long long)made);
 +            surf_save(mid, 0, 0, mid->sw, mid->sh, 0, path);
 +            snprintf(path, sizeof path, "%s_%04llu_c", g_settings.frame_generation_dump, (unsigned long long)made);
-+            surf_save(cur, 0, 0, cur->sw, cur->sh, 0, path);
++            if (cur) surf_save(cur, 0, 0, cur->sw, cur->sh, 0, path);
 +        }
 +    }
 +    if (show(mid, whole, fw, fh, transform, 0)) fg_note_display(1);
@@ -6054,6 +6185,7 @@ index f3ac2e2..32aa4b8 100644
 +    g_fg_fw = fw;
 +    g_fg_fh = fh;
 +    g_fg_transform = transform;
++    g_fg_pending_src = cur; /* already filtered when FSR ran before interpolate */
 +    /* Time from the submitted midpoint, not from before an expensive interpolation/driver stall. */
 +    g_fg_due = plat_ns() + g_fg_period / 2;
 +    g_fg_pending = 1;
@@ -6062,7 +6194,7 @@ index f3ac2e2..32aa4b8 100644
  }
  
  /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
-@@ -583,7 +820,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+@@ -583,7 +866,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
          g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
          g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
      }
@@ -6074,7 +6206,7 @@ index f3ac2e2..32aa4b8 100644
      __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
      vk_unlock();
  }
-@@ -600,7 +840,10 @@ static void vkr_refresh(void) {
+@@ -600,7 +886,10 @@ static void vkr_refresh(void) {
      if (!vk_trylock()) return;
      last = now;
      vk_render_end();
@@ -6489,7 +6621,7 @@ index 6096f99..ed57f58 100644
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/ui.c b/src/nx/gpu/vk/ui.c
-index e32e8bd..410ccbf 100644
+index e32e8bd..55ee132 100644
 --- a/src/nx/gpu/vk/ui.c
 +++ b/src/nx/gpu/vk/ui.c
 @@ -9,6 +9,8 @@
@@ -6510,10 +6642,17 @@ index e32e8bd..410ccbf 100644
      VkImageView view;
      Vertex* v;
      VkBuffer buf;
-@@ -267,10 +269,26 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
+@@ -266,11 +268,32 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
+     ui_lock();
      atlas_upload(cb);
      vpad_draw(&list, safe);
-     vpad_showcase_draw(&list, safe, vpad_showcase_fps(g_vk_present, plat_ns()));
+-    vpad_showcase_draw(&list, safe, vpad_showcase_fps(g_vk_present, plat_ns()));
++    /* With frame generation, count display submissions so the FPS readout matches what is on screen (≈2x game). */
++    vpad_showcase_draw(&list, safe,
++                       vpad_showcase_fps(__atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED)
++                                             ? vk_display_presents()
++                                             : g_vk_present,
++                                         plat_ns()));
 +    if (__atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED) && !overlay_shown())
 +        pf_trace_draw(vk_frame_trace(), &list, safe, sh);
      overlay_draw(&list, sw, sh);
@@ -6539,10 +6678,10 @@ index e32e8bd..410ccbf 100644
      for (i = 0; i < n; ++i) {
 diff --git a/src/nx/gpu/vk/upscale.c b/src/nx/gpu/vk/upscale.c
 new file mode 100644
-index 0000000..d6d8f13
+index 0000000..628464e
 --- /dev/null
 +++ b/src/nx/gpu/vk/upscale.c
-@@ -0,0 +1,270 @@
+@@ -0,0 +1,280 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* Presentation-only filters: pixel smoothing (edge antialiasing, smooth.comp) on the guest image, then FSR 1 to the
 +   window size. Guest targets, timing, saves and game data are untouched. Three reusable images, no CPU readback or
@@ -6557,14 +6696,18 @@ index 0000000..d6d8f13
 +    VkPipelineLayout layout;
 +    VkPipeline pipes[2];
 +    VkSampler sampler, bilinear; /* FSR fetches texels itself; smoothing samples between them */
-+    Surf easu, rcas;
-+    Surf smooth;
++    /* One scratch pair per frame in flight: frame generation presents twice per game frame and would
++       otherwise overwrite a still-in-flight blit source (edge shimmer / corruption with FSR + FG). */
++    Surf easu[VK_FRAMES], rcas[VK_FRAMES];
++    Surf smooth[VK_FRAMES];
 +    VkPipeline smooth_pipe;
 +    int smooth_status;
 +    int failed;
 +    int status;
 +    u64 frames;
 +} g_upscale;
++
++static int slot(void) { return (int)(vk_frame_id() % VK_FRAMES); }
 +
 +/* Report transitions, not every frame: a checked setting is not proof that a frame was upscaled. */
 +static void report(int status, const char* reason, u32 w, u32 h, u32 dw, u32 dh) {
@@ -6651,11 +6794,13 @@ index 0000000..d6d8f13
 +    return raw == VK_FORMAT_R8G8B8A8_UNORM || raw == VK_FORMAT_B8G8R8A8_UNORM || raw == VK_FORMAT_A8B8G8R8_UNORM_PACK32;
 +}
 +
-+/* EASU then RCAS from input (a raw view of src) into rcas. srgb: the values are sRGB-encoded. */
++/* EASU then RCAS from input (a raw view of src) into this frame's rcas. srgb: the values are sRGB-encoded. */
 +static Surf* fsr_run(VkCommandBuffer cb, Surf* src, VkImageView input, int srgb, u32 x, u32 y, u32 w, u32 h,
 +                     u32 dw, u32 dh, float sharpness) {
-+    if (!image_make(&g_upscale.easu, dw, dh) || !image_make(&g_upscale.rcas, dw, dh)) {
-+        drop(&g_upscale.easu); drop(&g_upscale.rcas); g_upscale.failed = 1;
++    int s = slot();
++    Surf *easu = &g_upscale.easu[s], *rcas = &g_upscale.rcas[s];
++    if (!image_make(easu, dw, dh) || !image_make(rcas, dw, dh)) {
++        drop(easu); drop(rcas); g_upscale.failed = 1;
 +        LOG("vulkan: FSR 1 unavailable: no scratch image memory; using linear scaling\n");
 +        report(7, "inactive: insufficient scratch memory; standard scaling", w, h, dw, dh);
 +        return NULL;
@@ -6665,15 +6810,15 @@ index 0000000..d6d8f13
 +    struct { i32 crop[4]; u32 size[2], srgb; float sharpness; } pc =
 +        {{(i32)x, (i32)y, (i32)w, (i32)h}, {dw, dh}, (u32)srgb, sharpness};
 +    vk_render_end();
-+    Surf* inputs[2] = {src, &g_upscale.easu};
-+    Surf* outputs[2] = {&g_upscale.easu, &g_upscale.rcas};
++    Surf* inputs[2] = {src, easu};
++    Surf* outputs[2] = {easu, rcas};
 +    for (int i = 0; i < 2; i++) {
 +        vk_surf_use(cb, inputs[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 +            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 +        vk_surf_use(cb, outputs[i], VK_IMAGE_LAYOUT_GENERAL,
 +            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 +        VkDescriptorImageInfo images[2] = {
-+            {g_upscale.sampler, i ? g_upscale.easu.att : input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
++            {g_upscale.sampler, i ? easu->att : input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
 +            {VK_NULL_HANDLE, outputs[i]->att, VK_IMAGE_LAYOUT_GENERAL}};
 +        VkWriteDescriptorSet writes[2];
 +        for (u32 j = 0; j < 2; j++) writes[j] = (VkWriteDescriptorSet){
@@ -6686,14 +6831,14 @@ index 0000000..d6d8f13
 +        rec_CmdPushConstants(cb, g_upscale.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
 +        rec_CmdDispatch(cb, (dw + 7) / 8, (dh + 7) / 8, 1);
 +    }
-+    vk_surf_use(cb, &g_upscale.rcas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++    vk_surf_use(cb, rcas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +        VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 +    report(1, "active: EASU + RCAS dispatched", w, h, dw, dh);
 +    if (++g_upscale.frames == 1 || g_upscale.frames % 600 == 0)
 +        LOG("vulkan: FSR 1 upscaled %llu frames, latest %ux%u to %ux%u\n",
 +            (unsigned long long)g_upscale.frames, w, h, dw, dh);
 +    vk_render_forget_state();
-+    return &g_upscale.rcas;
++    return rcas;
 +}
 +
 +/* The reason FSR would not enlarge this crop, as a report status, or 0 when it can. */
@@ -6746,17 +6891,18 @@ index 0000000..d6d8f13
 +    vk_surf_touch(src);
 +    const VkComponentMapping identity = {0, 0, 0, 0};
 +    VkImageView input = vk_tex_view(src, VK_IMAGE_VIEW_TYPE_2D, 0, &identity, 0); /* raw: smooth on encoded values */
-+    if (!input || !image_make(&g_upscale.smooth, w, h)) goto unavailable;
++    Surf* smooth = &g_upscale.smooth[slot()];
++    if (!input || !image_make(smooth, w, h)) goto unavailable;
 +    VkDescriptorSet set = vk_desc_alloc(g_upscale.ds);
 +    if (!set) goto unavailable;
 +    vk_render_end();
 +    vk_surf_use(cb, src, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 +        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-+    vk_surf_use(cb, &g_upscale.smooth, VK_IMAGE_LAYOUT_GENERAL,
++    vk_surf_use(cb, smooth, VK_IMAGE_LAYOUT_GENERAL,
 +        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 +    VkDescriptorImageInfo images[2] = {
 +        {g_upscale.bilinear, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-+        {VK_NULL_HANDLE, g_upscale.smooth.att, VK_IMAGE_LAYOUT_GENERAL}};
++        {VK_NULL_HANDLE, smooth->att, VK_IMAGE_LAYOUT_GENERAL}};
 +    VkWriteDescriptorSet writes[2];
 +    for (u32 j = 0; j < 2; j++) writes[j] = (VkWriteDescriptorSet){
 +        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = j,
@@ -6770,14 +6916,14 @@ index 0000000..d6d8f13
 +    rec_CmdPushConstants(cb, g_upscale.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
 +    rec_CmdDispatch(cb, (w + 7) / 8, (h + 7) / 8, 1);
 +    if (!keep) /* FSR's own barriers take the image from here when it follows */
-+        vk_surf_use(cb, &g_upscale.smooth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++        vk_surf_use(cb, smooth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 +    vk_render_forget_state();
 +    if (g_upscale.smooth_status != 1)
 +        LOG("vulkan: Pixel smoothing active: edge antialiasing on the %ux%u game image%s\n", w, h,
 +            keep ? " before FSR 1" : "");
 +    g_upscale.smooth_status = 1;
-+    return &g_upscale.smooth;
++    return smooth;
 +unavailable:
 +    if (g_upscale.smooth_status != 2) LOG("vulkan: Pixel smoothing unavailable: original presentation retained\n");
 +    g_upscale.smooth_status = 2;
@@ -6800,10 +6946,13 @@ index 0000000..d6d8f13
 +}
 +
 +void vk_upscale_destroy(void) {
-+    drop(&g_upscale.smooth);
++    for (int i = 0; i < VK_FRAMES; i++) {
++        drop(&g_upscale.smooth[i]);
++        drop(&g_upscale.easu[i]);
++        drop(&g_upscale.rcas[i]);
++    }
 +    if (g_upscale.smooth_pipe) vkDestroyPipeline(g_vk.dev, g_upscale.smooth_pipe, NULL);
 +    g_upscale.smooth_pipe = VK_NULL_HANDLE; g_upscale.smooth_status = 0;
-+    drop(&g_upscale.easu); drop(&g_upscale.rcas);
 +    for (int i = 0; i < 2; i++) if (g_upscale.pipes[i]) vkDestroyPipeline(g_vk.dev, g_upscale.pipes[i], NULL);
 +    if (g_upscale.sampler) vkDestroySampler(g_vk.dev, g_upscale.sampler, NULL);
 +    if (g_upscale.bilinear) vkDestroySampler(g_vk.dev, g_upscale.bilinear, NULL);
@@ -6814,7 +6963,7 @@ index 0000000..d6d8f13
 +    g_upscale.frames = 0; g_upscale.status = 0;
 +}
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..6985ca5 100644
+index db13c2d..c9c5cf5 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -74,6 +74,7 @@ typedef struct {
@@ -6912,7 +7061,7 @@ index db13c2d..6985ca5 100644
  VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
-@@ -888,6 +925,20 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
+@@ -888,6 +925,24 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
     safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
  void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
  void vk_ui_swapchain_gone(void); /* its images' views go before the swapchain does */
@@ -6926,10 +7075,14 @@ index db13c2d..6985ca5 100644
 +   too, so vk_fg_interpolate can make the picture between them. vk_fg_current is the copy, presentable as src is */
 +int vk_fg_capture(VkCommandBuffer cb, Surf* src, u32 x, u32 y, u32 w, u32 h);
 +Surf* vk_fg_interpolate(VkCommandBuffer cb);
++/* Like interpolate, but when FSR would enlarge to dw x dh the midpoint and *out_cur are already that size (FSR on
++   real frames only). *out_cur is always set when a current history frame exists. */
++Surf* vk_fg_interpolate_present(VkCommandBuffer cb, u32 dw, u32 dh, Surf** out_cur);
 +Surf* vk_fg_current(void);
 +Surf* vk_fg_previous(void); /* the copy before it, while the history holds two */
 +void vk_fg_reset(void);   /* the next frame starts a new history: a menu, a hitch or a scene the motion can't bridge */
 +void vk_fg_destroy(void); /* GPU idle before this */
++u32 vk_display_presents(void); /* swapchain pictures shown, including generated frames */
  void vk_render_clear(GpuChannel* ch, u32 v);
  VkViewport vk_render_viewport(const u32* r);
  int vk_render_depth_clamp(const u32* r);
@@ -7336,22 +7489,27 @@ index addf082..2a2d1f5 100644
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
-index a0ef76b..115e79f 100644
+index a0ef76b..c878a4f 100644
 --- a/src/nx/runtime/options.c
 +++ b/src/nx/runtime/options.c
-@@ -58,6 +58,11 @@ void options_fps_set(const IniOpt* o, const char* v) {
+@@ -58,6 +58,16 @@ void options_fps_set(const IniOpt* o, const char* v) {
          fps = d < 10 ? 10 : d > 1000 ? 1000 : (int)d;
      __atomic_store_n(&g_opt_fps, fps, __ATOMIC_RELAXED);
  }
 +int g_opt_speed_lock = 1;
++int g_opt_frame_generation;
 +void options_speed_lock_set(const IniOpt* o, const char* v) {
 +    (void)o;
 +    __atomic_store_n(&g_opt_speed_lock, atoi(v) ? 1 : 0, __ATOMIC_RELAXED);
 +}
++void options_frame_generation_set(const IniOpt* o, const char* v) {
++    (void)o;
++    __atomic_store_n(&g_opt_frame_generation, atoi(v) ? 1 : 0, __ATOMIC_RELAXED);
++}
  void fps_limit_text(int fps, char* out, size_t n) {
      if (fps == SNX_FPS_GAME)
          snprintf(out, n, "game");
-@@ -135,6 +140,53 @@ typedef struct {
+@@ -135,6 +145,53 @@ typedef struct {
  } Override;
  static Override g_over[OVERRIDE_MAX];
  static int g_nover;
@@ -7405,7 +7563,7 @@ index a0ef76b..115e79f 100644
  /* the menu's, from any thread, until a write of the file has them. g_pending_lock is a leaf: nothing is called while
     it is held */
  typedef struct {
-@@ -203,6 +255,8 @@ static const char* value_of(const IniOpt* o) {
+@@ -203,6 +260,8 @@ static const char* value_of(const IniOpt* o) {
      const char* v = override_of(o->key);
      const Entry* e;
      if (v) return v;
@@ -7414,7 +7572,7 @@ index a0ef76b..115e79f 100644
      e = store_find(o->key);
      return e ? e->value : o->def;
  }
-@@ -224,7 +278,7 @@ void ini_override(const char* k, const char* v) {
+@@ -224,7 +283,7 @@ void ini_override(const char* k, const char* v) {
  void ini_set(const char* k, const char* v) {
      size_t kn = strlen(k), vn = strlen(v);
      int i;
@@ -7423,7 +7581,7 @@ index a0ef76b..115e79f 100644
      if (kn >= KEY_MAX || vn >= PENDING_VALUE) {
          WARN_LIMIT(1, "settings: %s's value is too long to save\n", k);
          return;
-@@ -414,6 +468,7 @@ void ini_open(const char* path) {
+@@ -414,6 +473,7 @@ void ini_open(const char* path) {
      char why[256];
      snprintf(g_path, sizeof g_path, "%s", path);
      ini_set_say(say_setting);
@@ -7431,7 +7589,7 @@ index a0ef76b..115e79f 100644
      for (i = 0; i < g_nover; i++)
          if (!snx_setting_known(g_over[i].key)) WARN("--%s is not a setting, so it does nothing\n", g_over[i].key);
      text = snx_read_file(g_path, &size);
-@@ -433,6 +488,9 @@ void ini_open(const char* path) {
+@@ -433,6 +493,9 @@ void ini_open(const char* path) {
      n = pending_take(taken);
      say_deprecated();
      apply_all();
@@ -7442,14 +7600,15 @@ index a0ef76b..115e79f 100644
      g_started = 1;
  }
 diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
-index 408db9e..0439f39 100644
+index 408db9e..837e5a2 100644
 --- a/src/nx/runtime/options.h
 +++ b/src/nx/runtime/options.h
-@@ -34,6 +34,7 @@ void ini_poll(int final);
+@@ -34,6 +34,8 @@ void ini_poll(int final);
  /* fps_limit: 0 = no limit, SNX_FPS_GAME = the game's own pace (its swap interval), else frames a second (10 to 1000) */
  #define SNX_FPS_GAME (-1)
  extern int g_opt_fps;                              /* atomic: the game's threads read it */
 +extern int g_opt_speed_lock;                       /* atomic: speed_lock, 1 = no frame sooner than the game's pace */
++extern int g_opt_frame_generation;                 /* atomic: frame_generation; doubles a numeric fps_limit for display */
  void fps_limit_text(int fps, char* out, size_t n); /* g_opt_fps as fps_limit's value: "game", "0", "30"... */
  /* ldn, read: local wireless over the LAN (ldn_mitm's protocol), through an Eden room, or off
     (hle/services/network/ldn.c) */
@@ -7938,10 +8097,18 @@ index 0821ef7..c440b93 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2..be67e7a 100644
+index 441a8c2..d826716 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
-@@ -14,7 +14,7 @@
+@@ -5,6 +5,7 @@
+ #include "nx/runtime/platform/fatal_screen.h"
+ #include "nx/runtime/platform/gamepad.h"
+ #include "nx/runtime/platform/vpad.h"
++#include "nx/runtime/options.h"
+ #include "gui_theme_colors.h"
+ #include "common/utilities/pad_screen.h"
+ #include "common/utilities/users.h"
+@@ -14,7 +15,7 @@
  
  enum { FIRST = 3, VISIBLE = OVERLAY_ROWS - FIRST - 1 }; /* the items' first row, and how many show at once */
  enum { PAGE_MAIN, PAGE_CONTROLS, PAGE_BUTTONS, PAGE_PADS, PAGE_MAP };
@@ -7950,7 +8117,7 @@ index 441a8c2..be67e7a 100644
  enum { P_PLAYER, P_SWAP, P_DEADZONE, P_RUMBLE, P_BACKGROUND, P_MAP, P_BACK, P_COUNT }; /* the gamepads' page's */
  /* the controls page's items */
  enum {
-@@ -110,9 +110,14 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
+@@ -110,9 +111,14 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
          return;
      }
      if (page == PAGE_MAIN) {
@@ -7967,7 +8134,7 @@ index 441a8c2..be67e7a 100644
          return;
      }
      if (page == PAGE_BUTTONS) {
-@@ -259,6 +264,14 @@ static int act(int i, int step) {
+@@ -259,6 +265,16 @@ static int act(int i, int step) {
          return OVERLAY_NONE;
      }
      if (page == PAGE_MAIN) {
@@ -7976,13 +8143,15 @@ index 441a8c2..be67e7a 100644
 +            return OVERLAY_NONE;
 +        }
 +        if (i == M_FRAMEGEN) {
-+            __atomic_store_n(&g_settings.frame_generation, !g_settings.frame_generation, __ATOMIC_RELAXED);
++            int on = !g_settings.frame_generation;
++            __atomic_store_n(&g_settings.frame_generation, on, __ATOMIC_RELAXED);
++            __atomic_store_n(&g_opt_frame_generation, on, __ATOMIC_RELAXED);
 +            return OVERLAY_NONE;
 +        }
          if (step) return OVERLAY_NONE;
          if (i == M_EXIT) return OVERLAY_EXIT;
          page_open(i == M_PADS ? PAGE_PADS : PAGE_CONTROLS);
-@@ -481,24 +494,30 @@ int overlay_pad(u64 button) {
+@@ -481,24 +497,30 @@ int overlay_pad(u64 button) {
      return OVERLAY_NONE;
  }
  int overlay_controls(u64 buttons, const i32 sticks[4], u64 ms) {
@@ -8020,7 +8189,7 @@ index 441a8c2..be67e7a 100644
      for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
          if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
      return did;
-@@ -523,7 +542,7 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
+@@ -523,7 +545,7 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
                          size_t size) {
      static const char* const titles[] = {"SCARLETNX  /  MENU", "SCARLETNX  /  CONTROLS", "SCARLETNX  /  BUTTONS",
                                           "SCARLETNX  /  CONTROLLERS"};
@@ -8355,10 +8524,10 @@ index 0000000..2d0dad9
 +}
 +#endif
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181..b587bf4 100644
+index 2bd6181..37c0457 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
-@@ -31,14 +31,67 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +31,78 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -8372,18 +8541,28 @@ index 2bd6181..b587bf4 100644
 +static u64 g_game_period; /* atomic: the game's pace from its last swap interval, 0 when it times itself */
 +static u64 g_show_next;   /* the GPU thread's: when a lower limit lets the next frame on the display */
 +
++/* With frame generation each game frame becomes two display pictures, so a numeric fps_limit is doubled (capped at
++   1000) for display-side cadence: the on-screen rate matches the setting the player chose. */
++static int present_limit_fps(int fps) {
++    if (fps <= 0) return fps;
++    if (!__atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED)) return fps;
++    return fps <= 500 ? fps * 2 : 1000;
++}
++
 +u64 present_period(int fps, u32 interval, int lock) {
++    int lim = present_limit_fps(fps);
 +    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
-+    u64 cap = fps > 0 ? 1000000000u / (u64)fps : 0;
++    u64 cap = lim > 0 ? 1000000000u / (u64)lim : 0;
 +    if (fps == SNX_FPS_GAME || (lock && game)) return game;
 +    return cap;
 +}
 +
 +int present_show_due(void) {
 +    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
++    int lim = present_limit_fps(fps);
 +    u64 game = __atomic_load_n(&g_game_period, __ATOMIC_RELAXED), cap, now;
-+    if (!__atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED) || fps <= 0 || !game ||
-+        (cap = 1000000000u / (u64)fps) <= game) {
++    if (!__atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED) || lim <= 0 || !game ||
++        (cap = 1000000000u / (u64)lim) <= game) {
 +        g_show_next = 0;
 +        return 1;
 +    }
@@ -8392,8 +8571,8 @@ index 2bd6181..b587bf4 100644
 +    if (g_show_next && now + game / 2 < g_show_next) {
 +        static u64 kept;
 +        if (++kept % 600 == 1)
-+            LOG("speed lock: %llu of the game's frames kept off the display for fps_limit=%d, its speed unchanged\n",
-+                (unsigned long long)kept, fps);
++            LOG("speed lock: %llu of the game's frames kept off the display for fps_limit=%d%s, its speed unchanged\n",
++                (unsigned long long)kept, fps, lim != fps ? " (doubled with frame generation)" : "");
 +        return 0;
 +    }
 +    g_show_next = g_show_next && now < g_show_next + cap ? g_show_next + cap : now + cap;
@@ -8402,6 +8581,7 @@ index 2bd6181..b587bf4 100644
  
  void present_pace(u32 interval) {
      int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
++    int lim = present_limit_fps(fps);
      u64 refresh, period, now, next;
 -    if (!fps || (fps == SNX_FPS_GAME && !interval)) return;
 -    refresh = 1000000000u / (fps == SNX_FPS_GAME ? (u64)VI_REFRESH_HZ : (u64)fps);
@@ -8415,12 +8595,12 @@ index 2bd6181..b587bf4 100644
 +        pm_unlock(&g_pace_lock);
 +        return;
 +    }
-+    refresh = 1000000000u / (fps > 0 ? (u64)fps : (u64)VI_REFRESH_HZ);
++    refresh = 1000000000u / (lim > 0 ? (u64)lim : (u64)VI_REFRESH_HZ);
 +    if (refresh > period) refresh = period;
-+    if (fps != SNX_FPS_GAME && interval && (!fps || period != 1000000000u / (u64)fps) &&
++    if (fps != SNX_FPS_GAME && interval && (!fps || period != 1000000000u / (u64)(lim > 0 ? lim : fps)) &&
 +        (fps != g_pace_fps || period != g_pace_period))
 +        LOG("speed lock: the game keeps its pace of %u frame(s) of %d Hz, fps_limit %s\n", interval, VI_REFRESH_HZ,
-+            !fps ? "off" : period > 1000000000u / (u64)fps ? "above it" : "below it shows fewer frames");
++            !fps ? "off" : period > 1000000000u / (u64)(lim > 0 ? lim : fps) ? "above it" : "below it shows fewer frames");
      pm_lock(&g_pace_lock);
 +    /* Switching limits or the game's interval must not inherit a future deadline from the old pace. */
 +    if (fps != g_pace_fps || period != g_pace_period) g_pace_last = 0;
@@ -8430,10 +8610,10 @@ index 2bd6181..b587bf4 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..d1bd986 100644
+index be57ac5..9ef317a 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -80,13 +80,88 @@ setting Game mods off
+@@ -80,13 +80,90 @@ setting Game mods off
      help order. The launcher's list of updates, DLCs and mods writes it. A mod's exefs/ is recompiled into the game
  
  table g_display_ini
@@ -8466,8 +8646,10 @@ index be57ac5..d1bd986 100644
 +    int 0 1
 +    default 0
 +    words Off|On
++    set options_frame_generation_set
 +    help Show a generated picture between each two of the game's frames: twice the frames on the display, half a frame
 +    help later. The game itself runs and reacts at its own pace. Needs a display at least twice as fast as the game.
++    help A numeric FPS limit is doubled for display cadence so the on-screen rate matches the setting.
 +setting Frame generation dump
 +    key fg_dump
 +    text 1024
@@ -8523,7 +8705,7 @@ index be57ac5..d1bd986 100644
  setting Fullscreen
      key fullscreen
      int 0 1
-@@ -166,7 +241,17 @@ setting FPS limit
+@@ -166,7 +243,17 @@ setting FPS limit
      default game
      set options_fps_set
      help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
@@ -8542,7 +8724,7 @@ index be57ac5..d1bd986 100644
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -188,8 +273,35 @@ setting Pipeline threads
+@@ -188,8 +275,35 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -9274,18 +9456,19 @@ index 0000000..98d5ba0
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45..3c043fc 100644
+index 53c5e45..198a243 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
-@@ -10,6 +10,7 @@
+@@ -10,6 +10,8 @@
  #include <stdio.h>
  
  int g_opt_fps = SNX_FPS_GAME;
 +int g_opt_speed_lock = 0; /* pacing() checks the limits unlocked, speed_lock() with the lock */
++int g_opt_frame_generation = 0;
  static u64 now_ns, slept_ns;
  static unsigned checks, failures;
  #define CHECK(c, ...)                                                                                                  \
-@@ -84,12 +85,81 @@ static void pacing(void) {
+@@ -84,12 +86,85 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -9324,6 +9507,10 @@ index 53c5e45..3c043fc 100644
 +    CHECK(present_period(0, 0, 1) == 0, "a self-timed game without a limit waited");
 +    CHECK(present_period(SNX_FPS_GAME, 2, 1) == 2 * refresh, "the game's pace changed");
 +    CHECK(present_period(120, 1, 0) == 1000000000u / 120, "speed_lock=0 didn't allow a higher limit");
++    g_opt_frame_generation = 1;
++    CHECK(present_period(60, 0, 1) == 1000000000u / 120, "frame generation did not double a numeric limit");
++    CHECK(present_period(60, 1, 1) == refresh, "frame generation did not keep the speed lock");
++    g_opt_frame_generation = 0;
 +    g_opt_fps = 120;
 +    now_ns += 100 * refresh;
 +    present_pace(1);
@@ -9368,7 +9555,7 @@ index 53c5e45..3c043fc 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -98,6 +168,7 @@ int main(void) {
+@@ -98,6 +173,7 @@ int main(void) {
      clock_start();
      ticks();
      pacing();

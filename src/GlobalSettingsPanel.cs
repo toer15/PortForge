@@ -28,7 +28,7 @@ namespace PortForge
             AddChoice(layout, "Rendering mode", mode); AddChoice(layout, "Upscaling", upscaler); AddChoice(layout, "FPS limit", fps);
             AddText(layout, "Internal resolution is chosen by the game in TV or handheld mode. Universal native 720p / 1080p / 1440p / 4K overrides are not supported. FSR 1 enlarges the rendered image to fit the window.", 10);
             AddChoice(layout, "Frame generation (Engine 1.18 or newer)", framegen);
-            framegenNote.Text = "Adds an estimated frame between game frames to smooth motion. Experimental: artifacts and extra latency are possible. It needs GPU headroom and a display faster than the game. This is PortForge interpolation, not AMD FSR 3. Simulation and input stay at the game's rate. No Radeon driver settings are changed.";
+            framegenNote.Text = "Adds an estimated frame between game frames to smooth motion. Experimental: extra latency is possible. With AMD FSR 1 on, the engine upscales real frames first then interpolates, which avoids the old FSR+FG edge shimmer. A numeric FPS limit is doubled for display rate; the FPS readout counts those display frames. Needs GPU headroom and a display faster than the game. This is PortForge interpolation, not AMD FSR 3. Simulation and input stay at the game's rate.";
             layout.Controls.Add(framegenNote);
             foreach (var check in new[] {vsync,smoothing,fullscreen,cursor,indicator,graph,trace}) layout.Controls.Add(check);
             AddText(layout, "The cursor returns in the Escape menu and when another window or the Windows menu has focus. Save activity follows the game's writes; it does not create a save point.", 10);
