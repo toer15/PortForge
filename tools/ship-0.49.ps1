@@ -40,11 +40,14 @@ function Invoke-Native([string]$File, [string[]]$ArgList) {
 Write-Host "=== PortForge 0.49 / Engine 1.31 ship ==="
 Write-Host "Repo: $RepoRoot"
 
-# Sync branch if this is a git checkout
+# Sync branch if this is a git checkout (git writes progress to stderr; don't treat as failure)
 if (Test-Path -LiteralPath (Join-Path $RepoRoot '.git')) {
-    git fetch origin cursor/fsr3-limit-aware-display-fps-1ecc 2>$null
-    git checkout cursor/fsr3-limit-aware-display-fps-1ecc 2>$null
-    git pull origin cursor/fsr3-limit-aware-display-fps-1ecc 2>$null
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    git fetch origin cursor/fsr3-limit-aware-display-fps-1ecc 2>$null | Out-Null
+    git checkout cursor/fsr3-limit-aware-display-fps-1ecc 2>$null | Out-Null
+    git pull origin cursor/fsr3-limit-aware-display-fps-1ecc 2>$null | Out-Null
+    $ErrorActionPreference = $prevEap
 }
 
 $engineSrc = Join-Path $RepoRoot 'engine\src'
@@ -61,8 +64,18 @@ then re-run this script (it upgrades 1.30 → 1.31).
 # Upgrade in-tree sources to 1.31 (no-op if already upgraded)
 $py = Get-Command python -ErrorAction SilentlyContinue
 if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
-if (-not $py) { throw 'python/python3 required for tools/upgrade-engine-src-1.31.py' }
-Invoke-Native $py.Source @((Join-Path $RepoRoot 'tools\upgrade-engine-src-1.31.py'), $engineSrc)
+$pyExe = if ($py) { $py.Source } else { $null }
+if (-not $pyExe) {
+    foreach ($cand in @(
+        'C:\msys64\clang64\bin\python.exe',
+        'C:\msys64\usr\bin\python.exe',
+        'C:\msys64\mingw64\bin\python.exe'
+    )) {
+        if (Test-Path -LiteralPath $cand) { $pyExe = $cand; break }
+    }
+}
+if (-not $pyExe) { throw 'python/python3 required for tools/upgrade-engine-src-1.31.py (or MSYS2 python)' }
+Invoke-Native $pyExe @((Join-Path $RepoRoot 'tools\upgrade-engine-src-1.31.py'), $engineSrc)
 $ver = (Get-Content -LiteralPath $verFile -Raw).Trim()
 if ($ver -ne '1.31') { throw "engine/VERSION is '$ver', expected 1.31" }
 
