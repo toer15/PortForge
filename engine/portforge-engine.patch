@@ -6419,10 +6419,10 @@ index f3ac2e2..54f5e6e 100644
  
 diff --git a/src/nx/gpu/vk/shaders/fg.comp b/src/nx/gpu/vk/shaders/fg.comp
 new file mode 100644
-index 0000000..fc690a9
+index 0000000..56cee6b
 --- /dev/null
 +++ b/src/nx/gpu/vk/shaders/fg.comp
-@@ -0,0 +1,158 @@
+@@ -0,0 +1,162 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// PortForge FSR 3 (from scratch): display-only upscale + frame generation inspired by AMD FSR 3's
 +// published optical-flow + interpolation design (GPUOpen manuals), without game motion vectors.
@@ -6490,8 +6490,8 @@ index 0000000..fc690a9
 +    vec2 pred = vec2(0.0);
 +    float bc = cost(p, best, pred);
 +    float zero_sad = bc;
-+    // FSR 3 Optical Flow: on a hard cut, zero motion (scene-change) — do not invent vectors.
-+    if (zero_sad > 0.42) {
++    // Hard cut: zero motion. 0.55 still catches a cut and lets a detailed pan search.
++    if (zero_sad > 0.55) {
 +        imageStore(dst, p, vec4(0.0, 0.0, zero_sad, 1.0));
 +        return;
 +    }
@@ -6564,21 +6564,25 @@ index 0000000..fc690a9
 +    vec4 back = texture(srcB, uv - h_best / size);
 +    vec4 fwd = texture(srcA, uv + h_best / size);
 +    float e_bi = length(abs(a.rgb - back.rgb)) + length(abs(b.rgb - fwd.rgb));
-+    e = max(e, 0.7 * e_bi);
 +
 +    vec4 a0 = texelFetch(srcA, p, 0), b0 = texelFetch(srcB, p, 0);
 +    float e0 = length(abs(a0.rgb - b0.rgb));
 +    float motion = length(h_best);
-+    /* Static HUD stays the current pixel. A correct low-error warp is the midpoint.
-+       The squared weight is gone: it turned a small bilinear error into a copy of the
-+       current frame and flattened texture. Mismatched warps still copy the current pixel. */
-+    if (e0 < 0.022 || e > 0.09 || motion > 12.0 || e_bi > 0.14) {
++    /* Static HUD stays the current texel. A warp that agrees is the full midpoint: mixing
++       back toward the current frame, and squaring that weight, was replacing texture with
++       the latest real pixel. A mismatched warp, disocclusion or whip-pan still copies it. */
++    if (e0 < 0.018) {
 +        imageStore(dst8, p, vec4(b0.rgb, 1.0));
 +        return;
 +    }
-+    vec3 moved = 0.5 * (a.rgb + b.rgb);
-+    float reliable = 1.0 - smoothstep(0.02, 0.08, e);
-+    imageStore(dst8, p, vec4(mix(b0.rgb, moved, reliable), 1.0));
++    if (e > 0.22 || e_bi > 0.28 || motion > 28.0) {
++        imageStore(dst8, p, vec4(b0.rgb, 1.0));
++        return;
++    }
++    float w = 1.0 - smoothstep(0.12, 0.22, e);
++    w *= 1.0 - smoothstep(0.14, 0.28, e_bi);
++    if (motion > 14.0) w *= 1.0 - smoothstep(14.0, 28.0, motion);
++    imageStore(dst8, p, vec4(mix(b0.rgb, 0.5 * (a.rgb + b.rgb), clamp(w, 0.0, 1.0)), 1.0));
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/shaders/fsr1.comp b/src/nx/gpu/vk/shaders/fsr1.comp
