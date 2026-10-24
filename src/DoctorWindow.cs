@@ -25,7 +25,7 @@ namespace PortForge
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
             root.Controls.Add(new Label { Text = "AI Doctor", AutoSize = true, Font = new Font("Segoe UI", 20), ForeColor = Color.White }, 0, 0);
             var about = new Label { AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9), MaximumSize = new Size(800, 0),
-                Text = "Watching: " + (doctor == null || doctor.Games.Length == 0 ? "no games yet (open one in Graphics and FPS, or convert one)" : String.Join(", ", doctor.Games.Select(g => System.IO.Path.GetFileNameWithoutExtension(g)))) +
+                Text = "Watching: " + (doctor == null || doctor.Games.Length == 0 ? "no games yet (open one in Settings / Game tools, or convert one)" : String.Join(", ", doctor.Games.Select(g => System.IO.Path.GetFileNameWithoutExtension(g)))) +
                        ". While a game runs, the doctor reads its log and explains each slowdown. It never changes a running game. When the game closes, it puts the PortForge Engine under it (the stutter fix) and applies the supported repairs, with the original engine, settings and save backed up first. This works on any PC, with no AI account. If Codex is installed and signed in, it also gives an extra AI review of new problems." + (LiveDoctor.AiStatus.Length > 0 ? " " + LiveDoctor.AiStatus : "") };
             root.Controls.Add(about, 0, 1);
             root.Controls.Add(events, 0, 2);

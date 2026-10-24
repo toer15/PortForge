@@ -60,7 +60,7 @@ namespace PortForge
 
         public NativeWindow()
         {
-            Text = "PortForge 0.35 | Switch to PC"; AppIcon.Apply(this);
+            Text = "PortForge 0.36 | Switch to PC"; AppIcon.Apply(this);
             ClientSize = new Size(1120, 750);
             MinimumSize = new Size(1040, 720);
             StartPosition = FormStartPosition.CenterScreen;
@@ -77,13 +77,8 @@ namespace PortForge
             header.Controls.Add(Caption("PortForge", 26, Color.White, true));
             header.Controls.Add(Caption("Create Windows game files from your Switch game.", 11, Muted, false));
             var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
-            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 760));
+            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); heading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 600));
             heading.Controls.Add(header, 0, 0);
-            var settings = Button("Graphics and FPS", true); settings.AccessibleName = "Graphics and FPS"; settings.Size = new Size(165, 40);
-            settings.Click += delegate
-            {
-                if (mainTabs != null) mainTabs.SelectedIndex = 1;
-            };
             var headerActions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = new Padding(0) };
             downloads.AccessibleName = "Downloads"; downloads.Size = new Size(120, 40);
             downloads.Click += async delegate
@@ -115,7 +110,7 @@ namespace PortForge
             var cloud=Button("Cloud saves",false);cloud.Size=new Size(130,40);cloud.Click+=delegate{string exe=Directory.Exists(result)?Path.Combine(result,Path.GetFileName(result)+".exe"):GameSettingsWindow.RememberedGame();using(var window=new CloudSaveWindow(exe))window.ShowDialog(this);};
             var controllers = Button("Controllers", false); controllers.AccessibleName = "Controllers"; controllers.Size = new Size(130, 40);
             controllers.Click += delegate { using (var window = new ControllerWindow()) window.ShowDialog(this); };
-            headerActions.Controls.Add(downloads); headerActions.Controls.Add(settings); headerActions.Controls.Add(cloud); headerActions.Controls.Add(controllers); headerActions.Controls.Add(updates);
+            headerActions.Controls.Add(downloads); headerActions.Controls.Add(cloud); headerActions.Controls.Add(controllers); headerActions.Controls.Add(updates);
             heading.Controls.Add(headerActions, 1, 0); root.Controls.Add(heading, 0, 0);
             var columns = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0) };
             columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
@@ -270,7 +265,7 @@ namespace PortForge
             };
             doctorUiTimer.Tick += delegate { FlushDoctorUpdates(); }; doctorUiTimer.Start();
             int count = doctor.Games.Length;
-            doctorStatus.Text = "AI Doctor: " + (count == 0 ? "ready. It starts watching a game once you convert one or open it in Graphics and FPS." : "watching " + count + " game(s). Problems are explained live and fixed when the game closes.");
+            doctorStatus.Text = "AI Doctor: " + (count == 0 ? "ready. It starts watching a game once you convert one or open it in Settings / Game tools." : "watching " + count + " game(s). Problems are explained live and fixed when the game closes.");
         }
 
         private async Task DetectHardware()
@@ -447,7 +442,7 @@ namespace PortForge
                 ShowStatus("DONE", "Your files are ready", "The Windows game files were created successfully. Open the game folder to find " + request.Name + ".exe. Whether the game runs depends on game support.", Mint);
                 if (request.PcSummary != null) ShowStatus("DONE", "Your game settings are ready", request.PcSummary + " See PortForge-PC-settings.txt in the game folder for the hardware and settings used. Game compatibility can vary.", Mint);
                 if (request.TuningWarning != null)
-                    ShowStatus("DONE / CHECK SETTINGS", "Your files are ready", (request.PcSummary ?? "The game files were created.") + " Automatic tuning could not finish. Open full log for the reason, or use Graphics and FPS.", Blue);
+                    ShowStatus("DONE / CHECK SETTINGS", "Your files are ready", (request.PcSummary ?? "The game files were created.") + " Automatic tuning could not finish. Open full log for the reason, or use the Settings tab.", Blue);
                 statusAction.Text = "Open game folder";
                 statusAction.Visible = true;
                 AppendLog("DONE: Files created in " + result);

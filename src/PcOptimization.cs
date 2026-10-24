@@ -53,6 +53,7 @@ namespace PortForge
                 var cap = RuntimeCapabilities.Read(exe, token);
                 var current = GameOptimization.Load(exe);
                 var settings = SettingsFor(pc, current, cap);
+                ApplyGlobalPreferences(settings, cap);
                 progress.Report("Matching graphics and shader workers to this PC: " + pc.Summary);
                 Apply(exe, settings, token);
                 result.Profile = GameOptimization.Load(exe);
@@ -82,7 +83,7 @@ namespace PortForge
             catch (Exception e)
             {
                 result.Warning = "Automatic tuning could not finish; hardware matching was unavailable. " + e.Message;
-                result.Summary = "Hardware matching unavailable; review Graphics and FPS.";
+                result.Summary = "Hardware matching unavailable; review Settings.";
                 report.AppendLine(result.Warning);
             }
             report.AppendLine("\r\n" + result.Summary);
@@ -94,6 +95,30 @@ namespace PortForge
             catch (IOException e) { result.Warning = (result.Warning ?? "") + " Could not save the PC settings report: " + e.Message; }
             catch (UnauthorizedAccessException e) { result.Warning = (result.Warning ?? "") + " Could not save the PC settings report: " + e.Message; }
             return result;
+        }
+
+        /// <summary>When global Settings ask for 60 FPS with FSR 3-style, enable FG + FSR so display hits ~120.</summary>
+        public static void ApplyGlobalPreferences(Dictionary<string,string> settings, RuntimeCapabilities cap)
+        {
+            if (settings == null) return;
+            try
+            {
+                var g = GlobalSettings.Load(GlobalSettings.FilePath);
+                if (!g.Enabled) return;
+                if (g.IsFsr3Style || g.UpscaleMode == 2)
+                {
+                    if (cap == null || cap.Keys.Contains("upscaler")) settings["upscaler"] = "1";
+                    if (cap == null || cap.Keys.Contains("frame_generation")) settings["frame_generation"] = "1";
+                    if (g.Graphics.FpsLimit == "60" || g.Graphics.FpsLimit == "game")
+                        settings["fps_limit"] = g.Graphics.FpsLimit == "game" ? "60" : "60";
+                    else if (g.Graphics.FpsLimit != "game" && g.Graphics.FpsLimit != "0")
+                        settings["fps_limit"] = g.Graphics.FpsLimit;
+                }
+                if (GlobalSettings.IsDisplayResolution(g.DisplayResolution) && g.DisplayResolution != "auto")
+                    settings["display_resolution"] = g.DisplayResolution;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
 
         private static void Apply(string exe, Dictionary<string,string> changes, CancellationToken token)

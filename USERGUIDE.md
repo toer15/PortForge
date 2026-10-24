@@ -1,6 +1,6 @@
-# PortForge 0.35
+# PortForge 0.36
 
-**FSR + frame generation (Engine 1.19):** with AMD FSR 1 and **PortForge 2x - experimental** both on, the engine upscales each real frame first and then builds the midpoint from those images, and FSR scratch is kept per frame in flight. That removes the earlier edge shimmer from running FSR on interpolated pictures. A numeric FPS limit is doubled for the display rate while frame generation is on; the FPS readout counts those display frames. Install Engine 1.19 under existing games (Doctor, while closed) to get the fix. See `VALIDATION-0.35.md`.
+**Resolution and FSR 3-style (Engine 1.20):** use the Settings tab for Auto/720p/1080p/1440p/4K output and Upscaling (Linear, AMD FSR 1, or PortForge FSR 3-style). FSR 3-style is PortForge's FSR 1 + 2x frame generation, not the AMD driver plugin. With a numeric FPS limit the display rate doubles (60 ? ~120). Esc / controller Home can change the FPS limit for the current session. See `VALIDATION-0.36.md`.
 
 **Settings for all games:** open the main **Settings** tab, choose your preferences, then **Save for all games**. Updated games read these on their next launch, including when started directly from the desktop with PortForge closed. Turn off **Apply these settings to every game** and save to return to individual game settings. The global layer takes priority over Game tools. Engine 1.17 or newer is required; older converted games need the runtime update while closed.
 
