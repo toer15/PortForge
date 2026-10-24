@@ -1,0 +1,133 @@
+# Builds and publishes a PortForge release on GitHub's Windows runners, from this repository alone:
+#   1. the Engine: ScarletNX at engine/BASE with engine/portforge-engine.patch, built in MSYS2 CLANG64 as
+#      ScarletNX's own Windows CI does (engine/build-engine.sh), its pacing tests run, then packaged
+#   2. the app (build-native.ps1) with the Engine in its Engine folder, and the FG cadence tests
+#   3. the release files (build-release.ps1) and, when asked, the GitHub release that in-app updates read
+# Run it from the Actions tab: "Ship PortForge", Run workflow, the version (0.51).
+name: Ship PortForge
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: PortForge version (for example 0.51)
+        required: true
+      publish:
+        description: Publish the GitHub release (in-app updates pick it up)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 CLANG64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            git make patch perl patchutils
+            mingw-w64-clang-x86_64-glslang
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-lld
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-nasm
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-spirv-tools
+            mingw-w64-clang-x86_64-ccache
+
+      - name: Engine source (ScarletNX at engine/BASE + the PortForge patch)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          base=$(tr -d '\r\n' < engine/BASE)
+          version=$(tr -d '\r\n' < engine/VERSION)
+          git -c core.autocrlf=false clone --filter=blob:none https://github.com/scarletnx/ScarletNX engine/src
+          git -C engine/src config core.autocrlf false
+          git -C engine/src checkout -q "$base"
+          git -C engine/src apply --whitespace=nowarn "$PWD/engine/portforge-engine.patch"
+          grep -q "PF_ENGINE_VERSION \"$version\"" engine/src/src/nx/runtime/pf_engine_version.h
+          echo "Engine $version on ScarletNX $base"
+
+      - name: Restore the download and compiler caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            engine/src/.cache/cpm
+            engine/src/.cache/ccache
+          key: engine-${{ hashFiles('engine/BASE') }}-${{ github.run_id }}
+          restore-keys: engine-${{ hashFiles('engine/BASE') }}-
+
+      - name: Build the Engine
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd engine
+          ./build-engine.sh
+
+      - name: Engine pacing tests
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd engine/src
+          cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file --parallel "$(getconf _NPROCESSORS_ONLN)"
+          ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file)$' --output-on-failure
+
+      - name: Package the Engine
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd engine
+          ./package-engine.sh
+          grep -q "version=$(tr -d '\r\n' < VERSION)" package/ENGINE.txt
+          ls -la package
+
+      - name: Build the app and the release files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ inputs.version }}'.TrimStart('v')
+          .\build-native.ps1
+          $csc = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
+          & $csc /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /r:System.Core.dll /out:build\FgCadenceTests.exe tests\FgCadenceTests.cs
+          if ($LASTEXITCODE -ne 0) { throw 'FG cadence tests did not compile.' }
+          & .\build\FgCadenceTests.exe
+          if ($LASTEXITCODE -ne 0) { throw 'FG cadence tests failed.' }
+          if (-not (Test-Path build\PortForgeNative\Engine\scarletnx.exe)) { throw 'The app was built without its Engine.' }
+          .\build-release.ps1 -Version $v -SkipBuild
+          Get-ChildItem "build\release-$v" -File | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portforge-${{ inputs.version }}
+          path: build/release-${{ inputs.version }}/*.*
+
+      - name: Publish the GitHub release
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${{ inputs.version }}"; v="${v#v}"
+          tag="v$v.0"
+          engine=$(tr -d '\r\n' < engine/VERSION)
+          notes="VALIDATION-$v.md"; [ -f "$notes" ] || notes=README.md
+          files=(build/release-$v/PortForge-$v-Windows-and-Source.zip build/release-$v/PortForge-$v-source.zip
+                 build/release-$v/PortForge-Setup-$v.exe build/release-$v/PortForge-$v-SHA256.txt)
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "PortForge $v / Engine $engine" --notes-file "$notes" --latest
+          fi

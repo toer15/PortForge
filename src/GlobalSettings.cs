@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -65,9 +65,11 @@ namespace PortForge
         public string EffectiveDisplayFpsNote()
         {
             int fps;
-            if (!FrameGeneration || !Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
+            if (!Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
                 return "";
-            return fps + " only drops pictures when it is below the game's pace. PortForge FSR 3 adds frames on screen (about 2× that pace) and does not speed the game up.";
+            return FrameGeneration
+                ? "With PortForge FSR 3 the screen shows " + (2 * fps) + " (twice the limit of " + fps + "), never more than the monitor refreshes. The game keeps its own speed."
+                : "The screen shows " + fps + ". When the game makes fewer real frames, pictures are added between them, so the game keeps its own speed.";
         }
 
         public void Save(string path)

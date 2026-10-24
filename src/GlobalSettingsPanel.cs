@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Globalization;
 using System.Windows.Forms;
@@ -27,12 +27,12 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.32 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Games always run at their own speed: the FPS limit and PortForge FSR 3 only change how many pictures reach the screen. In game, Esc shows the Engine version, the live Display FPS and the Limit.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.33 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Games always run at their own speed: the FPS limit and PortForge FSR 3 only change how many pictures reach the screen. With PortForge FSR 3 off the screen shows the FPS limit, and with it on twice the limit. In game, Esc shows the Engine version, the live Display FPS and the Limit.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             AddText(layout, "720p through 4K size the window/swapchain; FSR / PortForge FSR 3 enlarge the finished image. Internal game buffers stay native (scaling them broke titles like Breath of the Wild). Auto keeps the game's layout.", 10);
             AddChoice(layout, "Upscaling", upscale);
-            upscaleNote.Text = "PortForge FSR 3 = AMD FSR 1 upscaling plus PortForge's own frame generation (built from scratch from FSR 3 / AFMF ideas, not the AMD FidelityFX SDK). It makes extra pictures between the game's real frames: twice the FPS limit when the game can supply the real frames, and up to 4 pictures per real frame when it can't (Zelda BotW at 30 FPS with a 60 limit shows 120). It never speeds the game up. Turn it on or off in game from Esc.";
+            upscaleNote.Text = "PortForge FSR 3 = AMD FSR 1 upscaling plus PortForge's own frame generation (built from scratch from FSR 3 / AFMF ideas, not the AMD FidelityFX SDK). It makes extra pictures between the game's real frames so the screen shows twice the FPS limit (Zelda BotW at 30 FPS with a 60 limit shows 120, with 120 it shows 240), never more than your monitor refreshes. It never speeds the game up. Turn it on or off in game from Esc.";
             layout.Controls.Add(upscaleNote);
             AddChoice(layout, "Rendering mode", mode);
             AddChoice(layout, "FPS limit", fps);
@@ -88,14 +88,15 @@ namespace PortForge
             if(fps.SelectedIndex<0) { fps.Items.Add(s.Graphics.FpsLimit); fps.SelectedIndex=fps.Items.Count-1; }
             RefreshNotes();
         }
-        /* pictures a second on screen for a game running at its own pace g (Engine 1.32's present_expected_display_fps,
-           ignoring the monitor's refresh): the limit's frames, and with FSR 3 twice the limit, from 2 to 4 pictures each */
+        /* pictures a second on screen for a game running at its own pace g (Engine 1.33's present_expected_display_fps,
+           ignoring the monitor's refresh): the limit without FSR 3 and twice it with FSR 3 (the game's pace when there
+           is no number), generated pictures filling what the game's real frames don't, at most 10 per real frame */
         private static int OnScreen(int g, int limit, bool fsr3)
         {
             int real = limit > 0 && limit < g ? limit : g;
-            if (!fsr3) return real;
-            int k = limit > 0 ? 2 * limit / real : 2;
-            return real * Math.Max(2, Math.Min(4, k));
+            int target = (limit > 0 ? limit : g) * (fsr3 ? 2 : 1);
+            if (2 * target < 3 * real) return real;
+            return Math.Min(target, real * 10);
         }
         private void RefreshNotes()
         {
@@ -106,8 +107,8 @@ namespace PortForge
             string name = n > 0 ? "A limit of " + n : fps.SelectedIndex == 0 ? "Game speed" : "Unlimited";
             fpsNote.Text = name + (fsr3 ? " with PortForge FSR 3" : "") + " shows about " + OnScreen(30, n, fsr3) +
                 " FPS in a 30 FPS game (like Zelda BotW) and " + OnScreen(60, n, fsr3) + " FPS in a 60 FPS game. " +
-                (fsr3 ? "FSR 3 targets twice the limit, using up to 4 pictures per real frame, and never more than your monitor shows."
-                      : "Without FSR 3 the screen never shows more than the game's own frames, so the game keeps its speed. Turn on PortForge FSR 3 for more.");
+                (fsr3 ? "FSR 3 shows twice the limit, never more than your monitor refreshes. The game keeps its own speed."
+                      : "Without FSR 3 the screen shows the limit. When the game makes fewer real frames, PortForge adds pictures between them, so the game keeps its own speed. Turn on PortForge FSR 3 for twice the limit.");
         }
         private static string ResolutionKey(int index)
         {
