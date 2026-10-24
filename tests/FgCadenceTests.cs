@@ -2,7 +2,9 @@ using System;
 using System.IO;
 
 /// <summary>
-/// FG On => classic 2x game (speed lock holds guest). FG Off => Display/pace equals Limit.
+/// Engine 1.32's pacing, as shipped in the source and the patch: the speed lock always keeps a game at its own
+/// pace (a limit above it never speeds it up, FSR 3 on or off), and frame generation targets twice the limit with
+/// 2 to 4 pictures per real frame. The behaviour itself is checked by the engine's runtime_present suite.
 /// </summary>
 internal static class FgCadenceTests
 {
@@ -34,17 +36,16 @@ internal static class FgCadenceTests
         if (File.Exists(present))
         {
             string t = File.ReadAllText(present);
-            Check(t.Contains("PRESENT_FG_MAX_SLOTS = 2"), "classic 2x clamp");
-            Check(t.Contains("present_fg_on"), "FG-aware present_period helper");
-            Check(t.Contains("lock && game && fg"), "FG On keeps guest VI period");
-            Check(t.Contains("FSR Off locks pace") || t.Contains("Display = Limit"), "FG Off Limit pace log");
-            Check(!t.Contains("PRESENT_FG_MAX_SLOTS = 4"), "no 4-slot default");
+            Check(t.Contains("if (lock && game) return game;"), "speed lock keeps the game's pace with FSR 3 on or off");
+            Check(!t.Contains("FSR Off locks pace"), "no FSR-off pace at the limit (it sped games up)");
+            Check(t.Contains("PRESENT_FG_MAX_SLOTS = 4"), "up to 4 pictures per real frame");
+            Check(t.Contains("k = 2 * fps_limit / side"), "frame generation targets twice the limit");
         }
         string ver = Path.Combine(root, "engine", "VERSION");
-        Check(File.Exists(ver) && File.ReadAllText(ver).Trim() == "1.31", "engine/VERSION is 1.31");
+        Check(File.Exists(ver) && File.ReadAllText(ver).Trim() == "1.32", "engine/VERSION is 1.32");
         string patch = Path.Combine(root, "engine", "portforge-engine.patch");
-        Check(File.Exists(patch) && File.ReadAllText(patch).Contains("PRESENT_FG_MAX_SLOTS = 2"),
-            "patch clamps FG to 2x");
+        Check(File.Exists(patch) && File.ReadAllText(patch).Contains("k = 2 * fps_limit / side"),
+            "the shipped patch has the same pacing");
 
         if (fails != 0) { Console.Error.WriteLine(fails + " FgCadenceTests failed"); return 1; }
         Console.WriteLine("PASS FgCadenceTests");

@@ -12,7 +12,7 @@ namespace PortForge
             vsync = Check("VSync", true), smoothing = Check("Smooth jagged edges", false),
             graph = Check("Show frame-time graph in game (F7 toggles it)", false), trace = Check("Record frame-time trace (to find hitches)", false);
         private readonly ComboBox resolution = Choice("Resolution", "Auto (game chooses)", "720p", "1080p", "1440p", "4K (2160p)"),
-            upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "PortForge FSR 3 (2x, from scratch)"),
+            upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "PortForge FSR 3 (frame generation)"),
             mode = Choice("Rendering mode", "TV - game chooses its layout", "Handheld - lighter rendering where supported"),
             fps = Choice("Frame limit", "Game speed (recommended)", "30", "60", "120", "144", "240", "Unlimited");
         private readonly Label status = new Label { AutoSize = true, ForeColor = Color.FromArgb(105,226,183), AccessibleName = "Global settings status", Text = "READY - Settings apply on the next game launch." };
@@ -27,12 +27,12 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.31 or newer reads these settings when opened, even with PortForge closed. Restart running games to apply changes. The game always runs at its own speed. The FPS limit and PortForge FSR 3 only change how many pictures are shown — with FSR 3 On, Display FPS can rise toward your Limit (up to 4× the game). Esc shows Engine version, Display FPS and Limit — Play updates the game Engine when it is older than the app; you can also use Doctor → Engine.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.32 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Games always run at their own speed: the FPS limit and PortForge FSR 3 only change how many pictures reach the screen. In game, Esc shows the Engine version, the live Display FPS and the Limit.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             AddText(layout, "720p through 4K size the window/swapchain; FSR / PortForge FSR 3 enlarge the finished image. Internal game buffers stay native (scaling them broke titles like Breath of the Wild). Auto keeps the game's layout.", 10);
             AddChoice(layout, "Upscaling", upscale);
-            upscaleNote.Text = "PortForge FSR 3 is built from scratch from FSR 3 / AFMF ideas (optical flow, disocclusion, HUD lock) plus AMD FSR 1 spatial upscale — not the AMD FidelityFX SDK. Esc/Home → PortForge FSR 3 On/Off. It adds a picture between the game's frames (a 30 FPS game can show about 60, a 60 FPS game about 120) without speeding the game up. Esc Display FPS shows that live rate.";
+            upscaleNote.Text = "PortForge FSR 3 = AMD FSR 1 upscaling plus PortForge's own frame generation (built from scratch from FSR 3 / AFMF ideas, not the AMD FidelityFX SDK). It makes extra pictures between the game's real frames: twice the FPS limit when the game can supply the real frames, and up to 4 pictures per real frame when it can't (Zelda BotW at 30 FPS with a 60 limit shows 120). It never speeds the game up. Turn it on or off in game from Esc.";
             layout.Controls.Add(upscaleNote);
             AddChoice(layout, "Rendering mode", mode);
             AddChoice(layout, "FPS limit", fps);
@@ -88,17 +88,26 @@ namespace PortForge
             if(fps.SelectedIndex<0) { fps.Items.Add(s.Graphics.FpsLimit); fps.SelectedIndex=fps.Items.Count-1; }
             RefreshNotes();
         }
+        /* pictures a second on screen for a game running at its own pace g (Engine 1.32's present_expected_display_fps,
+           ignoring the monitor's refresh): the limit's frames, and with FSR 3 twice the limit, from 2 to 4 pictures each */
+        private static int OnScreen(int g, int limit, bool fsr3)
+        {
+            int real = limit > 0 && limit < g ? limit : g;
+            if (!fsr3) return real;
+            int k = limit > 0 ? 2 * limit / real : 2;
+            return real * Math.Max(2, Math.Min(4, k));
+        }
         private void RefreshNotes()
         {
             bool fsr3 = upscale.SelectedIndex == 2;
             string limit = fps.SelectedIndex == 0 ? "game" : fps.SelectedIndex == 6 ? "0" : fps.Text;
             int n;
-            if (fsr3 && Int32.TryParse(limit, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) && n > 0)
-                fpsNote.Text = n + " does not change game speed. It only drops pictures when it is below the game's pace. With PortForge FSR 3 the screen can show about twice that pace (a 30 FPS game about 60, a 60 FPS game about 120), not twice " + n + ".";
-            else if (fsr3)
-                fpsNote.Text = "PortForge FSR 3 is on. The game stays at its own pace and the display can show about twice that (30 → ~60, 60 → ~120). A number below the game's pace shows fewer frames. A higher number does not speed the game up.";
-            else
-                fpsNote.Text = "Speed lock keeps the game at its own pace when the cap is higher, and Display FPS shows that real rate. A lower cap drops frames (30 does not stay 60) without slowing the game.";
+            if (!Int32.TryParse(limit, NumberStyles.Integer, CultureInfo.InvariantCulture, out n)) n = 0;
+            string name = n > 0 ? "A limit of " + n : fps.SelectedIndex == 0 ? "Game speed" : "Unlimited";
+            fpsNote.Text = name + (fsr3 ? " with PortForge FSR 3" : "") + " shows about " + OnScreen(30, n, fsr3) +
+                " FPS in a 30 FPS game (like Zelda BotW) and " + OnScreen(60, n, fsr3) + " FPS in a 60 FPS game. " +
+                (fsr3 ? "FSR 3 targets twice the limit, using up to 4 pictures per real frame, and never more than your monitor shows."
+                      : "Without FSR 3 the screen never shows more than the game's own frames, so the game keeps its speed. Turn on PortForge FSR 3 for more.");
         }
         private static string ResolutionKey(int index)
         {
