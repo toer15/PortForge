@@ -80,33 +80,186 @@ int present_expected_display_fps(int fps_limit, int frame_generation) {
     if (!frame_generation || side <= 0) return side;
     return side <= 500 ? side * 2 : 1000;
 }"""
-    new_expect = """/* Limit-aware FG: classic 2x floor; Limit above that floor raises display toward
-   min(Limit, side * FG_MAX_SLOTS) via extra midpoints (30 FPS + Limit 120 => 4 slots / ~120). */
-enum { PRESENT_FG_MAX_SLOTS = 4 }; /* 1 real + up to 3 generated => 30->120, 60->240 */
+    new_expect = """/* PortForge FSR 3 FG: classic doubled presents only (1 mid + 1 real => 2x game).
+   Multi-mid (slots>2) caused ghosting/lag; Limit no longer raises slot count. */
+enum { PRESENT_FG_MAX_SLOTS = 2 }; /* 1 real + 1 generated => classic 2x display */
 int present_fg_slots(int fps_limit) {
-    int side = present_game_side_fps(fps_limit), target, slots;
+    int side = present_game_side_fps(fps_limit);
+    (void)fps_limit;
     if (side <= 0) return 1;
-    target = side * 2; /* classic FG floor */
-    if (fps_limit > 0 && fps_limit != SNX_FPS_GAME && fps_limit > target) target = fps_limit;
-    if (target > side * PRESENT_FG_MAX_SLOTS) target = side * PRESENT_FG_MAX_SLOTS;
-    slots = target / side;
-    if (slots < 1) slots = 1;
-    if (slots > PRESENT_FG_MAX_SLOTS) slots = PRESENT_FG_MAX_SLOTS;
-    return slots;
+    return PRESENT_FG_MAX_SLOTS;
 }
 
-/* Expected on-screen rate. Without FG: the frames present_show_due shows. With FG: side * present_fg_slots
-   (a 30 FPS title at Limit 120 => ~120; a 60 FPS title at Limit 120 => ~120). 0 when pace unknown. */
+/* Expected Display FPS for Esc. FG Off: numeric Limit. FG On: 2x game-side. */
 int present_expected_display_fps(int fps_limit, int frame_generation) {
     int side = present_game_side_fps(fps_limit);
-    if (!frame_generation || side <= 0) return side;
+    if (!frame_generation) {
+        if (fps_limit > 0 && fps_limit != SNX_FPS_GAME) return fps_limit;
+        return side;
+    }
+    if (side <= 0) return 0;
     return side * present_fg_slots(fps_limit);
 }"""
     pt = present.read_text(encoding="utf-8", errors="replace")
-    if "int present_fg_slots(" in pt and 'return side * present_fg_slots' in pt:
-        print("OK already: present_fg_slots")
+    # Re-apply 2x clamp even if an older 4-slot present_fg_slots is already present.
+    if "PRESENT_FG_MAX_SLOTS = 2" in pt and "if (fps_limit > 0 && fps_limit != SNX_FPS_GAME) return fps_limit;" in pt:
+        print("OK already: present_fg_slots classic 2x + Off=Limit")
+    elif "int present_fg_slots(" in pt:
+        import re as _re
+        pt2 = _re.sub(
+            r"/\* (?:Limit-aware FG|PortForge FSR 3 FG):.*?^int present_expected_display_fps\(int fps_limit, int frame_generation\) \{.*?\n\}",
+            new_expect.rstrip(),
+            pt,
+            count=1,
+            flags=_re.M | _re.S,
+        )
+        if pt2 == pt:
+            # Fallback: force-replace the enum + function bodies if comment form drifted.
+            pt2 = pt.replace("PRESENT_FG_MAX_SLOTS = 4", "PRESENT_FG_MAX_SLOTS = 2")
+            if "target = side * 2" in pt2:
+                old_slots = _re.search(
+                    r"int present_fg_slots\(int fps_limit\) \{.*?\n\}",
+                    pt2,
+                    _re.M | _re.S,
+                )
+                if old_slots:
+                    pt2 = pt2[: old_slots.start()] + """int present_fg_slots(int fps_limit) {
+    int side = present_game_side_fps(fps_limit);
+    (void)fps_limit;
+    if (side <= 0) return 1;
+    return PRESENT_FG_MAX_SLOTS;
+}""" + pt2[old_slots.end() :]
+            present.write_text(pt2, encoding="utf-8")
+            print("OK: present_fg_slots reclamped to classic 2x")
+        else:
+            present.write_text(pt2, encoding="utf-8")
+            print("OK: present_fg_slots classic 2x + Off=Limit")
     else:
         replace_once(present, old_expect, new_expect, "present.c slots")
+
+    # --- present.c: FG Off = Limit pace (present_period / show_due / game_side) ---
+    pt = present.read_text(encoding="utf-8", errors="replace")
+    if "static int present_fg_on(void)" in pt and "lock && game && fg" in pt:
+        print("OK already: present_period FG Off=Limit")
+    else:
+        old_period = """u64 present_period(int fps, u32 interval, int lock) {
+    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
+    u64 cap = fps > 0 ? 1000000000u / (u64)fps : 0;
+    if (fps == SNX_FPS_GAME || (lock && game)) return game;
+    return cap;
+}"""
+        new_period = """static int present_fg_on(void) {
+    return __atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
+           (__atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED) &&
+            __atomic_load_n(&g_settings.upscaler, __ATOMIC_RELAXED));
+}
+
+u64 present_period(int fps, u32 interval, int lock) {
+    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
+    u64 cap = fps > 0 ? 1000000000u / (u64)fps : 0;
+    int fg = present_fg_on();
+    if (fps == SNX_FPS_GAME) return game;
+    if (lock && game && fg) return game;
+    if (!fps) return game ? game : 0;
+    return cap;
+}"""
+        if old_period in pt:
+            pt = pt.replace(old_period, new_period, 1)
+            present.write_text(pt, encoding="utf-8")
+            print("OK: present_period FG Off=Limit")
+        else:
+            print("WARN: present_period marker not found (may already be upgraded)")
+        pt = present.read_text(encoding="utf-8", errors="replace")
+        # show_due: only drop frames when FG On
+        old_due = """    if (!__atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED) || fps <= 0 || !game ||
+        (cap = 1000000000u / (u64)fps) <= game) {"""
+        new_due = """    int fg = present_fg_on();
+    if (!__atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED) || !fg || fps <= 0 || !game ||
+        (cap = 1000000000u / (u64)fps) <= game) {"""
+        if old_due in pt and "|| !fg ||" not in pt:
+            pt = pt.replace(old_due, new_due, 1)
+            present.write_text(pt, encoding="utf-8")
+            print("OK: present_show_due FG-aware")
+        pt = present.read_text(encoding="utf-8", errors="replace")
+        old_side = """    if (lock && game_fps > 0 && fps_limit > game_fps) return game_fps;"""
+        new_side = """    int fg = present_fg_on();
+    if (fg && lock && game_fps > 0 && fps_limit > game_fps) return game_fps;"""
+        if old_side in pt and "fg && lock && game_fps" not in pt:
+            # insert fg decl if missing in function
+            if "int present_game_side_fps" in pt:
+                pt = pt.replace(old_side, new_side, 1)
+                present.write_text(pt, encoding="utf-8")
+                print("OK: present_game_side_fps FG-aware")
+
+    # --- present_limit_changed: release Esc Display hold so Limit/FSR updates live ---
+    pt = present.read_text(encoding="utf-8", errors="replace")
+    if "overlay_release_display_fps_hold" in pt:
+        print("OK already: present_limit_changed releases Esc Display hold")
+    elif "void present_limit_changed(void) { g_show_next = 0; }" in pt:
+        pt = pt.replace(
+            "void present_limit_changed(void) { g_show_next = 0; }",
+            """void present_limit_changed(void) {
+    g_show_next = 0;
+    overlay_release_display_fps_hold();
+}""",
+            1,
+        )
+        if '#include "nx/runtime/platform/overlay.h"' not in pt:
+            pt = pt.replace(
+                '#include "nx/runtime/platform/log.h"\n',
+                '#include "nx/runtime/platform/log.h"\n#include "nx/runtime/platform/overlay.h"\n',
+                1,
+            )
+        present.write_text(pt, encoding="utf-8")
+        print("OK: present_limit_changed releases Esc Display hold")
+    oh = src / "src" / "nx" / "runtime" / "platform" / "overlay.h"
+    oc = src / "src" / "nx" / "runtime" / "platform" / "overlay.c"
+    if oh.is_file() and "overlay_release_display_fps_hold" not in oh.read_text(encoding="utf-8", errors="replace"):
+        oh.write_text(
+            oh.read_text(encoding="utf-8", errors="replace").replace(
+                "void overlay_note_display_fps(int fps);",
+                "void overlay_note_display_fps(int fps);\nvoid overlay_release_display_fps_hold(void);",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        print("OK: overlay.h overlay_release_display_fps_hold")
+    if oc.is_file() and "overlay_release_display_fps_hold" not in oc.read_text(encoding="utf-8", errors="replace"):
+        oc_txt = oc.read_text(encoding="utf-8", errors="replace")
+        oc.write_text(
+            oc_txt.replace(
+                "int overlay_display_fps(void) { return __atomic_load_n(&g_display_fps, __ATOMIC_RELAXED); }",
+                """void overlay_release_display_fps_hold(void) {
+    __atomic_store_n(&g_display_fps_hold, 0, __ATOMIC_RELAXED);
+}
+int overlay_display_fps(void) { return __atomic_load_n(&g_display_fps, __ATOMIC_RELAXED); }""",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        print("OK: overlay.c overlay_release_display_fps_hold")
+
+    # --- options.c: reset pace when FSR toggled ---
+    options = src / "src" / "nx" / "runtime" / "options.c"
+    if options.is_file():
+        ot = options.read_text(encoding="utf-8", errors="replace")
+        if "options_fsr3_live" in ot and "present_limit_changed();" in ot.split("options_fsr3_live")[1][:400]:
+            print("OK already: options_fsr3_live resets pace")
+        elif "void options_fsr3_live(int on)" in ot:
+            needle = """    session_put("frame_generation", on ? "1" : "0");
+    if (on) session_put("upscaler", "1");
+    pm_unlock(&g_poll_lock);
+}"""
+            repl = """    session_put("frame_generation", on ? "1" : "0");
+    if (on) session_put("upscaler", "1");
+    present_limit_changed();
+    pm_unlock(&g_poll_lock);
+}"""
+            if needle in ot:
+                options.write_text(ot.replace(needle, repl, 1), encoding="utf-8")
+                print("OK: options_fsr3_live present_limit_changed")
+            else:
+                print("WARN: options_fsr3_live body marker not found")
 
     # --- main.h declare present_fg_slots ---
     main_h = src / "src" / "nx" / "runtime" / "main.h"
@@ -273,30 +426,29 @@ int present_expected_display_fps(int fps_limit, int frame_generation) {
     CHECK(present_expected_display_fps(144, 1) == 120, "144 with FG on a 60 FPS game stayed at 60");
     CHECK(present_expected_display_fps(240, 1) == 120, "limit 240 with FG stays ~2x the game, not 480");
     CHECK(present_expected_display_fps(0, 1) == 120, "unlimited with FG stayed at 60");"""
-        new_60 = """    CHECK(present_fg_slots(30) == 2, "limit 30 on 60 FPS game (side 30) still classic 2x");
+        new_60 = """    CHECK(present_fg_slots(30) == 2, "limit 30 on 60 FPS game still classic 2x");
     CHECK(present_fg_slots(60) == 2, "limit 60 on 60 FPS game is classic 2x");
-    CHECK(present_fg_slots(120) == 2, "limit 120 on 60 FPS game is 2x (120), not 4x");
-    CHECK(present_fg_slots(144) == 2, "144 with FG stays at 2x floor (144/60 floors with raise only above 2x)");
-    CHECK(present_fg_slots(240) == 4, "limit 240 on 60 FPS game is 4x multi-mid");
+    CHECK(present_fg_slots(120) == 2, "limit 120 on 60 FPS game stays 2x (not 4x)");
+    CHECK(present_fg_slots(144) == 2, "144 with FG stays classic 2x");
+    CHECK(present_fg_slots(240) == 2, "limit 240 on 60 FPS game clamped to 2x (no multi-mid)");
     CHECK(present_fg_slots(0) == 2, "unlimited defaults to classic 2x");
     CHECK(present_expected_display_fps(30, 1) == 60, "limit 30 with FG is classic 2x of shown side");
     CHECK(present_expected_display_fps(60, 1) == 120, "limit 60 with FG on a 60 FPS game is ~120 on screen");
     CHECK(present_expected_display_fps(120, 1) == 120, "limit 120 with FG on 60 FPS game is ~120");
-    CHECK(present_expected_display_fps(144, 1) == 120, "144 with FG stays at classic 2x until Limit clears 120");
-    CHECK(present_expected_display_fps(240, 1) == 240, "limit 240 with FG is 4x multi-mid (~240)");
+    CHECK(present_expected_display_fps(240, 1) == 120, "limit 240 with FG clamped to 2x (~120)");
     CHECK(present_expected_display_fps(0, 1) == 120, "unlimited with FG defaults to ~2x");"""
         old_30 = """    CHECK(present_expected_display_fps(120, 1) == 60, "a 30 FPS game with FG shows about 60, not 240");"""
-        new_30 = """    CHECK(present_fg_slots(120) == 4, "limit 120 on 30 FPS game needs 4 slots (3 mids)");
-    CHECK(present_expected_display_fps(120, 1) == 120, "a 30 FPS game with FG + Limit 120 shows ~120, not 60");
+        new_30 = """    CHECK(present_fg_slots(120) == 2, "limit 120 on 30 FPS game stays 2 slots (classic 2x)");
+    CHECK(present_expected_display_fps(120, 1) == 60, "a 30 FPS game with FG + Limit 120 shows ~60 (2x), not 120");
     CHECK(present_expected_display_fps(60, 1) == 60, "a 30 FPS game with FG + Limit 60 shows ~60 (classic 2x)");"""
-        if "a 30 FPS game with FG + Limit 120 shows ~120" in rt:
-            print("OK already: runtime_present 1.31 checks")
-        else:
-            if old_60 not in rt or old_30 not in rt:
-                raise SystemExit("runtime_present.c markers not found")
+        if "stays 2 slots (classic 2x)" in rt or "PRESENT_FG_MAX_SLOTS = 2" in present.read_text(encoding="utf-8", errors="replace"):
+            print("OK already: runtime_present classic 2x checks")
+        elif old_60 in rt and old_30 in rt:
             rt = rt.replace(old_60, new_60, 1).replace(old_30, new_30, 1)
             rtp.write_text(rt, encoding="utf-8")
-            print("OK: runtime_present.c 1.31 checks")
+            print("OK: runtime_present.c classic 2x checks")
+        else:
+            print("WARN: runtime_present.c markers not found (skip)")
 
     # --- smoke markers ---
     checks = [

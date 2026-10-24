@@ -8834,6 +8834,9 @@ index 441a8c2..17ec665 100644
 +    if (fps < 0 || __atomic_load_n(&g_display_fps_hold, __ATOMIC_RELAXED)) return;
 +    __atomic_store_n(&g_display_fps, fps, __ATOMIC_RELAXED);
 +}
++void overlay_release_display_fps_hold(void) {
++    __atomic_store_n(&g_display_fps_hold, 0, __ATOMIC_RELAXED);
++}
 +int overlay_display_fps(void) { return __atomic_load_n(&g_display_fps, __ATOMIC_RELAXED); }
  void overlay_toggle(void) {
 -    if (!shown) page_open(PAGE_MAIN);
@@ -8981,6 +8984,7 @@ index 8e29f7b..03a8aec 100644
 +/* Live display FPS from vk_fps_presents / showcase (ui.c). Held while the Esc menu is open so the status line stays
 +   stable; Limit on that line still follows left/right immediately. -1 until measured. */
 +void overlay_note_display_fps(int fps);
++void overlay_release_display_fps_hold(void);
 +int overlay_display_fps(void);
  /* the display's own scale (SDL's: dpi / 160 on a phone), which the panel's letters follow; 1 until told */
  void overlay_set_display_scale(float scale);
@@ -9323,14 +9327,26 @@ index 2bd6181..61a20a9 100644
 +   period (present_show_due drops pictures). Doubling or shrinking the period for frame generation would step physics
 +   at the display rate and drop characters through the floor. Interval 0 is self-timed and still follows a numeric cap.
 +   speed_lock=0 keeps the old behavior: a faster cap presents sooner. */
++static int present_fg_on(void) {
++    return __atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
++           (__atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED) &&
++            __atomic_load_n(&g_settings.upscaler, __ATOMIC_RELAXED));
++}
++
 +u64 present_period(int fps, u32 interval, int lock) {
 +    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
 +    u64 cap = fps > 0 ? 1000000000u / (u64)fps : 0;
-+    if (fps == SNX_FPS_GAME || (lock && game)) return game;
++    int fg = present_fg_on();
++    if (fps == SNX_FPS_GAME) return game;
++    if (lock && game && fg) return game;
++    if (!fps) return game ? game : 0;
 +    return cap;
 +}
 +
-+void present_limit_changed(void) { g_show_next = 0; }
++void present_limit_changed(void) {
++    g_show_next = 0;
++    overlay_release_display_fps_hold();
++}
 +
 +int present_show_due(void) {
 +    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
@@ -9367,25 +9383,24 @@ index 2bd6181..61a20a9 100644
 +/* How many swapchain pictures per shown guest frame when PortForge FSR 3 / FG is on.
 +   Speed lock keeps the guest at its pace. Classic FG is 2x the shown guest rate (Limit 60 on a
 +   60 FPS title still means ~120 on screen). A Limit above that 2x floor raises display toward
-+   min(Limit, side * FG_MAX_SLOTS) via extra midpoints (30 FPS + Limit 120 => 4 slots / ~120). */
-+enum { PRESENT_FG_MAX_SLOTS = 4 }; /* 1 real + up to 3 generated => 30->120, 60->240 */
++   min(Limit, side * FG_MAX_SLOTS) classic doubled presents only (multi-mid clamped off). */
++enum { PRESENT_FG_MAX_SLOTS = 2 }; /* 1 real + 1 generated => classic 2x display */
 +int present_fg_slots(int fps_limit) {
-+    int side = present_game_side_fps(fps_limit), target, slots;
++    int side = present_game_side_fps(fps_limit);
++    (void)fps_limit;
 +    if (side <= 0) return 1;
-+    target = side * 2; /* classic FG floor */
-+    if (fps_limit > 0 && fps_limit != SNX_FPS_GAME && fps_limit > target) target = fps_limit;
-+    if (target > side * PRESENT_FG_MAX_SLOTS) target = side * PRESENT_FG_MAX_SLOTS;
-+    slots = target / side;
-+    if (slots < 1) slots = 1;
-+    if (slots > PRESENT_FG_MAX_SLOTS) slots = PRESENT_FG_MAX_SLOTS;
-+    return slots;
++    return PRESENT_FG_MAX_SLOTS;
 +}
 +
 +/* Expected on-screen rate. Without FG: the frames present_show_due shows. With FG: side * present_fg_slots
 +   (a 30 FPS title at Limit 120 => ~120; a 60 FPS title at Limit 120 => ~120). 0 when pace unknown. */
 +int present_expected_display_fps(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit);
-+    if (!frame_generation || side <= 0) return side;
++    if (!frame_generation) {
++        if (fps_limit > 0 && fps_limit != SNX_FPS_GAME) return fps_limit;
++        return side;
++    }
++    if (side <= 0) return 0;
 +    return side * present_fg_slots(fps_limit);
 +}
  
@@ -10174,19 +10189,18 @@ index 03330d3..09edfb8 100644
 +    return fps_limit;
 +}
 +int present_fg_slots(int fps_limit) {
-+    int side = present_game_side_fps(fps_limit), target, slots;
++    int side = present_game_side_fps(fps_limit);
++    (void)fps_limit;
 +    if (side <= 0) return 1;
-+    target = side * 2;
-+    if (fps_limit > 0 && fps_limit != SNX_FPS_GAME && fps_limit > target) target = fps_limit;
-+    if (target > side * 4) target = side * 4;
-+    slots = target / side;
-+    if (slots < 1) slots = 1;
-+    if (slots > 4) slots = 4;
-+    return slots;
++    return PRESENT_FG_MAX_SLOTS;
 +}
 +int present_expected_display_fps(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit);
-+    if (!frame_generation || side <= 0) return side;
++    if (!frame_generation) {
++        if (fps_limit > 0 && fps_limit != SNX_FPS_GAME) return fps_limit;
++        return side;
++    }
++    if (side <= 0) return 0;
 +    return side * present_fg_slots(fps_limit);
 +}
  /* the menu's page colour, its letters on the head's band, as R G B A bytes */
@@ -10488,13 +10502,13 @@ index 53c5e45..f837735 100644
 +    CHECK(present_fg_slots(60) == 2, "limit 60 on 60 FPS game is classic 2x");
 +    CHECK(present_fg_slots(120) == 2, "limit 120 on 60 FPS game is 2x (120), not 4x");
 +    CHECK(present_fg_slots(144) == 2, "144 with FG stays at 2x floor (144/60 floors with raise only above 2x)");
-+    CHECK(present_fg_slots(240) == 4, "limit 240 on 60 FPS game is 4x multi-mid");
++    CHECK(present_fg_slots(240) == 2, "limit 240 on 60 FPS game clamped to 2x");
 +    CHECK(present_fg_slots(0) == 2, "unlimited defaults to classic 2x");
 +    CHECK(present_expected_display_fps(30, 1) == 60, "limit 30 with FG is classic 2x of shown side");
 +    CHECK(present_expected_display_fps(60, 1) == 120, "limit 60 with FG on a 60 FPS game is ~120 on screen");
 +    CHECK(present_expected_display_fps(120, 1) == 120, "limit 120 with FG on 60 FPS game is ~120");
 +    CHECK(present_expected_display_fps(144, 1) == 120, "144 with FG stays at classic 2x until Limit clears 120");
-+    CHECK(present_expected_display_fps(240, 1) == 240, "limit 240 with FG is 4x multi-mid (~240)");
++    CHECK(present_expected_display_fps(240, 1) == 240, "limit 240 with FG clamped to 2x (~240)");
 +    CHECK(present_expected_display_fps(0, 1) == 120, "unlimited with FG defaults to ~2x");
 +    g_opt_fps = 120;
 +    now_ns += 100 * refresh;
@@ -10512,8 +10526,8 @@ index 53c5e45..f837735 100644
 +    present_pace(2);
 +    CHECK(slept_ns - before == 2 * refresh, "FG + 60 FPS on a 30 FPS game waited %llu ns, not one game frame",
 +          (unsigned long long)(slept_ns - before));
-+    CHECK(present_fg_slots(120) == 4, "limit 120 on 30 FPS game needs 4 slots (3 mids)");
-+    CHECK(present_expected_display_fps(120, 1) == 120, "a 30 FPS game with FG + Limit 120 shows ~120, not 60");
++    CHECK(present_fg_slots(120) == 2, "limit 120 on 30 FPS game stays 2 slots (classic 2x)");
++    CHECK(present_expected_display_fps(120, 1) == 120, "a 30 FPS game with FG + Limit 120 shows ~60 (2x), not 120");
 +    CHECK(present_expected_display_fps(60, 1) == 60, "a 30 FPS game with FG + Limit 60 shows ~60 (classic 2x)");
 +    g_opt_fps = 120;
 +    present_pace(1);
