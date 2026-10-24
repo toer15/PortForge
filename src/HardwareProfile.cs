@@ -107,7 +107,15 @@ namespace PortForge
         /// <summary>The engine's pipeline workers for this CPU: about three eighths of its threads, two to eight, so the game keeps the rest.</summary>
         public static int PipelineThreadsFor(int logicalCpus) { return Math.Max(2, Math.Min(8, logicalCpus * 3 / 8)); }
 
+        /// <summary>ScarletNX AOT conversion workers: use almost every logical CPU (leave one for the UI when possible), two to thirty-two.</summary>
+        public static int CompilerJobsFor(int logicalCpus)
+        {
+            if (logicalCpus <= 2) return 2;
+            return Math.Max(2, Math.Min(32, logicalCpus - 1));
+        }
+
         public int PipelineThreads { get { return PipelineThreadsFor(LogicalCpus); } }
+        public int CompilerJobs { get { return CompilerJobsFor(LogicalCpus > 0 ? LogicalCpus : Environment.ProcessorCount); } }
 
         public string Details
         {

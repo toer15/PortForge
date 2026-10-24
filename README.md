@@ -1,6 +1,8 @@
-# PortForge 0.47 / Engine 1.30
+# PortForge 0.48 / Engine 1.30
 
-**New in 0.47:** Stops PortForge FSR 3 / present crashes from a bookkeeping path that left GPU commands unsubmitted. **Play** updates the game's Engine from `PortForge\Engine\` before launch when it is older. Esc still shows `Engine X.Y | Display FPS: N | Limit: L`. Speed lock and ~2× display with FSR 3 On are unchanged. See [VALIDATION-0.47.md](VALIDATION-0.47.md).
+**New in 0.48:** ROM → native conversion and Downloads are substantially faster: AOT uses almost every CPU core instead of a hard-coded two jobs, skips writing unused IR, and Downloads use larger buffers plus a ~2 s connection probe (was ~8 s) with cheaper progress tracking. Engine stays 1.30. See [VALIDATION-0.48.md](VALIDATION-0.48.md).
+
+**0.47:** Stops PortForge FSR 3 / present crashes from a bookkeeping path that left GPU commands unsubmitted. **Play** updates the game's Engine from `PortForge\Engine\` before launch when it is older. Esc still shows `Engine X.Y | Display FPS: N | Limit: L`. Speed lock and ~2× display with FSR 3 On are unchanged. See [VALIDATION-0.47.md](VALIDATION-0.47.md).
 
 **0.46:** Esc shows Engine version, held Display FPS and live Limit. See [VALIDATION-0.46.md](VALIDATION-0.46.md).
 
