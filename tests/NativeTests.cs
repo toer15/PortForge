@@ -40,7 +40,7 @@ internal static class NativeTests
             NativeConversion.RequireNativeX64(Path.Combine(built, request.Name + ".exe"));
             NativeConversion.RequireNativeX64(Path.Combine(built, request.Name + "_code.dll"));
             Check(true, "Real backend generated x64 PE executable and game-code DLL");
-            Check(Directory.GetFiles(built, "*.ll", SearchOption.AllDirectories).Length > 0, "AOT compiler emitted inspectable LLVM code");
+            Check(Directory.GetFiles(built, "*.ll", SearchOption.AllDirectories).Length == 0, "The finished game folder has no per-function LLVM IR (0.48 stopped writing it: it only cost disk time)");
             Check(File.Exists(Path.Combine(built, request.Name + "_data", "exefs", "main.nro")), "Required guest image staged inside the output");
             Reject(() => NativeConversion.Convert(request, new Reporter(), CancellationToken.None), "Existing native output is preserved");
             var autoRequest = new NativeRequest { Name = "Automatic tuning fallback", Input = input, Backend = request.Backend, Output = request.Output, AutoOptimize = true };

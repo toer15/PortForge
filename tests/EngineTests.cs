@@ -39,7 +39,7 @@ internal static class EngineTests
             Check(explicitRun.Contains("game_argument=" + Path.GetFullPath(exe)), "A test engine loads the chosen executable even when the folder and game names differ");
             Check(package != null && package.Version == "1.0" && package.Libraries.SequenceEqual(new[] { "libengine-test.dll", "zlib1.dll" }) && package.Name == "PortForge Engine 1.0", "The shipped engine package is read with its version and libraries");
             Check(EngineManager.Find(Path.Combine(root, "missing")) == null, "A missing engine package is reported as missing");
-            Check(!EngineManager.IsInstalled(exe, package) && EngineManager.Describe(exe, package).Contains("original engine"), "A converted game starts out on its original engine");
+            Check(!EngineManager.IsInstalled(exe, package) && EngineManager.Describe(exe, package).Contains("needs the " + package.Name), "A converted game starts out on its original engine and is told it needs the app's");
 
             string message = EngineManager.Install(exe, package, null, CancellationToken.None);
             Check(message.Contains("Installed") && EngineManager.IsInstalled(exe, package), "Installing puts the PortForge Engine under the game and checks that it starts");
