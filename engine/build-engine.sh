@@ -5,6 +5,8 @@ cd "$(dirname "$0")/src"
 export CCACHE_DIR="$PWD/.cache/ccache"
 # ccache needs USERPROFILE, which a login shell started from another MSYS may not pass on
 export USERPROFILE="${USERPROFILE:-$(cygpath -w "$HOME")}"
+export CCACHE_BASEDIR="$PWD"
+export CCACHE_NOHASHDIR=true
 if [ ! -f build/default/build.ninja ]; then
   cmake --preset default \
     -DSNX_LLVM_CONFIG="$(cygpath -m "$(command -v llvm-config)")" \
@@ -15,5 +17,6 @@ if [ ! -f build/default/build.ninja ]; then
     -DCMAKE_DISABLE_FIND_PACKAGE_SDL3=ON -DSNX_DEPLOY=OFF \
     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 fi
-cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)" --target scarletnx
+cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)"
+cmake --install build/default --prefix ../package
 echo ENGINE_BUILD_OK

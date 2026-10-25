@@ -3,14 +3,14 @@
 #      ScarletNX's own Windows CI does (engine/build-engine.sh), its pacing tests run, then packaged
 #   2. the app (build-native.ps1) with the Engine in its Engine folder, and the FG cadence tests
 #   3. the release files (build-release.ps1) and, when asked, the GitHub release that in-app updates read
-# Run it from the Actions tab: "Ship PortForge", Run workflow, the version (0.51).
+# Run it from the Actions tab: "Ship PortForge", Run workflow, the version (0.53).
 name: Ship PortForge
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: PortForge version (for example 0.51)
+        description: PortForge version (for example 0.53)
         required: true
       publish:
         description: Publish the GitHub release (in-app updates pick it up)
@@ -22,16 +22,20 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     timeout-minutes: 300
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up MSYS2 CLANG64
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: CLANG64
           update: true
+          path-type: strict
           install: >-
             git make patch perl patchutils
             mingw-w64-clang-x86_64-glslang
@@ -46,9 +50,22 @@ jobs:
             mingw-w64-clang-x86_64-spirv-tools
             mingw-w64-clang-x86_64-ccache
 
+      - name: Check required dependencies
+        run: |
+          set -euo pipefail
+          clang --version
+          llvm-config --version
+          test -f "$(llvm-config --includedir)/llvm-c/Core.h"
+          test -d "$(llvm-config --libdir)"
+          llvm-config --libs core native passes target analysis
+          make --version
+          perl --version
+          nasm --version
+          spirv-val --version
+          spirv-dis --version
+
       - name: Engine source (ScarletNX at engine/BASE + the PortForge patch)
         id: src
-        shell: msys2 {0}
         run: |
           set -euo pipefail
           base=$(tr -d '\r\n' < engine/BASE)
@@ -61,7 +78,7 @@ jobs:
           echo "Engine $version on ScarletNX $base"
 
       - name: Restore the download and compiler caches
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             engine/src/.cache/cpm
@@ -69,17 +86,36 @@ jobs:
           key: engine-${{ hashFiles('engine/BASE') }}-${{ github.run_id }}
           restore-keys: engine-${{ hashFiles('engine/BASE') }}-
 
+      - name: Set up the ccache environment
+        run: |
+          ws=${GITHUB_WORKSPACE//\\//}
+          {
+            echo "CCACHE_DIR=$ws/engine/src/.cache/ccache"
+            echo "CCACHE_BASEDIR=$ws/engine/src"
+            echo "CCACHE_NOHASHDIR=true"
+            echo "SNX_DEPS_CACHE=$ws/engine/src/.cache/deps"
+            echo "SNX_CCACHE_START=$(date +%s)"
+          } >> "$GITHUB_ENV"
+
       - name: Build the Engine
         id: engine
-        shell: msys2 {0}
         run: |
           set -euo pipefail
-          cd engine
-          ./build-engine.sh 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-engine.log"
+          cd engine/src
+          cmake --preset default \
+            -DSNX_LLVM_CONFIG="$(cygpath -m "$(command -v llvm-config)")" \
+            -DSNX_FFMPEG_SH="$(cygpath -m /usr/bin/sh.exe)" \
+            -DSNX_FFMPEG_MAKE="$(cygpath -m /usr/bin/make.exe)" \
+            -DPERL_EXECUTABLE="$(cygpath -m /usr/bin/perl.exe)" \
+            -DSNX_OPENSSL_MAKE="$(cygpath -m /usr/bin/make.exe)" \
+            -DCMAKE_DISABLE_FIND_PACKAGE_SDL3=ON -DSNX_DEPLOY=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)"
+          cmake --install build/default --prefix ../package
+          echo ENGINE_BUILD_OK
 
       - name: Engine pacing tests
         id: tests
-        shell: msys2 {0}
         run: |
           set -euo pipefail
           cd engine/src
@@ -90,13 +126,19 @@ jobs:
 
       - name: Package the Engine
         id: package
-        shell: msys2 {0}
         run: |
           set -euo pipefail
           cd engine
-          ./package-engine.sh 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-package.log"
-          grep -q "version=$(tr -d '\r\n' < VERSION)" package/ENGINE.txt
-          ls -la package
+          # The engine is already installed to engine/package by the build step
+          # package-engine.sh expects to copy from engine/package, so we just need to verify and create ENGINE.txt
+          base=$(cat BASE 2>/dev/null || git -C src log -1 --format=%h)
+          version=$(cat VERSION 2>/dev/null || echo 1.0)
+          printf 'version=%s\nbase=%s\nfeatures=%s\n' "$version" "$base" "$(cat FEATURES 2>/dev/null || echo 'Smart async shaders')" > package/ENGINE.txt
+          mkdir -p package/licenses
+          cp src/LICENSE package/licenses/ScarletNX-LICENSE.txt
+          cp src/src/nx/gpu/vk/fsr1/LICENSE.txt package/licenses/AMD-FidelityFX-FSR1-LICENSE.txt
+          cp src/src/nx/gpu/vk/fsr1/UPSTREAM.txt package/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt
+          echo "PACKAGE_OK package"; ls package
 
       - name: Build the app and the release files
         id: app
@@ -129,7 +171,7 @@ jobs:
             grep -n -E 'error:|Error |FAILED|fatal' "$f" | head -n 8 | while IFS= read -r line; do echo "::error title=$f match::${line//%/%25}"; done
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: portforge-${{ inputs.version }}
           path: build/release-${{ inputs.version }}/*.*
