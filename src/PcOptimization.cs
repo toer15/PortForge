@@ -35,6 +35,7 @@ namespace PortForge
                 bool nativeAuto=cap.Keys.Contains("frame_guard");
                 if (cap.Keys.Contains("pipeline_threads")) settings["pipeline_threads"] = nativeAuto?"0":(pc.LogicalCpus <= 4 ? 1 : pc.PipelineThreads).ToString(CultureInfo.InvariantCulture);
                 if (cap.Keys.Contains("jit_threads")) settings["jit_threads"] = nativeAuto?"0":Math.Max(1, Math.Min(4, (pc.LogicalCpus - 2) / 4)).ToString(CultureInfo.InvariantCulture);
+                if (cap.Keys.Contains("async_shader_translation_threads")) settings["async_shader_translation_threads"] = nativeAuto?"0":Math.Max(1, Math.Min(4, (pc.LogicalCpus - 2) / 4)).ToString(CultureInfo.InvariantCulture);
             }
             // The engine's speed lock keeps every game at its own speed whatever the FPS limit; the hardware decides quality.
             if (cap.Keys.Contains("speed_lock")) settings["speed_lock"] = "1";
