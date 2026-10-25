@@ -136,8 +136,12 @@ jobs:
           printf 'version=%s\nbase=%s\nfeatures=%s\n' "$version" "$base" "$(cat FEATURES 2>/dev/null || echo 'Smart async shaders')" > package/ENGINE.txt
           mkdir -p package/licenses
           cp src/LICENSE package/licenses/ScarletNX-LICENSE.txt
-          cp src/src/nx/gpu/vk/fsr1/LICENSE.txt package/licenses/AMD-FidelityFX-FSR1-LICENSE.txt
-          cp src/src/nx/gpu/vk/fsr1/UPSTREAM.txt package/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt
+          if [[ -f src/src/nx/gpu/vk/fsr1/LICENSE.txt ]]; then
+              cp src/src/nx/gpu/vk/fsr1/LICENSE.txt package/licenses/AMD-FidelityFX-FSR1-LICENSE.txt
+          fi
+          if [[ -f src/src/nx/gpu/vk/fsr1/UPSTREAM.txt ]]; then
+              cp src/src/nx/gpu/vk/fsr1/UPSTREAM.txt package/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt
+          fi
           echo "PACKAGE_OK package"; ls package
 
       - name: Build the app and the release files
