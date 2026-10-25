@@ -564,7 +564,7 @@ index e74a30c..b83c51c 100644
          LOG_LIMIT(12, "vulkan: compute %016llx ready: block %ux%ux%u, %d global buffers, %d textures, %d images\n",
                    (unsigned long long)key, lx, ly, lz, p->si.ngbuf, p->si.ntex, p->si.nimg);
 diff --git a/src/nx/gpu/vk/device.c b/src/nx/gpu/vk/device.c
-index 8579250..00cc462 100644
+index 8579250..a9ec0f1 100644
 --- a/src/nx/gpu/vk/device.c
 +++ b/src/nx/gpu/vk/device.c
 @@ -18,6 +18,13 @@ VkShaderStageFlags g_vk_subgroup_stages;
@@ -581,7 +581,69 @@ index 8579250..00cc462 100644
  static PMutex g_vklock;
  static _Thread_local int t_vkdepth;
  static u32 g_vk_owner; /* the thread holding it (plat_tid), 0 when none: a trap's fault on it can't be answered */
-@@ -612,7 +619,9 @@ static int create_device(void) {
+@@ -347,7 +354,7 @@ static int create_device(void) {
+     int has_budget = 0;
+     u32 next = 0;
+     int has_shader_clock = 0, has_feedback_dynamic = 0, has_cond = 0, has_provoking = 0, video_exts = 0;
+-    int has_portability = 0;
++    int has_portability = 0, has_gpl = 0, has_plib = 0;
+     if (!g_opt_headless) ext[next++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+     {
+         u32 n = 0;
+@@ -367,6 +374,8 @@ static int create_device(void) {
+                 g_vk.has_local_read = 1;
+             if (!strcmp(e[i].extensionName, VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME)) has_cond = 1;
+             if (!strcmp(e[i].extensionName, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME)) has_provoking = 1;
++            if (!strcmp(e[i].extensionName, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME)) has_gpl = 1;
++            if (!strcmp(e[i].extensionName, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME)) has_plib = 1;
+             /* the driver's budget for each heap, the other processes' use taken out, for VMA: without it VMA took
+                80% of a heap's size as its budget, blind to what the desktop and other programs hold */
+             if (!strcmp(e[i].extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) has_budget = 1;
+@@ -447,6 +456,12 @@ static int create_device(void) {
+         *tail = &qprov;
+         tail = &qprov.pNext;
+     }
++    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT qgpl = {
++        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT};
++    if (has_gpl && has_plib) {
++        *tail = &qgpl;
++        tail = &qgpl.pNext;
++    }
+     /* with the subset enabled, each of its features is off until the device asks for it: a view's swizzle, for one */
+     PortabilityFeatures qport = {.sType = PORTABILITY_FEATURES_STYPE};
+     if (has_portability) {
+@@ -457,6 +472,14 @@ static int create_device(void) {
+     vkGetPhysicalDeviceFeatures2(g_vk.phys, &f2);
+     g_vk.has_cond_render = has_cond && qcond.conditionalRendering;
+     g_vk.has_provoking_last = has_provoking && qprov.provokingVertexLast;
++    /* linked pipelines only pay off when linking is fast: without it the driver compiles at link time anyway */
++    if (has_gpl && has_plib && qgpl.graphicsPipelineLibrary && g_settings.fast_pipelines) {
++        VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT gp = {
++            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT};
++        VkPhysicalDeviceProperties2 gp2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &gp};
++        vkGetPhysicalDeviceProperties2(g_vk.phys, &gp2);
++        g_vk.has_gpl = gp.graphicsPipelineLibraryFastLinking != 0;
++    }
+     /* the dynamic state and the barriers within a pass only serve feedback loops */
+     g_vk.has_feedback = g_vk.has_feedback && qloop.attachmentFeedbackLoopLayout;
+     g_vk.has_feedback_dynamic =
+@@ -581,6 +604,15 @@ static int create_device(void) {
+         chain = &fprov;
+         ext[next++] = VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME;
+     }
++    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT fgpl = {
++        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT,
++        .pNext = chain,
++        .graphicsPipelineLibrary = VK_TRUE};
++    if (g_vk.has_gpl) {
++        chain = &fgpl;
++        ext[next++] = VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME;
++        ext[next++] = VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME;
++    }
+     u32 nq = g_vk.compute_family == g_vk.gfx_family ? 1 : 2;
+     if (g_vk.video_family != ~0u)
+         qci[nq++] = (VkDeviceQueueCreateInfo){.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+@@ -612,7 +644,9 @@ static int create_device(void) {
                               .vkGetDeviceProcAddr = vkGetDeviceProcAddr};
      vk_mem_init(sparse_queue);
      /* VMA's blocks are 256 MiB at most already, and kept within a smaller cap */
@@ -591,7 +653,17 @@ index 8579250..00cc462 100644
                                    .device = g_vk.dev,
                                    .instance = g_vk.instance,
                                    .preferredLargeHeapBlockSize = g_vk.alloc_cap < (256ull << 20) ? g_vk.alloc_cap : 0,
-@@ -737,24 +746,36 @@ int vk_swapchain_create(int srgb) {
+@@ -626,6 +660,9 @@ static int create_device(void) {
+         g_vk.compute_family != g_vk.gfx_family ? " (separate family)"
+         : second                               ? " (a second queue)"
+                                                : " (the graphics queue)");
++    LOG("vulkan: pipelines %s\n", g_vk.has_gpl ? "linked from shader libraries (VK_EXT_graphics_pipeline_library, fast "
++                                                  "linking): a new draw state no longer waits for a whole compile"
++                                                : "compiled whole");
+     if (g_vk.has_feedback)
+         LOG("vulkan: draws sample the color targets they render to in place (attachment feedback loops, %s, %s)\n",
+             g_vk.has_feedback_dynamic ? "enabled by dynamic state" : "enabled per pipeline",
+@@ -737,24 +774,36 @@ int vk_swapchain_create(int srgb) {
          LOG_LIMIT(1, "vulkan: the window has no sRGB format: frames in sRGB show darker\n");
      }
  
@@ -635,7 +707,7 @@ index 8579250..00cc462 100644
      VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
      if (!(caps.supportedCompositeAlpha & alpha)) /* the lowest one it has */
          alpha = (VkCompositeAlphaFlagBitsKHR)(caps.supportedCompositeAlpha & -caps.supportedCompositeAlpha);
-@@ -812,6 +833,7 @@ int vk_swapchain_create(int srgb) {
+@@ -812,6 +861,7 @@ int vk_swapchain_create(int srgb) {
      g_vk.sc_format = fmt.format;
      g_vk.sc_turned = transform != caps.currentTransform;
      g_vk.sc_vsync = vsync;
@@ -5202,7 +5274,7 @@ index 0000000..8ac3788
 +extern const u32 smooth_spv[];
 +extern const u64 smooth_spv_size;
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..539626e 100644
+index 33f94b6..b49cbed 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
 @@ -16,6 +16,7 @@
@@ -5336,7 +5408,210 @@ index 33f94b6..539626e 100644
  VkShaderModule vk_module_spv(const u32* spv, size_t nw) {
      VkShaderModuleCreateInfo mi = {
          .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = nw * 4, .pCode = spv};
-@@ -791,13 +852,31 @@ static PCond g_pj_work, g_pj_done;
+@@ -598,6 +659,190 @@ static struct {
+ } g_pf;
+ static void pf_pipe_record(const PipeKey* k);
+ 
++/* ---- linked pipelines (VK_EXT_graphics_pipeline_library, g_vk.has_gpl) ----
++   A pipeline compiled whole costs the driver a compile for every new combination of shaders and state: a first run's
++   burst of them stopped one game for 2.6 s. Linked, each part is made once and kept: the vertex input (bindings,
++   attributes, topology), the shaders before rasterization with their rasterization state, the fragment shader, and
++   the fragment output (formats, blending). A new combination is then a link of parts already made, with no
++   optimization across them, which drivers with fast linking do in about a millisecond. A new shader still costs its
++   own compile, once, however many states it is drawn with */
++enum { LIB_INPUT, LIB_PRERASTER, LIB_FRAGMENT, LIB_OUTPUT, LIB_KINDS };
++typedef struct Lib {
++    struct Lib* next;
++    u64 h;
++    u32 kind, len;
++    unsigned char* key;
++    VkPipeline p;
++    int state; /* 0 being made, 1 made, -1 failed */
++} Lib;
++#define LIBH 4096
++static Lib* g_libh[LIBH];
++static PMutex g_lib_lock = PMUTEX_INIT;
++static u64 g_libs_made[LIB_KINDS], g_links;
++/* the dynamic state of the part kind: each part declares its own */
++static int lib_dynamic(u32 kind, VkDynamicState d) {
++    switch (d) {
++    case VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY:
++    case VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE:
++    case VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE: return kind == LIB_INPUT;
++    case VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT:
++    case VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT:
++    case VK_DYNAMIC_STATE_CULL_MODE:
++    case VK_DYNAMIC_STATE_FRONT_FACE:
++    case VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE:
++    case VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE:
++    case VK_DYNAMIC_STATE_LINE_WIDTH:
++    case VK_DYNAMIC_STATE_DEPTH_BIAS: return kind == LIB_PRERASTER;
++    case VK_DYNAMIC_STATE_BLEND_CONSTANTS:
++    case VK_DYNAMIC_STATE_ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT: return kind == LIB_OUTPUT;
++    default: return kind == LIB_FRAGMENT; /* depth and stencil */
++    }
++}
++/* the part of kind described by key, made once by whoever asks first: the others wait for it. VK_NULL_HANDLE when it
++   couldn't be made, and then never tried again */
++static VkPipeline lib_get(u32 kind, const void* key, u32 len, const VkGraphicsPipelineCreateInfo* part) {
++    u64 h = vk_hash(key, len) ^ ((u64)kind << 61);
++    u32 b = (u32)(h ^ (h >> 32)) & (LIBH - 1);
++    Lib* l;
++    pm_lock(&g_lib_lock);
++    for (l = g_libh[b]; l; l = l->next)
++        if (l->h == h && l->kind == kind && l->len == len && !memcmp(l->key, key, len)) break;
++    if (l) {
++        pm_unlock(&g_lib_lock);
++        while (__atomic_load_n(&l->state, __ATOMIC_ACQUIRE) == 0) plat_sleep_ns(100000);
++        return l->state > 0 ? l->p : VK_NULL_HANDLE;
++    }
++    if (!(l = calloc(1, sizeof *l)) || !(l->key = malloc(len ? len : 1))) {
++        pm_unlock(&g_lib_lock);
++        free(l);
++        return VK_NULL_HANDLE;
++    }
++    memcpy(l->key, key, len);
++    l->h = h;
++    l->kind = kind;
++    l->len = len;
++    l->next = g_libh[b];
++    g_libh[b] = l;
++    pm_unlock(&g_lib_lock);
++    VkPipeline p = VK_NULL_HANDLE;
++    int ok = vkCreateGraphicsPipelines(g_vk.dev, g_pcache, 1, part, NULL, &p) == VK_SUCCESS && p;
++    l->p = p;
++    __atomic_store_n(&l->state, ok ? 1 : -1, __ATOMIC_RELEASE);
++    if (ok) __atomic_add_fetch(&g_libs_made[kind], 1, __ATOMIC_RELAXED);
++    else LOG_LIMIT(4, "vulkan: a pipeline part (kind %u) could not be made: its pipelines are compiled whole\n", kind);
++    return ok ? p : VK_NULL_HANDLE;
++}
++/* gi's pipeline linked from its four parts, VK_NULL_HANDLE to compile it whole instead. key is gi's PipeKey */
++static VkPipeline pipe_link(const Pipe* e, const VkGraphicsPipelineCreateInfo* gi,
++                            const VkPipelineRenderingCreateInfo* ri, const VkPipelineCreationFeedbackCreateInfo* fi) {
++    const PipeKey* k = &e->k;
++    VkPipelineShaderStageCreateInfo pre[4], frag[1];
++    u32 npre = 0, nfrag = 0;
++    for (u32 i = 0; i < gi->stageCount; i++) {
++        if (gi->pStages[i].stage == VK_SHADER_STAGE_FRAGMENT_BIT)
++            frag[nfrag++] = gi->pStages[i];
++        else if (npre < 4)
++            pre[npre++] = gi->pStages[i];
++    }
++    VkDynamicState dyn[LIB_KINDS][24];
++    u32 ndyn[LIB_KINDS] = {0};
++    for (u32 kind = 0; kind < LIB_KINDS; kind++)
++        for (u32 i = 0; i < gi->pDynamicState->dynamicStateCount; i++)
++            if (lib_dynamic(kind, gi->pDynamicState->pDynamicStates[i]))
++                dyn[kind][ndyn[kind]++] = gi->pDynamicState->pDynamicStates[i];
++    VkPipelineDynamicStateCreateInfo dy[LIB_KINDS];
++    VkGraphicsPipelineLibraryCreateInfoEXT li[LIB_KINDS];
++    static const VkGraphicsPipelineLibraryFlagsEXT flags[LIB_KINDS] = {
++        VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT,
++        VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT,
++        VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT,
++        VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT};
++    /* the formats and the view mask, without the creation feedback the whole pipeline's info carries */
++    VkPipelineRenderingCreateInfo rend[LIB_KINDS];
++    VkGraphicsPipelineCreateInfo part[LIB_KINDS];
++    for (u32 kind = 0; kind < LIB_KINDS; kind++) {
++        dy[kind] = (VkPipelineDynamicStateCreateInfo){.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
++                                                      .dynamicStateCount = ndyn[kind],
++                                                      .pDynamicStates = dyn[kind]};
++        rend[kind] = *ri;
++        rend[kind].pNext = NULL;
++        li[kind] = (VkGraphicsPipelineLibraryCreateInfoEXT){
++            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT, .pNext = &rend[kind], .flags = flags[kind]};
++        part[kind] = (VkGraphicsPipelineCreateInfo){.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
++                                                    .pNext = &li[kind],
++                                                    .flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR,
++                                                    .pDynamicState = &dy[kind]};
++    }
++    part[LIB_INPUT].pVertexInputState = gi->pVertexInputState;
++    part[LIB_INPUT].pInputAssemblyState = gi->pInputAssemblyState;
++    part[LIB_PRERASTER].stageCount = npre;
++    part[LIB_PRERASTER].pStages = pre;
++    part[LIB_PRERASTER].pTessellationState = gi->pTessellationState;
++    part[LIB_PRERASTER].pViewportState = gi->pViewportState;
++    part[LIB_PRERASTER].pRasterizationState = gi->pRasterizationState;
++    part[LIB_PRERASTER].layout = gi->layout;
++    part[LIB_FRAGMENT].stageCount = nfrag;
++    part[LIB_FRAGMENT].pStages = frag;
++    part[LIB_FRAGMENT].pDepthStencilState = gi->pDepthStencilState;
++    part[LIB_FRAGMENT].pMultisampleState = gi->pMultisampleState;
++    part[LIB_FRAGMENT].layout = gi->layout;
++    part[LIB_OUTPUT].pColorBlendState = gi->pColorBlendState;
++    part[LIB_OUTPUT].pMultisampleState = gi->pMultisampleState;
++    /* each part's key: what its state is made of */
++    unsigned char kin[sizeof k->bind + sizeof k->attr + 16];
++    u32 nin = 0;
++    memcpy(kin + nin, &k->nbind, sizeof k->nbind), nin += sizeof k->nbind;
++    memcpy(kin + nin, k->bind, sizeof k->bind[0] * k->nbind), nin += sizeof k->bind[0] * k->nbind;
++    memcpy(kin + nin, &k->nattr, sizeof k->nattr), nin += sizeof k->nattr;
++    memcpy(kin + nin, k->attr, sizeof k->attr[0] * k->nattr), nin += sizeof k->attr[0] * k->nattr;
++    memcpy(kin + nin, &k->topo_class, sizeof k->topo_class), nin += sizeof k->topo_class;
++    struct {
++        VkShaderModule vs, tcs, tes, gs;
++        VkPipelineLayout layout;
++        u32 patch, clamp, polygon, provoking;
++    } kpre = {k->vs, k->tcs, k->tes, k->gs, gi->layout, k->patch, k->depth_clamp, k->polygon, k->provoking_last};
++    struct {
++        VkShaderModule fs;
++        VkPipelineLayout layout;
++    } kfrag = {e->fs, gi->layout};
++    unsigned char kout[8 * sizeof(VkPipelineColorBlendAttachmentState) + 8 * sizeof(VkFormat) + 32];
++    u32 nout = 0;
++    const VkPipelineColorBlendStateCreateInfo* cb = gi->pColorBlendState;
++    memcpy(kout + nout, &cb->attachmentCount, 4), nout += 4;
++    memcpy(kout + nout, cb->pAttachments, sizeof *cb->pAttachments * cb->attachmentCount),
++        nout += (u32)sizeof *cb->pAttachments * cb->attachmentCount;
++    memcpy(kout + nout, &cb->logicOpEnable, 4), nout += 4;
++    memcpy(kout + nout, &cb->logicOp, 4), nout += 4;
++    memcpy(kout + nout, ri->pColorAttachmentFormats, sizeof(VkFormat) * ri->colorAttachmentCount),
++        nout += (u32)sizeof(VkFormat) * ri->colorAttachmentCount;
++    memcpy(kout + nout, &ri->depthAttachmentFormat, 4), nout += 4;
++    memcpy(kout + nout, &ri->stencilAttachmentFormat, 4), nout += 4;
++    VkPipeline libs[LIB_KINDS] = {
++        lib_get(LIB_INPUT, kin, nin, &part[LIB_INPUT]),
++        lib_get(LIB_PRERASTER, &kpre, (u32)sizeof kpre, &part[LIB_PRERASTER]),
++        lib_get(LIB_FRAGMENT, &kfrag, (u32)sizeof kfrag, &part[LIB_FRAGMENT]),
++        lib_get(LIB_OUTPUT, kout, nout, &part[LIB_OUTPUT]),
++    };
++    for (u32 kind = 0; kind < LIB_KINDS; kind++)
++        if (!libs[kind]) return VK_NULL_HANDLE;
++    VkPipelineLibraryCreateInfoKHR lci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR,
++                                          .pNext = fi,
++                                          .libraryCount = LIB_KINDS,
++                                          .pLibraries = libs};
++    VkGraphicsPipelineCreateInfo link = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
++                                         .pNext = &lci,
++                                         .layout = gi->layout};
++    VkPipeline p = VK_NULL_HANDLE;
++    if (vkCreateGraphicsPipelines(g_vk.dev, g_pcache, 1, &link, NULL, &p) != VK_SUCCESS) return VK_NULL_HANDLE;
++    u64 links = __atomic_add_fetch(&g_links, 1, __ATOMIC_RELAXED);
++    if (links == 1 || links % 2000 == 0)
++        LOG("vulkan: %llu pipelines linked from %llu vertex input, %llu shader, %llu fragment shader and %llu output "
++            "parts\n",
++            (unsigned long long)links, (unsigned long long)g_libs_made[LIB_INPUT],
++            (unsigned long long)g_libs_made[LIB_PRERASTER], (unsigned long long)g_libs_made[LIB_FRAGMENT],
++            (unsigned long long)g_libs_made[LIB_OUTPUT]);
++    return p;
++}
+ static VkPipeline pipe_create(const Pipe* e) {
+     const PipeKey* k = &e->k;
+     VkPipelineShaderStageCreateInfo st[5];
+@@ -763,8 +1008,9 @@ static VkPipeline pipe_create(const Pipe* e) {
+                                        .pColorBlendState = &cb,
+                                        .pDynamicState = &dy,
+                                        .layout = e->layout};
+-    VkPipeline p = VK_NULL_HANDLE;
+-    VK_OK(vkCreateGraphicsPipelines(g_vk.dev, g_pcache, 1, &gi, NULL, &p));
++    /* linked from parts made once (a feedback loop's pipeline flag needs the whole compile) */
++    VkPipeline p = g_vk.has_gpl && !gi.flags ? pipe_link(e, &gi, &ri, &fi) : VK_NULL_HANDLE;
++    if (!p) VK_OK(vkCreateGraphicsPipelines(g_vk.dev, g_pcache, 1, &gi, NULL, &p));
+     if (made.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT)
+         __atomic_add_fetch(e->prewarm ? &g_pf.hits : &g_pipe_hits, 1, __ATOMIC_RELAXED);
+     return p;
+@@ -791,13 +1037,31 @@ static PCond g_pj_work, g_pj_done;
  static Pipe *g_pj_head, *g_pj_tail; /* a draw's */
  static Pipe *g_pw_head, *g_pw_tail; /* the file's */
  static int g_pj_started, g_pj_threads;
@@ -5369,7 +5644,7 @@ index 33f94b6..539626e 100644
          if (g_pj_head) {
              e = g_pj_head;
              g_pj_head = e->job;
-@@ -806,11 +885,13 @@ static void pipe_worker(void* arg) {
+@@ -806,11 +1070,13 @@ static void pipe_worker(void* arg) {
              e = g_pw_head;
              g_pw_head = e->job;
              if (!g_pw_head) g_pw_tail = NULL;
@@ -5383,7 +5658,7 @@ index 33f94b6..539626e 100644
          e->p = p;
          __atomic_store_n(&e->ready, 1, __ATOMIC_RELEASE);
          pc_broadcast(&g_pj_done);
-@@ -818,23 +899,22 @@ static void pipe_worker(void* arg) {
+@@ -818,23 +1084,22 @@ static void pipe_worker(void* arg) {
      }
  }
  int vk_pipeline_worker_count(int setting, int cpus) {
@@ -5414,7 +5689,7 @@ index 33f94b6..539626e 100644
      }
      return g_pj_threads;
  }
-@@ -848,7 +928,33 @@ static void pipe_queue(Pipe* e, int queue) {
+@@ -848,7 +1113,33 @@ static void pipe_queue(Pipe* e, int queue) {
          *head = e;
      *tail = e;
      e->queued = queue;
@@ -5449,7 +5724,7 @@ index 33f94b6..539626e 100644
  }
  /* a pipeline of the file that a draw asks for before a worker took it goes to the draws' queue: 1 when it did */
  static int pipe_promote(Pipe* e) {
-@@ -862,7 +968,7 @@ static int pipe_promote(Pipe* e) {
+@@ -862,7 +1153,7 @@ static int pipe_promote(Pipe* e) {
          else
              g_pw_head = e->job;
          if (g_pw_tail == e) g_pw_tail = before;
@@ -5458,7 +5733,7 @@ index 33f94b6..539626e 100644
          moved = 1;
      }
      pm_unlock(&g_pj_lock);
-@@ -880,11 +986,174 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+@@ -880,11 +1171,174 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
      pm_unlock(&g_pj_lock);
      return __atomic_load_n(&e->ready, __ATOMIC_ACQUIRE) ? e->p : VK_NULL_HANDLE;
  }
@@ -5633,7 +5908,7 @@ index 33f94b6..539626e 100644
  #define PSTAND_PAGE    1024
  static Pipe** g_pstand[1024];
  static u32 g_npstand;
-@@ -964,7 +1233,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -964,7 +1418,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
          pf_pipe_record(&p->k);
          pm_lock(&g_pj_lock);
          if (pipe_workers()) {
@@ -5642,7 +5917,7 @@ index 33f94b6..539626e 100644
              queued = 1;
          }
          pm_unlock(&g_pj_lock);
-@@ -981,17 +1250,45 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -981,17 +1435,45 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
  }
  /* on the recording thread: the pipeline a handle from vk_pipeline_get_deferred names, waited for while a worker makes
     it. VK_NULL_HANDLE when it couldn't be made */
@@ -5692,7 +5967,7 @@ index 33f94b6..539626e 100644
  void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms) {
      *pipes = g_pipes_new;
      *hits = __atomic_load_n(&g_pipe_hits, __ATOMIC_RELAXED);
-@@ -1064,6 +1361,20 @@ static void pf_shader_record(const VkSh* s, const u32* spv, size_t nw) {
+@@ -1064,6 +1546,20 @@ static void pf_shader_record(const VkSh* s, const u32* spv, size_t nw) {
      memcpy(&r.si, &s->si, sizeof r.si);
      pf_shader(&g_pf.file, mod_bits(s->mod), &r, (const u32*)(const void*)s->cbr.r, spv);
  }
@@ -5713,7 +5988,7 @@ index 33f94b6..539626e 100644
  /* a draw's pipeline, made: kept for the next run, its modules by their shaders' records (any thread) */
  static void pf_pipe_record(const PipeKey* k) {
      PipeKey c;
-@@ -1084,6 +1395,7 @@ static u64 pf_load_shader(void* ctx, const PfShader* r, const u32* cbr, const u3
+@@ -1084,6 +1580,7 @@ static u64 pf_load_shader(void* ctx, const PfShader* r, const u32* cbr, const u3
      VkSh* s;
      (void)ctx;
      if (r->si.ntex < 0 || r->si.ntex > SH_MAXTEX || vk_spirv_unavailable(spv, r->nspv)) return 0;
@@ -5721,7 +5996,7 @@ index 33f94b6..539626e 100644
      s = calloc(1, sizeof *s);
      if (!s) return 0;
      if (r->ncbr) {
-@@ -1157,15 +1469,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
+@@ -1157,15 +1654,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
      g_pf.npipe++;
  }
  
@@ -5742,7 +6017,7 @@ index 33f94b6..539626e 100644
      u32 caps[] = {(u32)g_vk.has_divisor,
                    (u32)g_vk.has_dynamic_stride,
                    (u32)g_vk.has_shader_draw_parameters,
-@@ -1187,20 +1497,9 @@ static void pf_key(char* out, size_t n) {
+@@ -1187,20 +1682,9 @@ static void pf_key(char* out, size_t n) {
                    g_vk_buffer_image_slots,
                    d->limits.maxPerStageDescriptorStorageImages,
                    d->limits.maxDescriptorSetStorageImages};
@@ -5819,7 +6094,7 @@ index b3b0e2c..305079d 100644
  }
  typedef struct {
 diff --git a/src/nx/gpu/vk/render.c b/src/nx/gpu/vk/render.c
-index b8247c0..f1fb7dc 100644
+index b8247c0..082e5cc 100644
 --- a/src/nx/gpu/vk/render.c
 +++ b/src/nx/gpu/vk/render.c
 @@ -822,6 +822,45 @@ u32 vk_gbuf_desc(int stage, u32 off, const u32* v, u64* addr) {
@@ -5886,7 +6161,15 @@ index b8247c0..f1fb7dc 100644
  }
  
  VkImageViewType vk_tex_view_type(const ShTex* st) {
-@@ -1807,15 +1846,20 @@ retry:
+@@ -1661,6 +1700,7 @@ static struct {
+     float lw, bias[3], bc[4];
+     u32 sfront[7], sback[7];
+ } g_dyn;
++u64 g_async_waits[ASYNC_COUNTS];
+ #define DYN(field, value, call)                                                                                        \
+     do {                                                                                                               \
+         if (fresh || g_dyn.field != (value)) {                                                                         \
+@@ -1807,15 +1847,20 @@ retry:
          }
      }
      VkSh* vs =
@@ -5911,7 +6194,7 @@ index b8247c0..f1fb7dc 100644
      if ((tcs_on && (!tcs || tcs->failed)) || (tes_on && (!tes || tes->failed)) || (gs_on && (!gs || gs->failed))) {
          g_vk_skipped++;
          return;
-@@ -1825,6 +1869,11 @@ retry:
+@@ -1825,6 +1870,11 @@ retry:
      TexRes fres[SH_MAXTEX];
      VkSh* last = gs ? gs : tes ? tes : vs;
      VkSh* fs = (r[0x850] & 1) ? fs_get_keyed(ch, code + r[0x851], fres, last ? last->si.out_mask : ~0u) : NULL;
@@ -5923,19 +6206,26 @@ index b8247c0..f1fb7dc 100644
      if (!vs || vs->failed || (fs && fs->failed)) {
          g_vk_skipped++;
          return;
-@@ -2303,6 +2352,16 @@ retry:
+@@ -2303,6 +2353,23 @@ retry:
          memset(&g_dyn, 0, sizeof g_dyn);
          g_dyn.cb = vk_cb_begun();
      }
 +    /* PortForge Engine's async shaders: a pipeline still being made doesn't stop the frame when every image the draw
-+       writes is one the game redraws each present; the bind waits briefly, then its draws are dropped this frame */
-+    if (g_settings.async_shaders && !xfb_on && !vk_query_counting(ch->id) && !vs->si.gbuf_wmask && !vs->si.nimg &&
-+        (!fs || (!fs->si.gbuf_wmask && !fs->si.nimg)) && vk_pipeline_pending(pipe)) {
++       writes is one the game redraws each present; the bind waits briefly, then its draws are dropped this frame.
++       A draw an occlusion query counts is dropped too (since Engine 1.35): the query then finds the object hidden, and
++       the game shows it a frame or two later instead of stopping, where one game's culling queries made most of its
++       first-run pipeline stalls. Draws with side effects (storage writes, transform feedback) always wait */
++    if (g_settings.async_shaders && vk_pipeline_pending(pipe)) {
++        int effects = xfb_on || vs->si.gbuf_wmask || vs->si.nimg || (fs && (fs->si.gbuf_wmask || fs->si.nimg));
 +        int redrawn = n || zt;
 +        for (u32 i = 0; i < n && redrawn; i++)
 +            if (rt[i] && !vk_rt_redrawn(rt[i])) redrawn = 0;
 +        if (redrawn && zt && !vk_rt_redrawn(zt)) redrawn = 0;
-+        if (redrawn) pipe = vk_pipeline_skippable(pipe);
++        if (!effects && redrawn) {
++            pipe = vk_pipeline_skippable(pipe);
++            if (vk_query_counting(ch->id)) g_async_waits[ASYNC_SKIP_QUERY]++;
++        } else
++            g_async_waits[effects ? ASYNC_WAIT_EFFECTS : ASYNC_WAIT_NEW_IMAGE]++;
 +    }
      if (fresh || g_dyn.pipe != pipe) {
          g_dyn.pipe = pipe;
@@ -5981,7 +6271,7 @@ index 0000000..e9e61a1
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2..f613746 100644
+index f3ac2e2..4a15051 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -6,8 +6,9 @@
@@ -6322,10 +6612,16 @@ index f3ac2e2..f613746 100644
              char cs_why[256];
              u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
              LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
-@@ -467,6 +634,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -467,6 +634,19 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  slow_frames = slowest_ns = 0;
                  u64 early_made, early_hits, early_left;
                  vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
++                if (g_async_waits[ASYNC_WAIT_NEW_IMAGE] || g_async_waits[ASYNC_WAIT_EFFECTS] || g_async_waits[ASYNC_SKIP_QUERY])
++                    LOG("vulkan: draws whose pipeline was still being made: %llu waited (images drawn for the first "
++                        "time), %llu waited (storage writes or transform feedback), %llu dropped in occlusion queries\n",
++                        (unsigned long long)g_async_waits[ASYNC_WAIT_NEW_IMAGE],
++                        (unsigned long long)g_async_waits[ASYNC_WAIT_EFFECTS],
++                        (unsigned long long)g_async_waits[ASYNC_SKIP_QUERY]);
 +                if (vk_pipeline_async_skips())
 +                    LOG("vulkan: %llu binds dropped their draws for a frame while their pipelines were made (async "
 +                        "shaders)\n",
@@ -6336,7 +6632,7 @@ index f3ac2e2..f613746 100644
                  if (early_made || early_left)
                      LOG("vulkan: %llu pipelines of earlier runs made in the background (%llu from the cache), %llu "
                          "still to make\n",
-@@ -516,10 +690,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -516,10 +696,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                  (unsigned long long)own_landings(), (unsigned long long)g_vk_rt_readbacks);
          }
      }
@@ -6352,7 +6648,7 @@ index f3ac2e2..f613746 100644
      if (signal) {
          VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                                 .waitSemaphoreCount = 1,
-@@ -528,13 +705,19 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -528,13 +711,19 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                                 .pSwapchains = &g_vk.swapchain,
                                 .pImageIndices = &idx};
          vk_rec_queue(g_vk.gfx); /* the present waits on the frame's submission's semaphore */
@@ -6374,7 +6670,7 @@ index f3ac2e2..f613746 100644
      }
      if (recreate && !g_lost && !g_vk.sc_lost) { /* not when this frame's create found the surface lost */
          vk_finish();
-@@ -544,6 +727,295 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -544,6 +733,295 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
@@ -6670,7 +6966,7 @@ index f3ac2e2..f613746 100644
  }
  
  /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
-@@ -583,7 +1055,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+@@ -583,7 +1061,10 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
          g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
          g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
      }
@@ -6682,7 +6978,7 @@ index f3ac2e2..f613746 100644
      __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
      vk_unlock();
  }
-@@ -600,7 +1075,10 @@ static void vkr_refresh(void) {
+@@ -600,7 +1081,10 @@ static void vkr_refresh(void) {
      if (!vk_trylock()) return;
      last = now;
      vk_render_end();
@@ -7198,7 +7494,7 @@ index 6096f99..ed57f58 100644
      g_tex_uploads++;
      g_tex_upload_bytes += t->size;
 diff --git a/src/nx/gpu/vk/ui.c b/src/nx/gpu/vk/ui.c
-index e32e8bd..936b4e9 100644
+index e32e8bd..748f68b 100644
 --- a/src/nx/gpu/vk/ui.c
 +++ b/src/nx/gpu/vk/ui.c
 @@ -7,8 +7,11 @@
@@ -7222,7 +7518,7 @@ index e32e8bd..936b4e9 100644
      VkImageView view;
      Vertex* v;
      VkBuffer buf;
-@@ -266,11 +269,33 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
+@@ -266,11 +269,34 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
      ui_lock();
      atlas_upload(cb);
      vpad_draw(&list, safe);
@@ -7237,6 +7533,7 @@ index e32e8bd..936b4e9 100644
 +            pf_trace_draw(vk_frame_trace(), &list, safe, sh, display_fps);
 +    }
      overlay_draw(&list, sw, sh);
++    overlay_toasts_draw(&list, sw, sh);
 +    if (g_settings.save_indicator) {
 +        const char* message = pf_save_message(plat_ns());
 +        if (message) {
@@ -7584,7 +7881,7 @@ index 0000000..fcd8bd0
 +    g_upscale.frames = 0; g_upscale.status = 0;
 +}
 diff --git a/src/nx/gpu/vk/vk.h b/src/nx/gpu/vk/vk.h
-index db13c2d..771f4a8 100644
+index db13c2d..1c09edc 100644
 --- a/src/nx/gpu/vk/vk.h
 +++ b/src/nx/gpu/vk/vk.h
 @@ -68,12 +68,14 @@ typedef struct {
@@ -7603,7 +7900,14 @@ index db13c2d..771f4a8 100644
      /* optional features that were enabled */
      VkPhysicalDeviceFeatures feat;
      int has_divisor;      /* VK_EXT_vertex_attribute_divisor: instance divisors above 1 */
-@@ -102,7 +104,8 @@ extern VkState g_vk;
+@@ -96,13 +98,15 @@ typedef struct {
+     /* VK_EXT_provoking_vertex's provokingVertexLast: flat inputs take a primitive's last vertex, as the 3D engine's
+        PROVOKING_VERTEX (0x5A1) can ask */
+     int has_provoking_last;
++    int has_gpl; /* VK_EXT_graphics_pipeline_library with fast linking, and fast_pipelines on: pipelines linked */
+ } VkState;
+ extern VkState g_vk;
+ 
  /* device.c */
  int vk_init(void);
  /* (re)creates the swapchain at the window's size, in an sRGB format when srgb is set and the surface has one, with
@@ -7613,7 +7917,7 @@ index db13c2d..771f4a8 100644
     0 while the window has no area (minimized) or its surface can't be queried, the old swapchain staying, or when the
     create failed: then there is none. A lost surface sets sc_lost; the next present tries again */
  int vk_swapchain_create(int srgb);
-@@ -156,6 +159,10 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
+@@ -156,6 +160,10 @@ void vk_submit(VkSemaphore wait, VkPipelineStageFlags2 wait_stage, VkSemaphore s
  void vk_submit_after(VkSemaphore sem, u64 wait, u64 signal);
  void vk_finish(void); /* submits and waits until the GPU has done everything, and lands every result */
  extern u64 g_vk_finishes, g_vk_finish_ns; /* statistics: vk_finish calls and their wait (the GPU thread idles) */
@@ -7624,7 +7928,7 @@ index db13c2d..771f4a8 100644
  void vk_frame_next(void);                 /* ends the frame (a present): the next records in the other slot */
  void vk_frame_check(void);                /* at the start of a draw or dispatch: ends a frame that has grown too big */
  /* a buffer for GPU -> host copies: record the copy into it, vk_finish(), vk_readback_ready(), then read */
-@@ -367,6 +374,7 @@ typedef struct Surf {
+@@ -367,6 +375,7 @@ typedef struct Surf {
      u64 wseq;       /* when its image last changed, counted across surfaces: of two over the same bytes, the higher
                         holds them (vk_surf_wrote) */
      u32 drawn_at;   /* render targets: g_vk_present when last drawn to */
@@ -7632,7 +7936,7 @@ index db13c2d..771f4a8 100644
      int in_drawn;   /* in surface.c's list of drawn targets, entered at drawn_from */
      u64 drawn_from;
      u64 draw_gw;    /* guest-memory generation at the first draw this present or since a full replacement */
-@@ -408,6 +416,7 @@ typedef struct Surf {
+@@ -408,6 +417,7 @@ typedef struct Surf {
  enum { VK_LRU_NONE, VK_LRU_TEX, VK_LRU_RT };
  /* resolution= in the .ini: render targets are made this much bigger (read once, at startup) */
  extern float g_vk_scale;
@@ -7640,7 +7944,7 @@ index db13c2d..771f4a8 100644
  u32 vk_sc(u32 v);      /* a size or coordinate scaled, at least 1 */
  float vk_scf(float v); /* the same for viewport values */
  /* w in pixels; pitch: bytes per row of a pitch-linear target (the register holds it in place of the width) */
-@@ -708,6 +717,7 @@ void vk_release_drain(void);
+@@ -708,6 +718,7 @@ void vk_release_drain(void);
     a game's draw in a rendering pass, vk_query_pass_end before the pass ends or a draw of the renderer's own in it
     (render.c), vk_query_flush outside a pass before a submit (cmd.c) */
  void vk_query_draw(VkCommandBuffer cb, u32 chan, u32 msaa_mode); /* msaa_mode: 3D 0x574 */
@@ -7648,7 +7952,7 @@ index db13c2d..771f4a8 100644
  void vk_query_pass_end(VkCommandBuffer cb);
  void vk_query_flush(VkCommandBuffer cb);
  void vk_query_reset(u32 chan);
-@@ -780,6 +790,8 @@ typedef struct VkSh {
+@@ -780,6 +791,8 @@ typedef struct VkSh {
      int failed;
      u32 clen, clen_a;
      u64 qh, qh_a;
@@ -7657,7 +7961,7 @@ index db13c2d..771f4a8 100644
      struct VkSh* next;
  } VkSh;
  /* the pipeline layout whose sets have no texture array bindings: compute's, and the one push constants go through
-@@ -810,6 +822,15 @@ void vk_pipeline_init(void);
+@@ -810,6 +823,15 @@ void vk_pipeline_init(void);
     rasterization's outputs (ShaderInfo.xfb), NULL for none */
  VkSh* vk_shader_get(const GpuChannel* ch, u64 gva, u64 gva_a, int stage, u64 int_mask, u64 sint_mask, u32 rt_int,
                      u32 rt_sint, u32 clip, u64 dc_color, u32 dc_funcs, u32 unfed, const ShXfb* xfb);
@@ -7673,7 +7977,7 @@ index db13c2d..771f4a8 100644
  typedef struct {
      VkShaderModule vs, fs;
      VkShaderModule tcs, tes, gs; /* tessellation control and evaluation, geometry: VK_NULL_HANDLE when off */
-@@ -843,15 +864,34 @@ VkPipeline vk_pipeline_get(const PipeKey* k);
+@@ -843,15 +865,37 @@ VkPipeline vk_pipeline_get(const PipeKey* k);
  /* the threads making new pipelines: setting (pipeline_threads) when it is one or more, else a quarter of cpus, two
     to six */
  int vk_pipeline_worker_count(int setting, int cpus);
@@ -7687,6 +7991,9 @@ index db13c2d..771f4a8 100644
 +int vk_pipeline_pending(VkPipeline h);
 +VkPipeline vk_pipeline_skippable(VkPipeline h);
 +u64 vk_pipeline_async_skips(void);
++/* async shaders, on the GPU thread: draws whose pipeline was still being made, by what became of them (render.c) */
++enum { ASYNC_SKIP_QUERY, ASYNC_WAIT_NEW_IMAGE, ASYNC_WAIT_EFFECTS, ASYNC_COUNTS };
++extern u64 g_async_waits[ASYNC_COUNTS];
 +/* whether a render target was drawn to in each of the last presents (surface.c) */
 +int vk_rt_redrawn(const Surf* s);
  VkPipeline vk_pipeline_resolve(VkPipeline h);
@@ -7708,7 +8015,7 @@ index db13c2d..771f4a8 100644
  VkPipelineCache vk_pipeline_cache(void); /* for pipelines made elsewhere (compute) */
  void vk_pipeline_save(void);
  VkShaderModule vk_module_spv(const u32* words, size_t count);
-@@ -888,6 +928,36 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
+@@ -888,6 +932,36 @@ void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
     safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
  void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
  void vk_ui_swapchain_gone(void); /* its images' views go before the swapchain does */
@@ -7962,6 +8269,136 @@ index 1753319..1145db5 100644
  u8* g_mem;
  u64 g_heap_size, g_phys_mapped, g_heap_max, g_code_memory, g_main_stack_size;
  u64 g_pool_size = 64 * GIB; /* sparse: only the pages in use take memory */
+diff --git a/src/nx/runtime/driver/container.c b/src/nx/runtime/driver/container.c
+index 7cce10b..fdedda5 100644
+--- a/src/nx/runtime/driver/container.c
++++ b/src/nx/runtime/driver/container.c
+@@ -795,9 +795,9 @@ unsigned char* snx_romfs_file(SnxHacFs* fs, const char* name, size_t* size) {
+     return NULL;
+ }
+ 
+-unsigned char* snx_dump_nacp(SnxDump* dump, size_t* size, const char** why) {
++unsigned char* snx_dump_control_file(SnxDump* dump, const char* name, size_t* size, const char** why) {
+     SnxHacFs* fs;
+-    unsigned char* nacp;
++    unsigned char* file;
+     *why = NULL;
+     if (!dump->control.found) {
+         *why = "it has no Control NCA";
+@@ -808,8 +808,29 @@ unsigned char* snx_dump_nacp(SnxDump* dump, size_t* size, const char** why) {
+         *why = "its Control NCA cannot be read";
+         return NULL;
+     }
+-    nacp = snx_romfs_file(fs, "control.nacp", size);
++    file = snx_romfs_file(fs, name, size);
+     snx_hac_fs_free(fs);
+-    if (!nacp) *why = "its Control NCA holds no control.nacp";
++    if (!file) *why = "its Control NCA doesn't hold it";
++    return file;
++}
++unsigned char* snx_dump_nacp(SnxDump* dump, size_t* size, const char** why) {
++    unsigned char* nacp = snx_dump_control_file(dump, "control.nacp", size, why);
++    if (!nacp && dump->control.found && *why && !strcmp(*why, "its Control NCA doesn't hold it"))
++        *why = "its Control NCA holds no control.nacp";
+     return nacp;
+ }
++unsigned char* snx_dump_icon(SnxDump* dump, size_t* size) {
++    /* the console's languages in the order a player of the English versions sees them, then the others */
++    static const char* const names[] = {"icon_AmericanEnglish.dat", "icon_BritishEnglish.dat", "icon_Japanese.dat",
++                                        "icon_French.dat", "icon_German.dat", "icon_LatinAmericanSpanish.dat",
++                                        "icon_Spanish.dat", "icon_Italian.dat", "icon_Dutch.dat",
++                                        "icon_CanadianFrench.dat", "icon_Portuguese.dat", "icon_Russian.dat",
++                                        "icon_Korean.dat", "icon_TraditionalChinese.dat", "icon_SimplifiedChinese.dat",
++                                        "icon_BrazilianPortuguese.dat"};
++    const char* why;
++    for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
++        unsigned char* icon = snx_dump_control_file(dump, names[i], size, &why);
++        if (icon || !dump->control.found) return icon;
++    }
++    return NULL;
++}
+diff --git a/src/nx/runtime/driver/container.h b/src/nx/runtime/driver/container.h
+index 7f65ff6..360b005 100644
+--- a/src/nx/runtime/driver/container.h
++++ b/src/nx/runtime/driver/container.h
+@@ -68,5 +68,9 @@ void snx_size_text(SnxU64 bytes, char* text, size_t size);
+ unsigned char* snx_romfs_file(SnxHacFs* fs, const char* name, size_t* size);
+ /* the Control NCA's control.nacp, malloc'd, or NULL with why in *why */
+ unsigned char* snx_dump_nacp(SnxDump* dump, size_t* size, const char** why);
++/* a file of the dump's Control NCA's RomFS, by name (control.nacp, icon_<language>.dat), owned; NULL said why */
++unsigned char* snx_dump_control_file(SnxDump* dump, const char* name, size_t* size, const char** why);
++/* the game's icon, a 256x256 JPEG of its key art, in the first language the Control NCA has one for; NULL for none */
++unsigned char* snx_dump_icon(SnxDump* dump, size_t* size);
+ 
+ #endif
+diff --git a/src/nx/runtime/driver/extract.c b/src/nx/runtime/driver/extract.c
+index 6af25e8..e7f0dd7 100644
+--- a/src/nx/runtime/driver/extract.c
++++ b/src/nx/runtime/driver/extract.c
+@@ -11,6 +11,7 @@
+ 
+ typedef struct {
+     const char *base, *update, *name, *out, *keys, *title_keys;
++    int control_only; /* --control-only: control.nacp and icon.jpg, nothing of the program */
+ } ExtractOptions;
+ 
+ typedef struct {
+@@ -31,6 +32,7 @@ static void extract_help(void) {
+          "  --out DIR           Output directory (default: REPO/work/NAME)\n"
+          "  --keys FILE         prod.keys (default: REPO, then ~/.switch)\n"
+          "  --title-keys FILE   title.keys (same discovery order; optional)\n"
++         "  --control-only      Only control.nacp and icon.jpg (the game's key art), for a game made before\n"
+          "  --help              Show this help");
+     puts("REPO is the data folder: --repo, else a portable copy's or the user's (scarletnx --help).");
+ #ifdef SNX_XDG
+@@ -67,6 +69,10 @@ static int parse_options(int argc, char** argv, ExtractOptions* options) {
+             extract_help();
+             return 2;
+         }
++        if (!positional && !strcmp(argv[i], "--control-only")) {
++            options->control_only = 1;
++            continue;
++        }
+         if (!positional && !strcmp(argv[i], "--")) {
+             positional = 1;
+             continue;
+@@ -225,6 +231,16 @@ static void say_extracted(ExtractState* state) {
+ 
+ /* the game's control.nacp beside exefs/, where the loader reads the game's name from, out of the Control NCA's RomFS.
+    A game without one, or one that cannot be read, keeps the name of its file, a line saying why */
++/* the game's key art beside control.nacp, which the game's menu shows as its poster. None, or one that can't be written,
++   only leaves the menu without it */
++static void control_icon(ExtractState* state) {
++    size_t size = 0;
++    unsigned char* icon = snx_dump_icon(&state->dump, &size);
++    char* to = icon ? snx_path_join(state->out, "icon.jpg") : NULL;
++    if (to && !snx_write_file(to, icon, size)) puts("  The game's key art: icon.jpg");
++    free(to);
++    free(icon);
++}
+ static void control_nacp(ExtractState* state) {
+     char* to = snx_path_join(state->out, "control.nacp");
+     const char* why = NULL;
+@@ -321,6 +337,11 @@ static int extract_files(ExtractState* state, const ExtractOptions* options, con
+     if (!program->found && patch->found)
+         return snx_error("%s is an update, which goes over its game: give the game's dump, with this one as --update",
+                          state->base);
++    if (options->control_only) { /* a game made before icon.jpg was kept: its control data alone */
++        control_nacp(state);
++        control_icon(state);
++        return 0;
++    }
+     if (!program->found) return extract_aoc(state);
+     if (state->dump.aoc.found && extract_aoc(state)) return 1;
+     /* the keys each NCA picked needs, said before anything is written */
+@@ -362,6 +383,7 @@ static int extract_files(ExtractState* state, const ExtractOptions* options, con
+     if (failed) return snx_hac_error("Extracted exefs has no main; verify that the update matches the base game");
+     say_extracted(state);
+     control_nacp(state);
++    control_icon(state);
+     return 0;
+ }
+ 
 diff --git a/src/nx/runtime/driver/hactool/nca.c b/src/nx/runtime/driver/hactool/nca.c
 index 2f956fa..23ac531 100644
 --- a/src/nx/runtime/driver/hactool/nca.c
@@ -7985,6 +8422,24 @@ index 2f956fa..23ac531 100644
      uint64_t end_ofs = ofs + total_size;
      while (ofs < end_ofs) {
          nca_section_fseek(ctx, ofs);
+diff --git a/src/nx/runtime/driver/recompile.c b/src/nx/runtime/driver/recompile.c
+index 066df3d..cf40075 100644
+--- a/src/nx/runtime/driver/recompile.c
++++ b/src/nx/runtime/driver/recompile.c
+@@ -559,6 +559,13 @@ int snx_recompile_game(int argc, char** argv, const SnxPaths* paths) {
+             goto done;
+         }
+     }
++    if (!dump && !addon) { /* the key art the extraction kept, for the menu's poster: a game runs without it */
++        char *from = snx_path_join(input, "icon.jpg"), *to = snx_path_join(data, "icon.jpg");
++        if (from && to && snx_is_file(from) && snx_copy_file(from, to) && !compile.quiet)
++            puts("The game's key art could not be copied: the menu shows no poster");
++        free(from);
++        free(to);
++    }
+     ini = settings_path(folder, game);
+     if (!ini) {
+         snx_error("cannot create the settings folder for %s", title);
 diff --git a/src/nx/runtime/guest_jit.c b/src/nx/runtime/guest_jit.c
 index b259c30..e06079b 100644
 --- a/src/nx/runtime/guest_jit.c
@@ -8160,7 +8615,7 @@ index addf082..ddcb701 100644
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
-index a0ef76b..ff264ca 100644
+index a0ef76b..73706c2 100644
 --- a/src/nx/runtime/options.c
 +++ b/src/nx/runtime/options.c
 @@ -58,6 +58,20 @@ void options_fps_set(const IniOpt* o, const char* v) {
@@ -8184,7 +8639,7 @@ index a0ef76b..ff264ca 100644
  void fps_limit_text(int fps, char* out, size_t n) {
      if (fps == SNX_FPS_GAME)
          snprintf(out, n, "game");
-@@ -135,6 +149,110 @@ typedef struct {
+@@ -135,6 +149,178 @@ typedef struct {
  } Override;
  static Override g_over[OVERRIDE_MAX];
  static int g_nover;
@@ -8216,6 +8671,58 @@ index a0ef76b..ff264ca 100644
 +    memcpy(g_fps_session[i].key, key, kn + 1);
 +    memcpy(g_fps_session[i].value, value, vn + 1);
 +}
++/* The menu's last choices (FPS limit, PortForge FSR 3, the frame-time graph) kept for the game's next launch in
++   <game>.ini.menu beside its settings, as the session layer above. With the global settings' hash: once the player
++   saves other global settings in PortForge, those win again, and the old choices are forgotten */
++static char g_menu_path[1408];
++static u64 g_global_hash; /* global-settings.ini as global_load read it, 0 for none */
++static int g_menu_off;    /* a timed or scripted run: neither read nor written */
++static u64 fnv1a(const unsigned char* p, size_t n);
++static const char* override_of(const char* key);
++static void menu_save(void) {
++    char tmp[sizeof g_menu_path + 8];
++    FILE* f;
++    int i, failed;
++    if (!g_menu_path[0] || g_menu_off) return;
++    snprintf(tmp, sizeof tmp, "%s.tmp", g_menu_path);
++    if (!(f = fopen(tmp, "wb"))) return;
++    fprintf(f, "; the game's menu choices from its last run, read at its next launch\nglobal_hash=%016llx\n",
++            (unsigned long long)g_global_hash);
++    for (i = 0; i < g_nfps_session; ++i) fprintf(f, "%s=%s\n", g_fps_session[i].key, g_fps_session[i].value);
++    failed = ferror(f);
++    if (fclose(f) || failed || plat_replace_file(tmp, g_menu_path)) {
++        remove(tmp);
++        WARN_LIMIT(1, "settings: could not keep the menu's choices in %s\n", g_menu_path);
++    }
++}
++static void menu_load(void) {
++    static const char* const kept[] = {"fps_limit", "frame_generation", "upscaler", "frametime_graph"};
++    SnxIni ini;
++    char *key, *value, hash[17];
++    const char *keys[FPS_SESSION_MAX], *values[FPS_SESSION_MAX];
++    size_t size;
++    unsigned char* text = g_menu_path[0] && !g_menu_off ? snx_read_file(g_menu_path, &size) : NULL;
++    int same = 0, n = 0, found = 0;
++    if (!text) return;
++    snprintf(hash, sizeof hash, "%016llx", (unsigned long long)g_global_hash);
++    snx_ini_start(&ini, (char*)text);
++    while (snx_ini_next(&ini, &key, &value)) {
++        if (!strcmp(key, "global_hash")) same = !strcmp(value, hash);
++        for (size_t i = 0; i < sizeof kept / sizeof *kept && found < FPS_SESSION_MAX; ++i)
++            if (!strcmp(key, kept[i])) {
++                keys[found] = key;
++                values[found++] = value;
++            }
++    }
++    for (int i = 0; same && i < found; ++i)
++        if (!override_of(keys[i])) {
++            session_put(keys[i], values[i]);
++            n++;
++        }
++    free(text);
++    if (n) LOG("settings: the menu's %d choices from the last run kept (%s)\n", n, g_menu_path);
++    else if (!same) LOG("settings: the menu's last choices are older than the global settings, which apply\n");
++}
 +static PMutex g_poll_lock = PMUTEX_INIT;
 +void options_fps_live(int fps) {
 +    char v[16];
@@ -8226,6 +8733,7 @@ index a0ef76b..ff264ca 100644
 +    present_limit_changed();
 +    fps_limit_text(fps, v, sizeof v);
 +    session_put("fps_limit", v);
++    menu_save();
 +    pm_unlock(&g_poll_lock);
 +}
 +void options_fsr3_live(int on) {
@@ -8235,7 +8743,15 @@ index a0ef76b..ff264ca 100644
 +    if (on) __atomic_store_n(&g_settings.upscaler, 1, __ATOMIC_RELAXED);
 +    session_put("frame_generation", on ? "1" : "0");
 +    if (on) session_put("upscaler", "1");
++    menu_save();
 +    present_limit_changed();
++    pm_unlock(&g_poll_lock);
++}
++void options_graph_live(int on) {
++    pm_lock(&g_poll_lock);
++    __atomic_store_n(&g_settings.frame_time_graph, on ? 1 : 0, __ATOMIC_RELAXED);
++    session_put("frametime_graph", on ? "1" : "0");
++    menu_save();
 +    pm_unlock(&g_poll_lock);
 +}
 +static void global_load(void) {
@@ -8250,17 +8766,24 @@ index a0ef76b..ff264ca 100644
 +    int enabled = 0;
 +    g_nglobal = 0;
 +    for (int i = 0; i < g_nover; ++i)
-+        if (!strcmp(g_over[i].key, "global_settings") && !strcmp(g_over[i].value, "0")) return;
++        if (!strcmp(g_over[i].key, "global_settings") && !strcmp(g_over[i].value, "0")) {
++            g_menu_off = 1; /* a test of the game's own settings */
++            return;
++        }
 +    /* Automated measurements keep their per-game test settings. Explicit 1 opts into testing the global layer. */
 +    int force = 0, timed = 0;
 +    for (int i = 0; i < g_nover; ++i) {
 +        if (!strcmp(g_over[i].key, "global_settings") && !strcmp(g_over[i].value, "1")) force = 1;
 +        if (!strcmp(g_over[i].key, "seconds") || !strcmp(g_over[i].key, "frames")) timed = 1;
 +    }
-+    if (timed && !force) return;
++    if (timed && !force) {
++        g_menu_off = 1;
++        return;
++    }
 +    if (!base || !base[0] || snprintf(path, sizeof path, "%s/PortForge/global-settings.ini", base) >= (int)sizeof path) return;
 +    text = snx_read_file(path, &size);
 +    if (!text) return;
++    g_global_hash = fnv1a(text, size);
 +    snx_ini_start(&ini, (char*)text);
 +    while (snx_ini_next(&ini, &key, &value)) {
 +        if (!strcmp(key, "global_enabled")) enabled = !strcmp(value, "1");
@@ -8295,7 +8818,7 @@ index a0ef76b..ff264ca 100644
  /* the menu's, from any thread, until a write of the file has them. g_pending_lock is a leaf: nothing is called while
     it is held */
  typedef struct {
-@@ -144,7 +262,6 @@ typedef struct {
+@@ -144,7 +330,6 @@ typedef struct {
  static Pending g_pending[PENDING_MAX];
  static int g_npending;
  static PMutex g_pending_lock = PMUTEX_INIT;
@@ -8303,7 +8826,7 @@ index a0ef76b..ff264ca 100644
  
  static char g_path[1400];
  static int g_started; /* ini_open is done: the startup settings are kept from now on */
-@@ -203,6 +320,10 @@ static const char* value_of(const IniOpt* o) {
+@@ -203,6 +388,10 @@ static const char* value_of(const IniOpt* o) {
      const char* v = override_of(o->key);
      const Entry* e;
      if (v) return v;
@@ -8314,7 +8837,7 @@ index a0ef76b..ff264ca 100644
      e = store_find(o->key);
      return e ? e->value : o->def;
  }
-@@ -224,7 +345,7 @@ void ini_override(const char* k, const char* v) {
+@@ -224,7 +413,7 @@ void ini_override(const char* k, const char* v) {
  void ini_set(const char* k, const char* v) {
      size_t kn = strlen(k), vn = strlen(v);
      int i;
@@ -8323,15 +8846,18 @@ index a0ef76b..ff264ca 100644
      if (kn >= KEY_MAX || vn >= PENDING_VALUE) {
          WARN_LIMIT(1, "settings: %s's value is too long to save\n", k);
          return;
-@@ -414,6 +535,7 @@ void ini_open(const char* path) {
+@@ -413,7 +602,10 @@ void ini_open(const char* path) {
+     int i, n;
      char why[256];
      snprintf(g_path, sizeof g_path, "%s", path);
++    snprintf(g_menu_path, sizeof g_menu_path, "%s.menu", path);
      ini_set_say(say_setting);
 +    global_load();
++    menu_load();
      for (i = 0; i < g_nover; i++)
          if (!snx_setting_known(g_over[i].key)) WARN("--%s is not a setting, so it does nothing\n", g_over[i].key);
      text = snx_read_file(g_path, &size);
-@@ -433,6 +555,9 @@ void ini_open(const char* path) {
+@@ -433,6 +625,9 @@ void ini_open(const char* path) {
      n = pending_take(taken);
      say_deprecated();
      apply_all();
@@ -8342,26 +8868,28 @@ index a0ef76b..ff264ca 100644
      g_started = 1;
  }
 diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
-index 408db9e..1f9e98b 100644
+index 408db9e..69aae23 100644
 --- a/src/nx/runtime/options.h
 +++ b/src/nx/runtime/options.h
-@@ -34,7 +34,13 @@ void ini_poll(int final);
+@@ -34,7 +34,15 @@ void ini_poll(int final);
  /* fps_limit: 0 = no limit, SNX_FPS_GAME = the game's own pace (its swap interval), else frames a second (10 to 1000) */
  #define SNX_FPS_GAME (-1)
  extern int g_opt_fps;                              /* atomic: the game's threads read it */
 +extern int g_opt_speed_lock;                       /* atomic: speed_lock, 1 = no frame sooner than the game's pace */
 +extern int g_opt_frame_generation;                 /* atomic: frame_generation; on-screen rate is ~2x via FG presents */
  void fps_limit_text(int fps, char* out, size_t n); /* g_opt_fps as fps_limit's value: "game", "0", "30"... */
-+/* Esc/Home or F4: set g_opt_fps for this run above global settings so ini_poll cannot wipe it */
++/* Esc/Home or F4: set g_opt_fps above global settings so ini_poll cannot wipe it; kept for the next launch */
 +void options_fps_live(int fps);
-+/* Esc/Home PortForge FSR 3 On/Off for this run (frame_generation + upscaler), above global re-apply */
++/* Esc/Home PortForge FSR 3 On/Off (frame_generation + upscaler), above global re-apply; kept for the next launch */
 +void options_fsr3_live(int on);
++/* Esc or F7: the frame-time graph on or off, kept for the next launch like the two above */
++void options_graph_live(int on);
  /* ldn, read: local wireless over the LAN (ldn_mitm's protocol), through an Eden room, or off
     (hle/services/network/ldn.c) */
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
 new file mode 100644
-index 0000000..2480def
+index 0000000..f681c1f
 --- /dev/null
 +++ b/src/nx/runtime/pf_engine_version.h
 @@ -0,0 +1,6 @@
@@ -8369,13 +8897,47 @@ index 0000000..2480def
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.34"
++#define PF_ENGINE_VERSION "1.35"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
-index ac4acd5..55ab33d 100644
+index ac4acd5..38b9267 100644
 --- a/src/nx/runtime/platform/backend/gamepad.c
 +++ b/src/nx/runtime/platform/backend/gamepad.c
-@@ -370,6 +370,11 @@ u64 gamepad_button(u32 id, int button) {
+@@ -4,6 +4,7 @@
+ #include "nx/runtime/options.h"
+ #include "nx/runtime/main.h"
+ #include "nx/runtime/platform/log.h"
++#include "nx/runtime/platform/overlay.h"
+ #include "nx/runtime/platform/ui.h"
+ #include "common/utilities/common.h"
+ #include "common/utilities/pad_sdl.h"
+@@ -293,17 +294,25 @@ void gamepad_open(u32 id) {
+     snx_pad_labels(g_pads[i], g_labels[i]);
+     g_symmetric[i] = snx_pad_symmetric(g_pads[i]);
+     ui_unlock();
++    { /* the join card: which player, and how it is connected */
++        SDL_JoystickConnectionState how = SDL_GetGamepadConnectionState(g_pads[i]);
++        overlay_note_pad(i, g_names[i], 1,
++                         how == SDL_JOYSTICK_CONNECTION_WIRELESS ? 1 : how == SDL_JOYSTICK_CONNECTION_WIRED ? 0 : -1);
++    }
+ }
+ void gamepad_close(u32 id) {
+     SDL_JoystickID* ids;
+     int i, n = 0;
+     for (i = 0; i < SNX_GAMEPADS; i++)
+         if (g_pads[i] && SDL_GetGamepadID(g_pads[i]) == id) {
++            char left[64];
+             SDL_CloseGamepad(g_pads[i]);
+             g_pads[i] = NULL;
+             ui_lock();
++            snprintf(left, sizeof left, "%s", g_names[i]);
+             g_names[i][0] = 0;
+             ui_unlock();
++            overlay_note_pad(i, left, 0, -1);
+         }
+     /* a waiting pad takes the freed slot when all eight were occupied */
+     ids = SDL_GetGamepads(&n);
+@@ -370,6 +379,11 @@ u64 gamepad_button(u32 id, int button) {
      map_of(slot < SNX_GAMEPADS ? slot : -1, &map);
      return map.bit[control] < 0 ? 0 : 1ull << map.bit[control];
  }
@@ -8387,7 +8949,7 @@ index ac4acd5..55ab33d 100644
  int gamepad_slot_type(int slot) {
      if (slot < 0 || slot >= SNX_GAMEPADS || !g_pads[slot]) return SDL_GAMEPAD_TYPE_UNKNOWN;
      return SDL_GetGamepadType(g_pads[slot]);
-@@ -485,3 +490,84 @@ void gamepad_rumble_slot(int slot, u32 left, u32 right) {
+@@ -485,3 +499,84 @@ void gamepad_rumble_slot(int slot, u32 left, u32 right) {
      hi = hi * strength(slot) / 100;
      SDL_RumbleGamepad(g_pads[slot], (Uint16)lo, (Uint16)hi, 100);
  }
@@ -8473,7 +9035,7 @@ index ac4acd5..55ab33d 100644
 +    return 0;
 +}
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
-index 87dfdc6..94b1af1 100644
+index 87dfdc6..70d78e8 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
 +++ b/src/nx/runtime/platform/backend/sdl3.c
 @@ -13,6 +13,7 @@
@@ -8584,9 +9146,9 @@ index 87dfdc6..94b1af1 100644
                  LOG("showcase: off\n");
              break;
          }
-+        case SDLK_F7: { /* for this run: the saved choice is the launcher's */
++        case SDLK_F7: { /* as Esc's row, kept for the next launch */
 +            int on = !__atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED);
-+            __atomic_store_n(&g_settings.frame_time_graph, on, __ATOMIC_RELAXED);
++            options_graph_live(on);
 +            LOG("frame-time graph: %s\n", on ? "on" : "off");
 +            break;
 +        }
@@ -8958,42 +9520,71 @@ index 0821ef7..c440b93 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2..a204a22 100644
+index 441a8c2..ab09928 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
-@@ -5,6 +5,9 @@
+@@ -4,7 +4,12 @@
+ #include "nx/runtime/platform/backend.h"
  #include "nx/runtime/platform/fatal_screen.h"
  #include "nx/runtime/platform/gamepad.h"
++#include "nx/runtime/platform/plat.h"
  #include "nx/runtime/platform/vpad.h"
 +#include "nx/runtime/options.h"
 +#include "nx/runtime/main.h"
++#include "nx/runtime/loader.h"
 +#include "nx/runtime/pf_engine_version.h"
  #include "gui_theme_colors.h"
  #include "common/utilities/pad_screen.h"
  #include "common/utilities/users.h"
-@@ -14,7 +17,7 @@
+@@ -13,8 +18,9 @@
+ #include <string.h>
  
  enum { FIRST = 3, VISIBLE = OVERLAY_ROWS - FIRST - 1 }; /* the items' first row, and how many show at once */
- enum { PAGE_MAIN, PAGE_CONTROLS, PAGE_BUTTONS, PAGE_PADS, PAGE_MAP };
+-enum { PAGE_MAIN, PAGE_CONTROLS, PAGE_BUTTONS, PAGE_PADS, PAGE_MAP };
 -enum { M_CONTROLS, M_PADS, M_EXIT, M_COUNT };                                          /* the first page's items */
-+enum { M_CONTROLS, M_PADS, M_GRAPH, M_FSR3, M_FPS, M_EXIT, M_COUNT }; /* the first page's items */
++enum { PAGE_MAIN, PAGE_CONTROLS, PAGE_BUTTONS, PAGE_PADS, PAGE_MAP, PAGE_COOP };
++enum { M_CONTROLS, M_PADS, M_COOP, M_GRAPH, M_FSR3, M_FPS, M_EXIT, M_COUNT }; /* the first page's items */
++enum { COOP_PLAYERS = 4, COOP_BACK = COOP_PLAYERS, COOP_COUNT }; /* the co-op page's: players 1 to 4, then Back */
  enum { P_PLAYER, P_SWAP, P_DEADZONE, P_RUMBLE, P_BACKGROUND, P_MAP, P_BACK, P_COUNT }; /* the gamepads' page's */
  /* the controls page's items */
  enum {
-@@ -55,6 +58,7 @@ static const char* const PADS[P_COUNT] = {SNX_GAMEPAD_PLAYERS,
+@@ -55,18 +61,24 @@ static const char* const PADS[P_COUNT] = {SNX_GAMEPAD_PLAYERS,
                                            "Back"};
  static int shown, page, focus, top; /* top: the first item showing */
  static int pad_player;              /* the player the gamepads' page shows: 0 every player's, 1 to SNX_GAMEPADS */
+-/* the YoRHa menu's colours, from its theme.ini (gui_theme_colors.h), as R G B A bytes; the page hides the game under
+-   it, whose text would show through its letters */
 +static int g_display_fps = -1;      /* last in-game display FPS */
- /* the YoRHa menu's colours, from its theme.ini (gui_theme_colors.h), as R G B A bytes; the page hides the game under
-    it, whose text would show through its letters */
++/* PortForge's menu colours (since Engine 1.35), as R G B A bytes from the low byte with the alpha premultiplied: a
++   dark panel over the game, dimmed, with its key art behind it; light text, the head and the item in focus in the
++   accent. LIGHT is the page, INK the text on it, SOFT the quieter text, as the YoRHa look named them */
  #define SNX_OVERLAY_RGBA(rgb, a) ((u32)(a) << 24 | ((rgb) & 0xFFu) << 16 | ((rgb) & 0xFF00u) | ((rgb) >> 16 & 0xFFu))
-@@ -110,9 +114,29 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
+-#define INK                      SNX_OVERLAY_RGBA(SNX_GUI_THEME_YORHA_INK, 0xFFu)
+-#define SOFT                     SNX_OVERLAY_RGBA(SNX_GUI_THEME_YORHA_SOFT, 0xFFu)
+-#define LIGHT                    SNX_OVERLAY_RGBA(SNX_GUI_THEME_YORHA_PAGE, 0xFFu)
++#define INK                      SNX_OVERLAY_RGBA(0xECEFF4u, 0xFFu)
++#define SOFT                     SNX_OVERLAY_RGBA(0x8C96A8u, 0xFFu)
++#define LIGHT                    SNX_OVERLAY_RGBA(0x141822u, 0xFFu)
+ #define FAILURE                  SNX_OVERLAY_RGBA(SNX_GUI_THEME_YORHA_FAILURE, 0xFFu)
++#define ACCENT                   SNX_OVERLAY_RGBA(0xE63B4Bu, 0xFFu)
++#define ON_ACCENT                SNX_OVERLAY_RGBA(0xFFFFFFu, 0xFFu)
++#define SCRIM                    0xB4000000u /* black at 70%: the game dimmed under the menu */
+ 
+ static int items(void) {
+     return page == PAGE_MAIN       ? M_COUNT
+            : page == PAGE_CONTROLS ? C_COUNT
+            : page == PAGE_PADS     ? P_COUNT
++           : page == PAGE_COOP     ? COOP_COUNT
+                                    : SNX_VPAD_COUNT + 2;
+ }
+ static void page_open(int p) {
+@@ -110,9 +122,47 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
          return;
      }
      if (page == PAGE_MAIN) {
 -        static const char* const main_items[M_COUNT] = {SNX_VPAD_PAGE, SNX_GAMEPAD_PAGE, "Exit"};
-+        static const char* const main_items[M_COUNT] = {SNX_VPAD_PAGE, SNX_GAMEPAD_PAGE, "Frame-time graph", "PortForge FSR 3", "FPS limit", "Exit"};
++        static const char* const main_items[M_COUNT] = {SNX_VPAD_PAGE, SNX_GAMEPAD_PAGE, "Co-op",     "Frame-time graph",
++                                                        "PortForge FSR 3", "FPS limit",        "Exit"};
          snprintf(text, size, "%s", main_items[i]);
 -        if (i != M_EXIT) snprintf(value, vsize, ">");
 +        if (i == M_GRAPH)
@@ -9017,15 +9608,49 @@ index 441a8c2..a204a22 100644
 +                snprintf(value, vsize, "< %s >", word);
 +        } else if (i != M_EXIT)
 +            snprintf(value, vsize, ">");
++        return;
++    }
++    if (page == PAGE_COOP) { /* each player and what drives them: a controller, the keyboard, or none yet */
++        int pad = i < COOP_PLAYERS ? gamepad_of_player(i) : -1;
++        const char* name = pad >= 0 ? gamepad_name(pad) : NULL;
++        if (i == COOP_BACK) {
++            snprintf(text, size, "Back");
++            return;
++        }
++        snprintf(text, size, "Player %d", i + 1);
++        if (name) /* a long name cut to the column, marked as cut */
++            snprintf(value, vsize, strlen(name) > 30 ? "%.27s...%s" : "%s%s", name,
++                     i && !gamepad_player_seen(i) ? "  (off)" : "");
++        else if (!i)
++            snprintf(value, vsize, "Keyboard");
++        else
++            snprintf(value, vsize, "%s", gamepad_player_seen(i) ? "Waiting for a controller" : "Off");
          return;
      }
      if (page == PAGE_BUTTONS) {
-@@ -259,6 +283,30 @@ static int act(int i, int step) {
+@@ -207,14 +257,14 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
+     h = (float)sh - 2 * ch;
+     map_pad();
+     ui_fill(l, x, y, w, h, LIGHT); /* the whole picture */
+-    ui_fill(l, x, y, w, ch, INK);
++    ui_fill(l, x, y, w, ch, ACCENT);
+     {
+         char title[48];
+         if (pad_player) /* the player's own */
+             snprintf(title, sizeof title, "SCARLETNX  /  PLAYER %d  /  BUTTON MAP", pad_player);
+         else
+             snprintf(title, sizeof title, "SCARLETNX  /  BUTTON MAP");
+-        ui_text(l, x + cw, y, s, title, LIGHT);
++        ui_text(l, x + cw, y, s, title, ON_ACCENT);
+         user_draw(l, x + cw * (float)(strlen(title) + 2), x + w - cw, y, s);
+     }
+     snx_pad_screen_lay(&map, x, y + ch, w, h - ch, cw, ch, &map_drawing);
+@@ -259,9 +309,41 @@ static int act(int i, int step) {
          return OVERLAY_NONE;
      }
      if (page == PAGE_MAIN) {
-+        if (i == M_GRAPH) { /* for this run, as F7: the saved choice is the launcher's */
-+            __atomic_store_n(&g_settings.frame_time_graph, !g_settings.frame_time_graph, __ATOMIC_RELAXED);
++        if (i == M_GRAPH) { /* as F7, kept for the next launch */
++            options_graph_live(!__atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED));
 +            return OVERLAY_NONE;
 +        }
 +        if (i == M_FSR3) {
@@ -9050,8 +9675,20 @@ index 441a8c2..a204a22 100644
 +        }
          if (step) return OVERLAY_NONE;
          if (i == M_EXIT) return OVERLAY_EXIT;
-         page_open(i == M_PADS ? PAGE_PADS : PAGE_CONTROLS);
-@@ -285,12 +333,24 @@ static int act(int i, int step) {
+-        page_open(i == M_PADS ? PAGE_PADS : PAGE_CONTROLS);
++        page_open(i == M_PADS ? PAGE_PADS : i == M_COOP ? PAGE_COOP : PAGE_CONTROLS);
++        return OVERLAY_NONE;
++    }
++    if (page == PAGE_COOP && i > 0 && i < COOP_PLAYERS) { /* players 2 to 4 on and off, kept in the game's .ini */
++        char key[32];
++        int on = !g_settings.player_connected[i];
++        g_settings.player_connected[i] = on;
++        snprintf(key, sizeof key, "gamepad_p%d_connected", i + 1);
++        ini_set(key, on ? "1" : "0");
+         return OVERLAY_NONE;
+     }
+     if (step) return OVERLAY_NONE;
+@@ -285,12 +367,24 @@ static int act(int i, int step) {
  }
  
  int overlay_shown(void) { return __atomic_load_n(&shown, __ATOMIC_ACQUIRE); }
@@ -9078,7 +9715,92 @@ index 441a8c2..a204a22 100644
  static int display_percent = 100; /* set on the event thread, read by the renderer's */
  void overlay_set_display_scale(float scale) {
      __atomic_store_n(&display_percent, scale > 0.0f ? (int)(scale * 100.0f) : 100, __ATOMIC_RELAXED);
-@@ -461,7 +521,10 @@ void overlay_scroll(int rows) {
+@@ -324,7 +418,8 @@ typedef struct {
+ } DialogPara;
+ typedef struct {
+     const char* title;
+-    int user; /* the user playing at the head's right, by their nickname: the menu's pages */
++    int user;   /* the user playing at the head's right, by their nickname: the menu's pages */
++    int poster; /* the game's key art as a card left of the panel and behind it all: the menu's first page */
+     DialogPara para[DIALOG_PARAS];
+     int paras;
+     const char* label[VISIBLE];   /* the items showing, from top on */
+@@ -350,11 +445,11 @@ static void user_draw(SnxUiList* l, float left, float right, float y, int s) {
+     }
+     if (x < left) return;
+     ui_picture(l, right - 2 * edge - side, y + 2 * edge, side);
+-    if (*name) ui_text(l, x + cw, y, s, name, LIGHT);
+-    ui_fill(l, x, y, box, edge, LIGHT);
+-    ui_fill(l, x, y + ch - edge, box, edge, LIGHT);
+-    ui_fill(l, x, y, edge, ch, LIGHT);
+-    ui_fill(l, x + box - edge, y, edge, ch, LIGHT);
++    if (*name) ui_text(l, x + cw, y, s, name, ON_ACCENT);
++    ui_fill(l, x, y, box, edge, ON_ACCENT);
++    ui_fill(l, x, y + ch - edge, box, edge, ON_ACCENT);
++    ui_fill(l, x, y, edge, ch, ON_ACCENT);
++    ui_fill(l, x + box - edge, y, edge, ch, ON_ACCENT);
+ }
+ /* the rows paragraphs wrap into: each thread that lays a dialog out has its own */
+ typedef char DialogRows[DIALOG_PARAS][DIALOG_LINES][FATAL_ROW];
+@@ -389,6 +484,11 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+     }
+     x = (float)((sw - cols * 8 * s) / 2);
+     y = (float)((sh - total * (int)ch) / 2);
++    /* the poster card, as tall as the panel, left of it: the two together in the middle, where the picture is wide
++       enough for both */
++    float card = d->poster && ui_has_poster() ? ch * (float)total : 0;
++    if (card && x - card / 2 - card < cw) card = 0;
++    x += card / 2;
+     out->box.x = x;
+     out->box.y = y;
+     out->box.w = w;
+@@ -396,9 +496,24 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+     out->cols = cols;
+     out->scale = s;
+     if (l) {
++        if (d->user && ui_has_poster()) {
++            /* the menu's pages over the game's key art blurred to a wash of its colours, covering the game, darker
++               toward the foot so the panel stands out: the console's home screen behind a game */
++            ui_backdrop(l, 0, 0, (float)sw, (float)sh);
++            for (int band = 0, top = 0; band < 24; ++band) {
++                int next = sh * (band + 1) / 24;
++                ui_fill(l, 0, (float)top, (float)sw, (float)(next - top), (u32)(0x50 + band * 4) << 24);
++                top = next;
++            }
++        } else if (d->user) /* no key art: the game dimmed under the menu */
++            ui_fill(l, 0, 0, (float)sw, (float)sh, SCRIM);
++        if (card) {
++            ui_fill(l, x - card - 2 * (float)s, y, card + 2 * (float)s, card, ACCENT); /* its frame's sides */
++            ui_poster(l, x - card, y + 2 * (float)s, card - 2 * (float)s, card - 4 * (float)s, 0xFF);
++        }
+         ui_fill(l, x, y, w, ch * (float)total, LIGHT);
+-        ui_fill(l, x, y, w, ch, INK);
+-        ui_text(l, x + cw, y, s, d->title, LIGHT);
++        ui_fill(l, x, y, w, ch, ACCENT);
++        ui_text(l, x + cw, y, s, d->title, ON_ACCENT);
+         if (d->user) user_draw(l, x + cw * (float)(strlen(d->title) + 2), x + w - cw, y, s);
+     }
+     row = 1;
+@@ -429,11 +544,15 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+         at->w = w;
+         at->h = ch;
+         if (!l) continue;
+-        if (on) ui_fill(l, x, at->y, w, ch, INK);
++        if (on) {
++            ui_fill(l, x, at->y, w, ch, ACCENT);
++            ui_fill(l, x, at->y, 3.0f * (float)s, ch, ON_ACCENT); /* the bar at its left */
++        }
+         snprintf(line, sizeof line, "\xFE %s", d->label[i]);
+-        ui_text(l, x + cw, at->y, s, line, on ? LIGHT : INK);
++        ui_text(l, x + cw, at->y, s, line, on ? ON_ACCENT : INK);
+         if (d->value[i])
+-            ui_text(l, x + cw * (float)(cols - 1 - (int)strlen(d->value[i])), at->y, s, d->value[i], on ? LIGHT : INK);
++            ui_text(l, x + cw * (float)(cols - 1 - (int)strlen(d->value[i])), at->y, s, d->value[i],
++                    on ? ON_ACCENT : SOFT);
+     }
+     /* more above or under: the font's arrows at the edge */
+     if (l && d->shown && d->top) ui_text(l, x + cw * (float)(cols - 1), out->item[0].y, s, "\x18", SOFT);
+@@ -461,7 +580,10 @@ void overlay_scroll(int rows) {
  void overlay_side(int step) {
      if (page == PAGE_MAP)
          map_key(step < 0 ? SNX_PAD_KEY_LEFT : SNX_PAD_KEY_RIGHT);
@@ -9090,7 +9812,7 @@ index 441a8c2..a204a22 100644
          act(focus, step);
  }
  int overlay_pad(u64 button) {
-@@ -481,24 +544,30 @@ int overlay_pad(u64 button) {
+@@ -481,24 +603,30 @@ int overlay_pad(u64 button) {
      return OVERLAY_NONE;
  }
  int overlay_controls(u64 buttons, const i32 sticks[4], u64 ms) {
@@ -9128,21 +9850,46 @@ index 441a8c2..a204a22 100644
      for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
          if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
      return did;
-@@ -523,15 +592,41 @@ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*va
+@@ -512,7 +640,7 @@ int overlay_back(void) {
+         focus = C_BUTTONS;
+     } else {
+         page_open(PAGE_MAIN);
+-        focus = from == PAGE_PADS ? M_PADS : M_CONTROLS;
++        focus = from == PAGE_PADS ? M_PADS : from == PAGE_COOP ? M_COOP : M_CONTROLS;
+     }
+     keep_in_view();
+     return OVERLAY_NONE;
+@@ -521,17 +649,53 @@ static const char* pads_hint(char* out, size_t size);
+ /* the page showing as a dialog: its title, its hint, the items in view, their texts in text and value */
+ static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*value)[OVERLAY_COLS_MAX + 1], char* pads,
                          size_t size) {
-     static const char* const titles[] = {"SCARLETNX  /  MENU", "SCARLETNX  /  CONTROLS", "SCARLETNX  /  BUTTONS",
-                                          "SCARLETNX  /  CONTROLLERS"};
+-    static const char* const titles[] = {"SCARLETNX  /  MENU", "SCARLETNX  /  CONTROLS", "SCARLETNX  /  BUTTONS",
+-                                         "SCARLETNX  /  CONTROLLERS"};
 -    static const char* const hints[] = {"Back or Home: back to the game.", "Back: the menu.",
++    static const char* const titles[] = {"PAUSED", "CONTROLS", "BUTTONS", "CONTROLLERS", "BUTTON MAP", "CO-OP"};
 +    static const char* const hints[] = {"Esc / right-click / Home: return to game.", "Esc / Back: the menu.",
                                          "Tap one to show or hide it."};
 -    int r, n = items();
-+    static char fps_line[OVERLAY_COLS_MAX + 1];
++    static char fps_line[OVERLAY_COLS_MAX + 1], head[OVERLAY_COLS_MAX + 1];
 +    int r, n = items(), live, fps, fg, side, target;
 +    char limit_word[32];
      memset(d, 0, sizeof *d);
-     d->title = titles[page];
+-    d->title = titles[page];
++    /* the game's own name over its pages, in capitals as the head always was: PORTFORGE  /  SUPER MARIO ODYSSEY */
++    {
++        const char* game = g_mod && g_mod->title && g_mod->title[0] ? g_mod->title : g_exename;
++        size_t at = (size_t)snprintf(head, sizeof head, "%s  /  ", page == PAGE_MAIN ? "PORTFORGE" : titles[page]);
++        for (size_t i = 0; game[i] && at + 1 < sizeof head && at < 40; ++i)
++            head[at++] = (char)(game[i] >= 'a' && game[i] <= 'z' ? game[i] - 'a' + 'A' : game[i]);
++        head[at] = 0;
++    }
++    d->title = head;
      d->user = 1;
-     d->para[0].text = page == PAGE_PADS ? pads_hint(pads, size) : hints[page];
+-    d->para[0].text = page == PAGE_PADS ? pads_hint(pads, size) : hints[page];
++    d->poster = page == PAGE_MAIN;
++    d->para[0].text = page == PAGE_PADS   ? pads_hint(pads, size)
++                      : page == PAGE_COOP ? "Connect a controller (USB or Bluetooth) to join as the next player."
++                                          : hints[page];
      d->para[0].rgba = SOFT;
      d->paras = 1;
 +    /* Engine version, the measured Display FPS (every picture presented, generated and repeated ones too), the
@@ -9172,7 +9919,7 @@ index 441a8c2..a204a22 100644
      d->items = n;
      d->top = top;
      d->focus = focus;
-@@ -557,6 +652,7 @@ int overlay_tap(float x, float y, int sw, int sh) {
+@@ -557,6 +721,7 @@ int overlay_tap(float x, float y, int sw, int sh) {
      focus = d.top + r;
      col = (int)((x - at.box.x) / (8.0f * (float)at.scale));
      /* a value's arrows: the left half of its last ten columns steps it down */
@@ -9180,8 +9927,102 @@ index 441a8c2..a204a22 100644
      if (arrows(setting(focus))) return act(focus, col < at.cols - 5 ? -1 : 1);
      return act(focus, 0);
  }
+@@ -625,3 +790,93 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e) {
+     e->link = at.link;
+     for (i = 0; i < SNX_OVERLAY_ERROR_ITEMS; ++i) e->items[i] = at.item[i];
+ }
++
++/* ---- a controller joining or leaving: a card that pops in at the top right, the menu shown or not ---- */
++enum { TOASTS = 4, TOAST_IN_MS = 320, TOAST_SHOW_MS = 3200, TOAST_OUT_MS = 420 };
++static struct {
++    char name[64];
++    int player, joined, wireless;
++    u64 at_ms; /* 0: none */
++} g_toasts[TOASTS];
++void overlay_note_pad(int slot, const char* name, int joined, int wireless) {
++    int i, oldest = 0;
++    ui_lock();
++    for (i = 1; i < TOASTS; ++i) /* the oldest card makes way */
++        if (g_toasts[i].at_ms < g_toasts[oldest].at_ms) oldest = i;
++    snprintf(g_toasts[oldest].name, sizeof g_toasts[oldest].name, "%s", name && *name ? name : "Controller");
++    g_toasts[oldest].player = slot + 1;
++    g_toasts[oldest].joined = joined;
++    g_toasts[oldest].wireless = wireless;
++    g_toasts[oldest].at_ms = plat_ns() / 1000000u;
++    if (!g_toasts[oldest].at_ms) g_toasts[oldest].at_ms = 1;
++    ui_unlock();
++}
++/* a premultiplied colour at a fraction of its opacity */
++static u32 faded(u32 rgba, float a) {
++    u32 out = 0;
++    if (a <= 0) return 0;
++    if (a > 1) a = 1;
++    for (int c = 0; c < 32; c += 8) out |= (u32)((float)(rgba >> c & 0xFFu) * a + 0.5f) << c;
++    return out;
++}
++/* a controller as the cards draw it: a body, its two grips, its sticks and its four face buttons */
++static void controller_glyph(SnxUiList* l, float x, float y, float w, u32 body, u32 parts, float a) {
++    float h = w * 0.55f, grip = h * 0.8f, stick = h * 0.28f, button = h * 0.13f;
++    disc(l, x, y + h - grip * 0.9f, grip, grip, faded(body, a));
++    disc(l, x + w - grip, y + h - grip * 0.9f, grip, grip, faded(body, a));
++    ui_fill(l, x + grip * 0.35f, y + h * 0.15f, w - grip * 0.7f, h * 0.62f, faded(body, a));
++    disc(l, x + w * 0.22f, y + h * 0.22f, stick, stick, faded(parts, a));
++    disc(l, x + w * 0.56f, y + h * 0.42f, stick, stick, faded(parts, a));
++    for (int b = 0; b < 4; ++b) /* the diamond of face buttons */
++        disc(l, x + w * 0.74f + (b == 1 ? button : b == 3 ? -button : 0), y + h * 0.2f + (b == 0 ? -button : b == 2 ? button : 0),
++             button, button, faded(parts, a));
++}
++static float ease_out_back(float t) {
++    const float c1 = 1.70158f, c3 = c1 + 1;
++    float u = t - 1;
++    return 1 + c3 * u * u * u + c1 * u * u;
++}
++void overlay_toasts_draw(SnxUiList* l, int sw, int sh) {
++    int px, py, s, i, stack = 0;
++    float cw, ch, w, h;
++    u64 now = plat_ns() / 1000000u;
++    overlay_place(sw, sh, &px, &py, &s);
++    cw = 8.0f * (float)s;
++    ch = 16.0f * (float)s;
++    w = cw * 40;
++    h = ch * 3.2f;
++    for (i = 0; i < TOASTS; ++i) {
++        float t, a, pop, x, y, glyph;
++        char line[64];
++        int room;
++        if (!g_toasts[i].at_ms || now < g_toasts[i].at_ms) continue;
++        t = (float)(now - g_toasts[i].at_ms);
++        if (t >= TOAST_SHOW_MS + TOAST_OUT_MS) {
++            g_toasts[i].at_ms = 0;
++            continue;
++        }
++        /* in: it pops (overshoots and settles) and slides from the right; out: it fades and slides back */
++        pop = t < TOAST_IN_MS ? ease_out_back(t / TOAST_IN_MS) : 1;
++        a = t < TOAST_IN_MS ? t / TOAST_IN_MS : t > TOAST_SHOW_MS ? 1 - (t - TOAST_SHOW_MS) / TOAST_OUT_MS : 1;
++        x = (float)sw - w - 2 * cw + (1 - pop) * w * 0.35f + (t > TOAST_SHOW_MS ? (1 - a) * w * 0.3f : 0);
++        y = 2 * ch + (float)stack * (h + ch * 0.5f);
++        ++stack;
++        ui_fill(l, x, y, w, h, faded(LIGHT, a));
++        ui_fill(l, x, y, 4.0f * (float)s, h, faded(g_toasts[i].joined ? ACCENT : SOFT, a));
++        /* the controller grows in with the card's pop, from its middle */
++        glyph = h * 0.95f * (0.6f + 0.4f * pop);
++        controller_glyph(l, x + cw * 1.5f + (h * 0.95f - glyph) / 2, y + (h - glyph * 0.55f) / 2, glyph,
++                         g_toasts[i].joined ? ACCENT : SOFT, LIGHT, a);
++        /* the player and how the controller is connected on the first line, its name cut to the card's width under */
++        snprintf(line, sizeof line, "PLAYER %d %s", g_toasts[i].player, g_toasts[i].joined ? "JOINED" : "LEFT");
++        ui_text(l, x + cw * 2 + h, y + ch * 0.45f, s, line, faded(INK, a));
++        if (g_toasts[i].wireless >= 0) {
++            const char* how = g_toasts[i].wireless ? "BLUETOOTH" : "USB";
++            ui_text(l, x + w - cw * (float)(strlen(how) + 1), y + ch * 0.45f, s, how, faded(SOFT, a));
++        }
++        room = (int)((w - cw * 3 - h) / cw);
++        if ((int)strlen(g_toasts[i].name) <= room) snprintf(line, sizeof line, "%s", g_toasts[i].name);
++        else snprintf(line, sizeof line, "%.*s...", room - 3, g_toasts[i].name);
++        ui_text(l, x + cw * 2 + h, y + ch * 1.6f, s, line, faded(SOFT, a));
++    }
++}
 diff --git a/src/nx/runtime/platform/overlay.h b/src/nx/runtime/platform/overlay.h
-index 8e29f7b..36d69c0 100644
+index 8e29f7b..e3e6f72 100644
 --- a/src/nx/runtime/platform/overlay.h
 +++ b/src/nx/runtime/platform/overlay.h
 @@ -1,6 +1,6 @@
@@ -9203,6 +10044,17 @@ index 8e29f7b..36d69c0 100644
  /* the display's own scale (SDL's: dpi / 160 on a phone), which the panel's letters follow; 1 until told */
  void overlay_set_display_scale(float scale);
  /* where the panel goes on a picture of sw x sh pixels: its corner and the whole number it is scaled by */
+@@ -49,6 +53,10 @@ int overlay_pointer_up(u64 id, float x, float y, int sw, int sh);
+ void overlay_pointer_cancel(u64 id);
+ void overlay_pointers_reset(void);
+ void overlay_draw(SnxUiList* l, int sw, int sh);
++/* a controller joined (joined 1) or left player slot's place: name, and wireless 1 Bluetooth, 0 USB, -1 not known.
++   Its card pops in at the top right for a few seconds, drawn by overlay_toasts_draw whether the menu shows or not */
++void overlay_note_pad(int slot, const char* name, int joined, int wireless);
++void overlay_toasts_draw(SnxUiList* l, int sw, int sh); /* under ui_lock, as overlay_draw */
+ /* the columns the menu's pages and the stopped panel take at scale on a picture sw wide: as many as three quarters of it
+    holds, within OVERLAY_COLS and OVERLAY_COLS_MAX */
+ int overlay_cols(int sw, int scale);
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
 index d3e4e35..b50e68e 100644
 --- a/src/nx/runtime/platform/plat.h
@@ -9516,6 +10368,177 @@ index 0000000..2d0dad9
 +    return enabled && fullscreen && focused && !menu && !system_key;
 +}
 +#endif
+diff --git a/src/nx/runtime/platform/ui.c b/src/nx/runtime/platform/ui.c
+index 4517b34..4b599f1 100644
+--- a/src/nx/runtime/platform/ui.c
++++ b/src/nx/runtime/platform/ui.c
+@@ -3,6 +3,8 @@
+ #include "nx/runtime/platform/ui.h"
+ #include "nx/runtime/platform/controls_atlas.h"
+ #include "nx/runtime/platform/plat.h"
++#include "nx/runtime/main.h"
++#include "common/utilities/common.h"
+ #include "nx/runtime/platform/log.h"
+ #include "common/utilities/endian.h"
+ #include "common/utilities/font.h"
+@@ -16,6 +18,11 @@ static PMutex g_lock = PMUTEX_INIT;
+ static u32* g_atlas;
+ static u32 g_version;
+ #define UI_PICTURE_Y SNX_CONTROLS_ATLAS_HEIGHT /* the picture's first row, under the sprites' */
++#define UI_POSTER_X  128                       /* the poster's first column, right of the picture */
++#define UI_EXTRA     SNX_UI_POSTER             /* the rows under the sprites: the picture's and the taller poster's */
++#define UI_BLUR_X    400                       /* the blurred poster's first column, right of the poster */
++#define UI_BLUR      64                        /* its side: 4x4 of the poster's texels each, then blurred */
++static int g_poster;                           /* the game's poster is in the atlas */
+ /* the menu's look's shape for it, GuiPicture's: 0 none, 1 square, 2 round */
+ #ifndef SNX_GUI_THEME_YORHA_PICTURE
+ #error "the YoRHa theme names no [head] picture"
+@@ -70,6 +77,88 @@ static void user_picture(u32* a, int w) {
+             at[(size_t)y * (size_t)w + (size_t)i] = (p & 0xFF00FF00u) | (p >> 16 & 0xFFu) | (p & 0xFFu) << 16;
+         }
+ }
++int ui_has_poster(void) { return g_poster; }
++int ui_backdrop(SnxUiList* l, float x, float y, float w, float h) {
++    /* a texel in from each edge, so the blend never reaches the poster beside it */
++    float side = UI_BLUR - 2, uw = side, vh = side;
++    if (!g_poster || w <= 0 || h <= 0) return 0;
++    if (w > h) vh = side * h / w;
++    else uw = side * w / h;
++    quad(l, x, y, w, h, UI_BLUR_X + 1 + (int)((side - uw) / 2), UI_PICTURE_Y + 1 + (int)((side - vh) / 2), (int)uw,
++         (int)vh, 0xFFFFFFFFu, 0, 0);
++    return 1;
++}
++/* the poster at at (w texels a row) shrunk to UI_BLUR square by averaging and blurred twice by a 5x5 box, into the
++   atlas's UI_BLUR_X columns: drawn over the whole picture it is a soft wash of the poster's colours */
++static void game_blur(u32* a, int w) {
++    static u32 small[UI_BLUR * UI_BLUR], tmp[UI_BLUR * UI_BLUR];
++    const u32* poster = a + (size_t)UI_PICTURE_Y * (size_t)w + UI_POSTER_X;
++    const int k = SNX_UI_POSTER / UI_BLUR;
++    for (int y = 0; y < UI_BLUR; ++y)
++        for (int x = 0; x < UI_BLUR; ++x) {
++            u32 sum[4] = {0};
++            for (int j = 0; j < k; ++j)
++                for (int i = 0; i < k; ++i) {
++                    u32 p = poster[(size_t)(y * k + j) * (size_t)w + (size_t)(x * k + i)];
++                    for (int c = 0; c < 4; ++c) sum[c] += p >> (8 * c) & 0xFFu;
++                }
++            small[y * UI_BLUR + x] = 0;
++            for (int c = 0; c < 4; ++c) small[y * UI_BLUR + x] |= (sum[c] / (u32)(k * k)) << (8 * c);
++        }
++    for (int pass = 0; pass < 4; ++pass) { /* across, down, across, down: two 5x5 box blurs */
++        u32 *from = pass % 2 ? tmp : small, *to = pass % 2 ? small : tmp;
++        for (int y = 0; y < UI_BLUR; ++y)
++            for (int x = 0; x < UI_BLUR; ++x) {
++                u32 sum[4] = {0}, out = 0;
++                for (int d = -2; d <= 2; ++d) {
++                    int xx = pass % 2 ? x : x + d, yy = pass % 2 ? y + d : y;
++                    xx = xx < 0 ? 0 : xx >= UI_BLUR ? UI_BLUR - 1 : xx;
++                    yy = yy < 0 ? 0 : yy >= UI_BLUR ? UI_BLUR - 1 : yy;
++                    for (int c = 0; c < 4; ++c) sum[c] += from[yy * UI_BLUR + xx] >> (8 * c) & 0xFFu;
++                }
++                for (int c = 0; c < 4; ++c) out |= (sum[c] / 5) << (8 * c);
++                to[y * UI_BLUR + x] = out;
++            }
++    }
++    for (int y = 0; y < UI_BLUR; ++y)
++        memcpy(a + (size_t)(UI_PICTURE_Y + y) * (size_t)w + UI_BLUR_X, small + y * UI_BLUR, UI_BLUR * 4);
++}
++int ui_poster(SnxUiList* l, float x, float y, float w, float h, u32 alpha) {
++    int u = 0, v = 0, uw = SNX_UI_POSTER, vh = SNX_UI_POSTER;
++    if (!g_poster || w <= 0 || h <= 0) return 0;
++    if (w > h) { /* cover: the middle band of the square */
++        vh = (int)((float)SNX_UI_POSTER * h / w);
++        v = (SNX_UI_POSTER - vh) / 2;
++    } else if (h > w) {
++        uw = (int)((float)SNX_UI_POSTER * w / h);
++        u = (SNX_UI_POSTER - uw) / 2;
++    }
++    alpha &= 0xFFu; /* premultiplied: every channel scaled */
++    quad(l, x, y, w, h, UI_POSTER_X + u, UI_PICTURE_Y + v, uw, vh, alpha << 24 | alpha << 16 | alpha << 8 | alpha, 0, 0);
++    return 1;
++}
++/* the game's key art into the atlas's rows from UI_PICTURE_Y, from column UI_POSTER_X, w texels a row: icon.jpg in its
++   data folder, which the extraction keeps. None leaves the menu without its poster */
++static void game_poster(u32* a, int w) {
++    char path[1100];
++    size_t size = 0;
++    unsigned char* jpeg;
++    u32* at = a + (size_t)UI_PICTURE_Y * (size_t)w + UI_POSTER_X;
++    g_poster = 0;
++    if (!g_datadir[0] || snprintf(path, sizeof path, "%sicon.jpg", g_datadir) >= (int)sizeof path) return;
++    if (!(jpeg = snx_read_file(path, &size))) return;
++    if (!snx_splash_picture(jpeg, size, SNX_UI_POSTER, 0, at, w * 4)) {
++        for (int y = 0; y < SNX_UI_POSTER; ++y)
++            for (int i = 0; i < SNX_UI_POSTER; ++i) {
++                u32 p = at[(size_t)y * (size_t)w + (size_t)i];
++                at[(size_t)y * (size_t)w + (size_t)i] = (p & 0xFF00FF00u) | (p >> 16 & 0xFFu) | (p & 0xFFu) << 16;
++            }
++        game_blur(a, w);
++        g_poster = 1;
++    } else
++        WARN("ui: the game's key art %s could not be drawn, the menu shows none\n", path);
++    free(jpeg);
++}
+ void ui_fill(SnxUiList* l, float x, float y, float w, float h, u32 rgba) {
+     /* the block's inner texels: a blend at its edge never reaches the transparent ones around it */
+     quad(l, x, y, w, h, SNX_CONTROLS_WHITE_X + 1, SNX_CONTROLS_WHITE_Y + 1, 2, 2, rgba, 0, 1);
+@@ -89,7 +178,7 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
+     int x, y, c, i;
+     u32* a;
+     if (w != SNX_CONTROLS_ATLAS_WIDTH || h != SNX_CONTROLS_ATLAS_HEIGHT) return; /* not the image the header is for */
+-    a = (u32*)calloc((size_t)w * (size_t)(h + SNX_UI_PICTURE), 4);
++    a = (u32*)calloc((size_t)w * (size_t)(h + UI_EXTRA), 4);
+     if (!a) return;
+     for (i = 0; i < w * h; ++i) { /* premultiplied: a blend between a sprite's edge and the clear texels around it */
+         u32 p = snx_le32(sprites[i]), al = p >> 24;
+@@ -104,7 +193,8 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
+     for (y = 0; y < 4; ++y)
+         for (x = 0; x < 4; ++x) a[(SNX_CONTROLS_WHITE_Y + y) * w + SNX_CONTROLS_WHITE_X + x] = 0xFFFFFFFFu;
+     user_picture(a, w);
+-    snx_le32_array(a, (size_t)w * (size_t)(h + SNX_UI_PICTURE)); /* the texels' bytes R G B A, as the GPU reads them */
++    game_poster(a, w);
++    snx_le32_array(a, (size_t)w * (size_t)(h + UI_EXTRA)); /* the texels' bytes R G B A, as the GPU reads them */
+     ui_lock();
+     free(g_atlas);
+     g_atlas = a;
+@@ -113,7 +203,7 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
+ }
+ const u32* ui_atlas(int* w, int* h, u32* version) {
+     *w = SNX_CONTROLS_ATLAS_WIDTH;
+-    *h = SNX_CONTROLS_ATLAS_HEIGHT + SNX_UI_PICTURE;
++    *h = SNX_CONTROLS_ATLAS_HEIGHT + UI_EXTRA;
+     *version = g_version;
+     return g_atlas;
+ }
+diff --git a/src/nx/runtime/platform/ui.h b/src/nx/runtime/platform/ui.h
+index 0ccd9f1..50f8b67 100644
+--- a/src/nx/runtime/platform/ui.h
++++ b/src/nx/runtime/platform/ui.h
+@@ -29,13 +29,22 @@ void ui_fill(SnxUiList* l, float x, float y, float w, float h, u32 rgba);
+    none, which draws nothing */
+ #define SNX_UI_PICTURE 96
+ int ui_picture(SnxUiList* l, float x, float y, float side);
++/* the game's poster: its key art (icon.jpg in its data folder, kept by the extraction), SNX_UI_POSTER texels square,
++   drawn over w x h at x, y, cut to that shape from its middle (a wide one shows its middle band), at alpha (0 to 255).
++   0 when the game has none, which draws nothing */
++#define SNX_UI_POSTER 256
++int ui_poster(SnxUiList* l, float x, float y, float w, float h, u32 alpha);
++/* 1 when the game has a poster to draw */
++int ui_has_poster(void);
++/* the poster blurred to a wash of its colours, opaque over w x h at x, y (cut to that shape as ui_poster); 0 for none */
++int ui_backdrop(SnxUiList* l, float x, float y, float w, float h);
+ /* ASCII text, 0xFE the font's square, in 8x16 glyphs at a whole scale; returns the width drawn */
+ float ui_text(SnxUiList* l, float x, float y, int scale, const char* s, u32 rgba);
+ 
+ /* The atlas, each texel the bytes R G B A (a little-endian u32) with alpha premultiplied, made from the sprites'
+    image when the window opens (sdl3.c decodes it to the same bytes, SDL's RGBA32), the users read by then, and freed
+-   by ui_atlas_done once the renderer has it, both under ui_lock. It is the image's width and SNX_UI_PICTURE rows
+-   taller. version counts the images given, 0 for none yet */
++   by ui_atlas_done once the renderer has it, both under ui_lock. It is the image's width and SNX_UI_POSTER rows
++   taller: the user's picture and the game's poster beside it. version counts the images given, 0 for none yet */
+ void ui_atlas_set(const u32* sprites, int w, int h);
+ const u32* ui_atlas(int* w, int* h, u32* version);
+ void ui_atlas_done(void);
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
 index 2bd6181..fcdba99 100644
 --- a/src/nx/runtime/present.c
@@ -9653,7 +10676,7 @@ index 2bd6181..fcdba99 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..fe392fc 100644
+index be57ac5..09b5a24 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
 @@ -80,13 +80,105 @@ setting Game mods off
@@ -9784,7 +10807,7 @@ index be57ac5..fe392fc 100644
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -188,8 +292,35 @@ setting Pipeline threads
+@@ -188,8 +292,46 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -9800,6 +10823,17 @@ index be57ac5..fe392fc 100644
 +    help draws into images the game has drawn to in each of the last presents (its 3D world, redrawn every frame), so
 +    help a missing object comes back a frame later instead of the game stopping. Draws into anything else (menus,
 +    help loading screens, images drawn once) still wait. 0 = every draw waits for its pipeline
++setting Fast pipelines
++    key fast_pipelines
++    int 0 1
++    default 0
++    words Off|On
++    startup
++    help PortForge Engine, experimental. 1 = with VK_EXT_graphics_pipeline_library, each shader is compiled once into a
++    help pipeline library and a draw's pipeline is linked from those in about a millisecond, so a new combination of
++    help shaders and state no longer stops the game while the driver compiles it. Off by default: on one AMD driver
++    help (Adrenalin, Vulkan 1.4.359) merely enabling the extension made some compute shaders (frame generation, FSR 1)
++    help produce wrong pictures. 0 = every pipeline is compiled whole
 +setting Frame guard
 +    key frame_guard
 +    int 0 1
@@ -10083,10 +11117,10 @@ index 0000000..17e9fa2
 +}
 diff --git a/tests/frame_trace.c b/tests/frame_trace.c
 new file mode 100644
-index 0000000..eafe9e1
+index 0000000..0a29463
 --- /dev/null
 +++ b/tests/frame_trace.c
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,89 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* The frame-time trace (runtime/platform/frame_trace.c): hitch detection, cause attribution, the CSV and the graph */
 +#include "nx/runtime/platform/frame_trace.h"
@@ -10095,6 +11129,8 @@ index 0000000..eafe9e1
 +#include <stdarg.h>
 +#include <stdio.h>
 +#include <string.h>
++
++char g_datadir[1024]; /* ui.c reads the key art from it: none here */
 +
 +/* ui.c's lock and warning, without the platform layer */
 +void pm_lock(PMutex* m) { (void)m; }
@@ -10175,10 +11211,46 @@ index 0000000..eafe9e1
 +    return 0;
 +}
 diff --git a/tests/gamepad.c b/tests/gamepad.c
-index 685599a..63836f9 100644
+index 685599a..e1ed484 100644
 --- a/tests/gamepad.c
 +++ b/tests/gamepad.c
-@@ -247,6 +247,33 @@ int main(void) {
+@@ -6,6 +6,7 @@
+ #include "nx/runtime/platform/gamepad.h"
+ #include "nx/runtime/options.h"
+ #include "nx/runtime/platform/plat.h"
++#include "nx/runtime/platform/overlay.h"
+ #include "common/utilities/common.h"
+ #include <SDL3/SDL.h>
+ #include <string.h>
+@@ -14,7 +15,18 @@
+ #include <math.h>
+ #include <stdarg.h>
+ 
+-char g_confdir[1024], g_exedir[1024];
++char g_confdir[1024], g_exedir[1024], g_datadir[1024];
++/* the last controller the menu was told joined or left, for its card */
++static struct {
++    int slot, joined, wireless, calls;
++} noted;
++void overlay_note_pad(int slot, const char* name, int joined, int wireless) {
++    (void)name;
++    noted.slot = slot;
++    noted.joined = joined;
++    noted.wireless = wireless;
++    noted.calls++;
++}
+ /* the last warning the backend logged */
+ static char warned[512];
+ void logf_(int lvl, const char* fmt, ...) {
+@@ -175,6 +187,7 @@ int main(void) {
+ 
+     /* the face buttons where the console's are, on every pad: A right, B bottom, X top, Y left */
+     xbox = attach(XBOX);
++    CHECK(noted.calls && noted.slot == 0 && noted.joined == 1); /* its card: player 1 joined */
+     CHECK(with(xbox, SDL_GAMEPAD_BUTTON_SOUTH) == B);
+     CHECK(with(xbox, SDL_GAMEPAD_BUTTON_EAST) == A);
+     CHECK(with(xbox, SDL_GAMEPAD_BUTTON_WEST) == Y);
+@@ -247,6 +260,33 @@ int main(void) {
      CHECK(gamepad_button(SDL_GetJoystickID(xbox), SDL_GAMEPAD_BUTTON_DPAD_UP) == UP);
      CHECK(gamepad_button(SDL_GetJoystickID(xbox), SDL_GAMEPAD_BUTTON_GUIDE) == 0);
  
@@ -10370,14 +11442,15 @@ index 0000000..130c79d
 +    return 0;
 +}
 diff --git a/tests/overlay.c b/tests/overlay.c
-index 03330d3..989961d 100644
+index 03330d3..9af23da 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
-@@ -10,11 +10,48 @@
+@@ -10,11 +10,50 @@
  #include "nx/runtime/platform/vpad.h"
  #include "nx/runtime/platform/controls_atlas.h"
  #include "nx/runtime/platform/plat.h"
 +#include "nx/runtime/options.h"
++#include "nx/runtime/loader.h"
  #include "common/utilities/font.h"
  #include "gui_theme_colors.h"
  #include "common/utilities/users.h"
@@ -10398,6 +11471,7 @@ index 03330d3..989961d 100644
 +    __atomic_store_n(&g_opt_fps, fps, __ATOMIC_RELAXED);
 +    present_limit_changed();
 +}
++void options_graph_live(int on) { __atomic_store_n(&g_settings.frame_time_graph, on ? 1 : 0, __ATOMIC_RELAXED); }
 +void options_fsr3_live(int on) {
 +    __atomic_store_n(&g_settings.frame_generation, on ? 1 : 0, __ATOMIC_RELAXED);
 +    __atomic_store_n(&g_opt_frame_generation, on ? 1 : 0, __ATOMIC_RELAXED);
@@ -10422,7 +11496,7 @@ index 03330d3..989961d 100644
  /* the menu's page colour, its letters on the head's band, as R G B A bytes */
  #define LIGHT_RGBA                                                                                                     \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_PAGE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_PAGE & 0xFF00u) |                   \
-@@ -23,6 +60,7 @@
+@@ -23,6 +62,7 @@
  #define FAILURE                                                                                                        \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_FAILURE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_FAILURE & 0xFF00u) |             \
       (SNX_GUI_THEME_YORHA_FAILURE >> 16 & 0xFFu))
@@ -10430,7 +11504,25 @@ index 03330d3..989961d 100644
  #include <assert.h>
  #include <stdarg.h>
  #include <stdio.h>
-@@ -95,11 +133,12 @@ static void store(const char* key, const char* value) {
+@@ -64,6 +104,17 @@ int gamepad_layout(int i, int labels[4], int* symmetric) {
+ unsigned gamepad_held(int i) { return i < 0 ? pads_held[0] | pads_held[1] | pads_held[2] : i < 3 ? pads_held[i] : 0; }
+ const char* gamepad_name(int i) { return i >= 0 && i < 3 ? pad_names[i] : NULL; }
+ int gamepad_of_player(int slot) { return slot >= 0 && slot < 3 ? pad_of_player[slot] : -1; }
++int gamepad_player_seen(int slot) { return !slot || (slot > 0 && slot < SNX_GAMEPADS && g_settings.player_connected[slot]); }
++/* the co-op page's settings and the menu's head and poster: the game's name, its data folder, the time */
++static char ini_last_key[64], ini_last_value[16];
++void ini_set(const char* k, const char* v) {
++    snprintf(ini_last_key, sizeof ini_last_key, "%s", k);
++    snprintf(ini_last_value, sizeof ini_last_value, "%s", v);
++}
++static u64 test_now_ns = 1000000000ull;
++u64 plat_ns(void) { return test_now_ns; }
++char g_exename[256] = "Test Game", g_datadir[1024];
++const SnxModule* g_mod;
+ const IniOpt g_backend_ini[] = {
+     {"touch", "2", NULL, INI_INT, 0, &touch, 0, 2, NULL, "Touch screen", "Off|Fingers|Mouse too", 0, 0, 0},
+     {NULL, NULL, NULL, 0, 0, NULL, 0, 0, NULL, NULL, NULL, 0, 0, 0}};
+@@ -95,11 +146,12 @@ static void store(const char* key, const char* value) {
  
  enum { SW = 2424, SH = 1080 };
  static int px, py, s, C; /* C: the panel's columns, overlay_cols' */
@@ -10444,7 +11536,16 @@ index 03330d3..989961d 100644
  }
  /* ui.c's warning for a picture that does not draw */
  void logf_(int lvl, const char* fmt, ...) {
-@@ -179,15 +218,17 @@ int main(void) {
+@@ -170,7 +222,7 @@ static SnxOverlayError panel_of(const char* name, const char* msg, const char* h
+     return e;
+ }
+ int main(void) {
+-    const u32 ink = 0xFF3A4145u;
++    const u32 accent = 0xFF4B3BE6u; /* the head and the item in focus */
+     int x, y, sc;
+     vpad_set_store(store);
+     snx_pad_map_unset(&pads.own); /* as gamepad.c starts it: every control the button in its place */
+@@ -179,15 +231,17 @@ int main(void) {
      overlay_toggle();
      assert(overlay_shown());
      /* letters half the screen's height at most, in whole steps, in the middle: a phone held wide, a small window. The
@@ -10454,57 +11555,61 @@ index 03330d3..989961d 100644
      overlay_place(SW, SH, &px, &py, &s);
      C = overlay_cols(SW, s);
 -    assert(s == 2 && C == OVERLAY_COLS_MAX && px == (SW - C * 16) / 2 && py == (SH - 7 * 32) / 2);
-+    /* main page: title + hint + Display FPS + 6 items + blank = 11 rows */
-+    assert(s == 2 && C == OVERLAY_COLS_MAX && px == (SW - C * 16) / 2 && py == (SH - 11 * 32) / 2);
++    /* main page: title + hint + Display FPS + 7 items + blank = 12 rows */
++    assert(s == 2 && C == OVERLAY_COLS_MAX && px == (SW - C * 16) / 2 && py == (SH - 12 * 32) / 2);
      assert(overlay_cols(1280, 2) == 60 && overlay_cols(500, 1) == 46 && overlay_cols(400, 1) == OVERLAY_COLS &&
             overlay_cols(3840, 4) == OVERLAY_COLS_MAX);
 -    overlay_place(500, 120, &x, &y, &sc);
 -    assert(sc == 1 && x == (500 - 46 * 8) / 2 && y == 4);
 +    overlay_place(500, 152, &x, &y, &sc);
 +    /* six main items: 11 rows × 16px exceeds 152, so the panel sits slightly off the top */
-+    assert(sc == 1 && x == (500 - 46 * 8) / 2 && y == (152 - 11 * 16) / 2);
++    assert(sc == 1 && x == (500 - 46 * 8) / 2 && y == (152 - 12 * 16) / 2);
      /* a phone's display scale: the Poco F8 (408 dpi, 2510x1156) and the Pixel 9 (420 dpi) at 3x, where half the
         picture gave 2x; a 4K picture at 100% keeps the 4x half of it gives */
      overlay_set_display_scale(408.0f / 160);
-@@ -202,22 +243,60 @@ int main(void) {
+@@ -202,25 +256,66 @@ int main(void) {
  
      /* the first page: the title on a band of ink, the items under it, the focused one on a band; the page hides the
         game, whose text would show through it */
 +    item0 = 4;
 +    overlay_note_display_fps(118);
-     draw();
--    assert(list.q[0].w == (float)(C * 16) && list.q[0].h == 7 * 32 && list.q[1].rgba == ink && list.q[1].h == 32);
-+    assert(list.q[0].w == (float)(C * 16) && list.q[0].h == 11 * 32 && list.q[1].rgba == ink && list.q[1].h == 32);
-     assert(list.q[0].rgba >> 24 == 0xFFu);
--    assert(text_at(C - 2, 3, ">") && text_at(C - 2, 4, ">")); /* a page under each */
--    assert(text_at(1, 0, "SCARLETNX  /  MENU") && text_at(1, 3, "\xFE On-screen controls") &&
--           text_at(1, 4, "\xFE Controllers") && text_at(1, 5, "\xFE Exit"));
-+    assert(text_at(C - 2, 4, ">") && text_at(C - 2, 5, ">")); /* a page under each */
-+    assert(text_at(1, 0, "SCARLETNX  /  MENU") && shows("Engine " PF_ENGINE_VERSION " | Display FPS: 118 of 60 (game 60) | Limit: game") &&
++    draw();
++    /* the game dimmed under the menu (q[0]), the panel (q[1]) and its head in the accent (q[2]) */
++    assert(list.q[0].rgba == 0xB4000000u && list.q[0].w == (float)SW && list.q[0].h == (float)SH);
++    assert(list.q[1].w == (float)(C * 16) && list.q[1].h == 12 * 32 && list.q[2].rgba == accent && list.q[2].h == 32);
++    assert(list.q[1].rgba >> 24 == 0xFFu);
++    assert(text_at(C - 2, 4, ">") && text_at(C - 2, 5, ">") && text_at(C - 2, 6, ">")); /* a page under each */
++    assert(text_at(1, 0, "PORTFORGE  /  TEST GAME") && shows("Engine " PF_ENGINE_VERSION " | Display FPS: 118 of 60 (game 60) | Limit: game") &&
 +           text_at(1, 4, "\xFE On-screen controls") && text_at(1, 5, "\xFE Controllers") &&
-+           text_at(1, 6, "\xFE Frame-time graph") && text_at(1, 7, "\xFE PortForge FSR 3") &&
-+           text_at(1, 8, "\xFE FPS limit") && text_at(1, 9, "\xFE Exit") && text_at(C - 4, 6, "Off"));
++           text_at(1, 6, "\xFE Co-op") && text_at(1, 7, "\xFE Frame-time graph") &&
++           text_at(1, 8, "\xFE PortForge FSR 3") && text_at(1, 9, "\xFE FPS limit") &&
++           text_at(1, 10, "\xFE Exit") && text_at(C - 4, 7, "Off"));
 +    /* left/right on FPS limit updates Limit on the status line at once; Display FPS is the latest measurement */
 +    g_opt_fps = 60;
 +    draw();
 +    assert(shows("Limit: 60"));
-+    assert(tap(4, C - 2) == OVERLAY_NONE && g_opt_fps == 120);
++    assert(tap(5, C - 2) == OVERLAY_NONE && g_opt_fps == 120);
 +    draw();
 +    assert(shows("Display FPS: 118") && shows("Limit: 120"));
-+    /* the frame-time graph turns on and off for this run, nothing kept */
++    /* the frame-time graph turns on and off, kept for the next launch with the menu's other choices */
 +    stored[0] = 0;
-+    assert(tap(2, 3) == OVERLAY_NONE && g_settings.frame_time_graph && !stored[0]);
-+    draw();
-+    assert(text_at(C - 3, 6, "On"));
-+    assert(tap(2, 3) == OVERLAY_NONE && !g_settings.frame_time_graph);
++    assert(tap(3, 3) == OVERLAY_NONE && g_settings.frame_time_graph && !stored[0]);
+     draw();
+-    assert(list.q[0].w == (float)(C * 16) && list.q[0].h == 7 * 32 && list.q[1].rgba == ink && list.q[1].h == 32);
+-    assert(list.q[0].rgba >> 24 == 0xFFu);
+-    assert(text_at(C - 2, 3, ">") && text_at(C - 2, 4, ">")); /* a page under each */
+-    assert(text_at(1, 0, "SCARLETNX  /  MENU") && text_at(1, 3, "\xFE On-screen controls") &&
+-           text_at(1, 4, "\xFE Controllers") && text_at(1, 5, "\xFE Exit"));
++    assert(text_at(C - 3, 7, "On"));
++    assert(tap(3, 3) == OVERLAY_NONE && !g_settings.frame_time_graph);
 +    g_settings.upscaler = 0;
-+    assert(tap(3, 3) == OVERLAY_NONE && g_settings.frame_generation && g_settings.upscaler == 1 && !stored[0]);
-+    assert(tap(3, 3) == OVERLAY_NONE && !g_settings.frame_generation);
++    assert(tap(4, 3) == OVERLAY_NONE && g_settings.frame_generation && g_settings.upscaler == 1 && !stored[0]);
++    assert(tap(4, 3) == OVERLAY_NONE && !g_settings.frame_generation);
 +    /* FPS limit cycles session-only; with frame generation on, the label shows the display rate.
 +       Tap the right side of the value (arrows) so the step goes up, not down. */
 +    g_opt_fps = SNX_FPS_GAME;
-+    assert(tap(4, C - 2) == OVERLAY_NONE && g_opt_fps == 30 && !stored[0]);
-+    assert(tap(4, C - 2) == OVERLAY_NONE && g_opt_fps == 60);
++    assert(tap(5, C - 2) == OVERLAY_NONE && g_opt_fps == 30 && !stored[0]);
++    assert(tap(5, C - 2) == OVERLAY_NONE && g_opt_fps == 60);
 +    g_opt_frame_generation = 1;
 +    draw();
 +    assert(shows("60 (120 on screen)") && shows("of 120 (game 60) | Limit: 60"));
@@ -10518,12 +11623,12 @@ index 03330d3..989961d 100644
 +    g_opt_frame_generation = 0;
      /* a tap on Exit exits; on the title, nothing; outside the panel, it closes */
 -    assert(tap(2, 3) == OVERLAY_EXIT && tap(-3, 3) == OVERLAY_NONE);
-+    assert(tap(5, 3) == OVERLAY_EXIT && tap(-3, 3) == OVERLAY_NONE);
++    assert(tap(6, 3) == OVERLAY_EXIT && tap(-3, 3) == OVERLAY_NONE);
      assert(overlay_tap(5.0f, 5.0f, SW, SH) == OVERLAY_CLOSE);
      /* the focus goes round, from Exit to the first item and back over the top; Back from here closes */
      overlay_move(1);
 -    overlay_move(-4);
-+    overlay_move(-7);
++    overlay_move(-8);
      assert(overlay_select() == OVERLAY_EXIT && overlay_back() == OVERLAY_CLOSE);
  
      /* the controls' page: each setting shown with its value, changed and kept */
@@ -10531,9 +11636,46 @@ index 03330d3..989961d 100644
      assert(tap(0, 3) == OVERLAY_NONE);
 +    item0 = 3;
      draw();
-     assert(text_at(1, 0, "SCARLETNX  /  CONTROLS") && text_at(1, 3, "\xFE Show controls"));
-     assert(list.q[0].h == 16 * 32 && text_at(C - 2, 12, ">")); /* twelve items: the tallest; Buttons opens a page */
-@@ -314,18 +393,26 @@ int main(void) {
+-    assert(text_at(1, 0, "SCARLETNX  /  CONTROLS") && text_at(1, 3, "\xFE Show controls"));
+-    assert(list.q[0].h == 16 * 32 && text_at(C - 2, 12, ">")); /* twelve items: the tallest; Buttons opens a page */
++    assert(text_at(1, 0, "CONTROLS  /  TEST GAME") && text_at(1, 3, "\xFE Show controls"));
++    assert(list.q[1].h == 16 * 32 && text_at(C - 2, 12, ">")); /* twelve items: the tallest; Buttons opens a page */
+     /* named as the .ini's rows name them, in the launcher's order, the game's own actions among them */
+     assert(text_at(1, 4, "\xFE Edit layout") && text_at(1, 5, "\xFE Snap to grid") &&
+            text_at(1, 8, "\xFE Relative stick center"));
+@@ -271,7 +366,7 @@ int main(void) {
+     /* the buttons' page: one hidden and kept, All shows them again; it scrolls to its last item */
+     assert(tap(9, 3) == OVERLAY_NONE);
+     draw();
+-    assert(text_at(1, 0, "SCARLETNX  /  BUTTONS") && text_at(1, 4, "\xFE L"));
++    assert(text_at(1, 0, "BUTTONS  /  TEST GAME") && text_at(1, 4, "\xFE L"));
+     log_[0] = 0;
+     tap(1, 3);
+     assert(!g_settings.control_shown[SNX_VPAD_L] && !strcmp(log_, "controls_l_shown=0;")); /* its place stays */
+@@ -294,10 +389,10 @@ int main(void) {
+     /* Back on it, and the key Back, go up a page each */
+     assert(overlay_select() == OVERLAY_NONE);
+     draw();
+-    assert(text_at(1, 0, "SCARLETNX  /  CONTROLS"));
++    assert(text_at(1, 0, "CONTROLS  /  TEST GAME"));
+     assert(overlay_back() == OVERLAY_NONE);
+     draw();
+-    assert(text_at(1, 0, "SCARLETNX  /  MENU"));
++    assert(text_at(1, 0, "PORTFORGE  /  TEST GAME"));
+     /* a pad's buttons, as the game reads them: the D-pad and the left stick move, A selects, B goes back, the rest do
+        nothing */
+     {
+@@ -306,26 +401,36 @@ int main(void) {
+         assert(overlay_pad(1ull << 13) == OVERLAY_NONE && overlay_pad(1ull << 2) == OVERLAY_NONE); /* X */
+         assert(overlay_pad(1ull << 0) == OVERLAY_NONE);                                            /* Controllers */
+         draw();
+-        assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS"));
++        assert(text_at(1, 0, "CONTROLLERS  /  TEST GAME"));
+         assert(overlay_pad(1ull << 1) == OVERLAY_NONE);
+         draw();
+-        assert(text_at(1, 0, "SCARLETNX  /  MENU"));
++        assert(text_at(1, 0, "PORTFORGE  /  TEST GAME"));
+         /* the pads each poll (the on-screen controls and the connected ones): a press acts once; a direction held, the
             left stick past half way as one, goes on after a while, then on and on; with the menu closed, nothing, and
             a press held as it opens does not act */
          assert(overlay_controls(0, still, 1000) == OVERLAY_NONE); /* the focus back on Controllers */
@@ -10542,8 +11684,9 @@ index 03330d3..989961d 100644
 -        assert(overlay_controls(1ull << 0, down, 1000 + SNX_OVERLAY_REPEAT_DELAY - 1) == OVERLAY_EXIT); /* not yet */
 -        assert(overlay_controls(0, down, 1000 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* round to the top */
 -        assert(overlay_controls(1ull << 0, down, 1001 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* a page */
-+        assert(overlay_controls(0, down, 1000) == OVERLAY_NONE);  /* to the graph */
++        assert(overlay_controls(0, down, 1000) == OVERLAY_NONE);  /* to Co-op */
 +        assert(overlay_controls(0, still, 1001) == OVERLAY_NONE);
++        overlay_move(1); /* to the graph */
 +        overlay_move(1); /* to frame generation, whose toggle is checked above */
 +        overlay_move(1); /* past FPS limit */
 +        assert(overlay_controls(0, down, 1002) == OVERLAY_NONE); /* to Exit */
@@ -10552,11 +11695,13 @@ index 03330d3..989961d 100644
 +        assert(overlay_controls(0, down, 1002 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* round to the top */
 +        assert(overlay_controls(1ull << 0, down, 1003 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* a page */
          draw();
-         assert(text_at(1, 0, "SCARLETNX  /  CONTROLS"));
+-        assert(text_at(1, 0, "SCARLETNX  /  CONTROLS"));
++        assert(text_at(1, 0, "CONTROLS  /  TEST GAME"));
          assert(overlay_controls(1ull << 1, still, 2000) == OVERLAY_NONE);  /* B: back to the menu, on its first */
          assert(overlay_controls(1ull << 15, still, 2001) == OVERLAY_NONE); /* the D-pad down: Controllers */
 -        assert(overlay_controls(1ull << 15, still, 2001 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* Exit */
-+        assert(overlay_controls(1ull << 15, still, 2001 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* the graph */
++        assert(overlay_controls(1ull << 15, still, 2001 + SNX_OVERLAY_REPEAT_DELAY) == OVERLAY_NONE); /* Co-op */
++        overlay_move(1); /* to the graph */
 +        overlay_move(1); /* to frame generation */
 +        overlay_move(1); /* past FPS limit */
          assert(overlay_controls(1ull << 15, still, 2001 + SNX_OVERLAY_REPEAT_DELAY + SNX_OVERLAY_REPEAT_MS - 1) ==
@@ -10566,7 +11711,16 @@ index 03330d3..989961d 100644
          assert(overlay_controls(1ull << 0, still, 3000) == OVERLAY_EXIT);
          assert(overlay_controls(1ull << 13, still, 3001) == OVERLAY_NONE &&
                 overlay_controls(0, left, 3002) == OVERLAY_NONE);
-@@ -368,7 +455,9 @@ int main(void) {
+@@ -352,7 +457,7 @@ int main(void) {
+             vpad_state(&b, st);
+             assert(!b && overlay_controls(1ull << 0, still, 4001) == OVERLAY_NONE);
+             draw();
+-            assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS"));
++            assert(text_at(1, 0, "CONTROLLERS  /  TEST GAME"));
+             assert(overlay_controls(1ull << 1, still, 4002) == OVERLAY_NONE); /* B: the menu */
+             overlay_pointer_down(8, 5, 5, area);
+             assert(overlay_pointer_up(8, 5, 5, SW, SH) == OVERLAY_CLOSE);
+@@ -368,10 +473,12 @@ int main(void) {
  
      /* the controllers' page: the ones connected, the Player row (every player's, or one's own), Swap A/B, the dead
         zone by fives, the vibration by tens down to Off and the background input, each kept */
@@ -10574,17 +11728,111 @@ index 03330d3..989961d 100644
      assert(tap(1, 3) == OVERLAY_NONE);
 +    item0 = 3;
      draw();
-     assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS") && text_at(1, 1, "None connected."));
-     assert(list.q[0].h == 11 * 32 && text_at(1, 3, "\xFE Player") && shows("< All >"));
-@@ -494,6 +583,7 @@ int main(void) {
+-    assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS") && text_at(1, 1, "None connected."));
+-    assert(list.q[0].h == 11 * 32 && text_at(1, 3, "\xFE Player") && shows("< All >"));
++    assert(text_at(1, 0, "CONTROLLERS  /  TEST GAME") && text_at(1, 1, "None connected."));
++    assert(list.q[1].h == 11 * 32 && text_at(1, 3, "\xFE Player") && shows("< All >"));
+     assert(text_at(1, 4, "\xFE Swap A/B") && text_at(C - 4, 4, "Off"));
+     tap(1, 3);
+     assert(g_settings.swap_a_b && pad_stored == &g_settings.swap_a_b);
+@@ -445,7 +552,7 @@ int main(void) {
+     }
+     assert(overlay_back() == OVERLAY_NONE); /* no presets to go back to: up to its item at once */
+     draw();
+-    assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS") && text_at(1, 8, "\xFE Button map"));
++    assert(text_at(1, 0, "CONTROLLERS  /  TEST GAME") && text_at(1, 8, "\xFE Button map"));
+     pads_held[0] = 0;
+     /* the Player row steps to player 1: its Swap A/B and Vibration its own, As All until picked; its Button map
+        its own map, kept as its key; round the eight back to All */
+@@ -494,19 +601,56 @@ int main(void) {
      assert(shows("< All >"));
      /* Back, on its item or the key, comes up to the controllers' item */
      assert(tap(6, 3) == OVERLAY_NONE);
 +    item0 = 4;
      draw();
-     assert(text_at(1, 0, "SCARLETNX  /  MENU") && overlay_select() == OVERLAY_NONE);
+-    assert(text_at(1, 0, "SCARLETNX  /  MENU") && overlay_select() == OVERLAY_NONE);
++    assert(text_at(1, 0, "PORTFORGE  /  TEST GAME") && overlay_select() == OVERLAY_NONE);
      draw();
-@@ -768,6 +858,24 @@ int main(void) {
+-    assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS") && overlay_back() == OVERLAY_NONE);
++    assert(text_at(1, 0, "CONTROLLERS  /  TEST GAME") && overlay_back() == OVERLAY_NONE);
+     draw();
+-    assert(text_at(1, 0, "SCARLETNX  /  MENU"));
++    assert(text_at(1, 0, "PORTFORGE  /  TEST GAME"));
++    /* the co-op page: each player and what drives them; players 2 to 4 switched on and off, kept in the .ini */
++    pad_names[1] = "DualSense Wireless Controller";
++    item0 = 4;
++    assert(tap(2, 3) == OVERLAY_NONE);
++    item0 = 3;
++    draw();
++    assert(text_at(1, 0, "CO-OP  /  TEST GAME") && text_at(1, 1, "Connect a controller (USB or Bluetooth)"));
++    assert(text_at(1, 3, "\xFE Player 1") && text_at(1, 6, "\xFE Player 4") && text_at(1, 7, "\xFE Back"));
++    assert(shows("Xbox Wireless Controller") && shows("DualSense Wireless Controller"));
++    g_settings.player_connected[3] = 1;
++    draw();
++    assert(shows("Waiting for a controller"));
++    assert(tap(3, 3) == OVERLAY_NONE && !g_settings.player_connected[3] && !strcmp(ini_last_key, "gamepad_p4_connected") &&
++           !strcmp(ini_last_value, "0"));
++    draw();
++    assert(text_at(C - 4, 6, "Off"));
++    assert(tap(3, 3) == OVERLAY_NONE && g_settings.player_connected[3] && !strcmp(ini_last_value, "1"));
++    assert(tap(4, 3) == OVERLAY_NONE); /* Back, on Co-op */
++    item0 = 4;
++    draw();
++    assert(text_at(1, 0, "PORTFORGE  /  TEST GAME"));
++    /* a controller joining: its card pops in at the top right, the menu shown or not, then goes after a few seconds */
++    overlay_note_pad(1, "DualSense Wireless Controller", 1, 1);
++    test_now_ns += 400000000ull; /* past its pop */
++    list.n = 0;
++    overlay_toasts_draw(&list, SW, SH);
++    assert(shows("PLAYER 2 JOINED") && shows("BLUETOOTH") && shows("DualSense Wireless Controller"));
++    overlay_note_pad(2, "A controller with a very long name indeed", 1, 0);
++    test_now_ns += 400000000ull;
++    list.n = 0;
++    overlay_toasts_draw(&list, SW, SH);
++    assert(shows("PLAYER 3 JOINED") && shows("USB") && shows("A controller with a very lo...") && !shows("long name"));
++    test_now_ns += 5000000000ull; /* gone */
++    list.n = 0;
++    overlay_toasts_draw(&list, SW, SH);
++    assert(!list.n);
+     /* closed, it draws nothing; opened again, its first page */
+     overlay_toggle();
+     draw();
+     assert(!overlay_shown() && !list.n);
+     overlay_toggle();
+     draw();
+-    assert(text_at(1, 0, "SCARLETNX  /  MENU"));
++    assert(text_at(1, 0, "PORTFORGE  /  TEST GAME"));
+ 
+     /* ui.c: the atlas with the font's glyphs, white where a glyph's bit is, and sprites' alpha premultiplied */
+     {
+@@ -521,7 +665,7 @@ int main(void) {
+         assert(!ui_atlas(&w, &h, &version));
+         ui_atlas_set(sprites, SNX_CONTROLS_ATLAS_WIDTH, SNX_CONTROLS_ATLAS_HEIGHT);
+         a = ui_atlas(&w, &h, &version);
+-        assert(a && version == 1 && w == SNX_CONTROLS_ATLAS_WIDTH && h == SNX_CONTROLS_ATLAS_HEIGHT + SNX_UI_PICTURE);
++        assert(a && version == 1 && w == SNX_CONTROLS_ATLAS_WIDTH && h == SNX_CONTROLS_ATLAS_HEIGHT + SNX_UI_POSTER);
+         /* no user read yet: the picture's rows are transparent */
+         for (y = 0; y < SNX_UI_PICTURE; ++y)
+             for (x = 0; x < SNX_UI_PICTURE; ++x) assert(!a[(SNX_CONTROLS_ATLAS_HEIGHT + y) * w + x]);
+@@ -714,7 +858,7 @@ int main(void) {
+         assert(SNX_GUI_THEME_YORHA_PICTURE == 1); /* square: the frame is the fills' */
+         ui_atlas_set(sprites, SNX_CONTROLS_ATLAS_WIDTH, SNX_CONTROLS_ATLAS_HEIGHT);
+         a = ui_atlas(&w, &h, &version);
+-        assert(a && h == SNX_CONTROLS_ATLAS_HEIGHT + SNX_UI_PICTURE);
++        assert(a && h == SNX_CONTROLS_ATLAS_HEIGHT + SNX_UI_POSTER);
+         for (y = 0; y < SNX_UI_PICTURE; ++y)
+             for (x = 0; x < SNX_UI_PICTURE; ++x) {
+                 u32 p = snx_le32(a[(SNX_CONTROLS_ATLAS_HEIGHT + y) * w + x]); /* the GPU's bytes R G B A */
+@@ -755,7 +899,7 @@ int main(void) {
+                     assert(q->y == band + 2 * edge && q->h == side && q->w == side && !q->sharp);
+                     assert(q->x + q->w == right - 2 * edge);
+                 }
+-                frames += q->rgba == LIGHT_RGBA && q->sharp && (q->w == edge || q->h == edge) && q->x >= boxx &&
++                frames += q->rgba == 0xFFFFFFFFu && q->sharp && (q->w == edge || q->h == edge) && q->x >= boxx &&
+                           q->x < right && q->y >= band && q->y < band + 16.0f * (float)s;
+                 if (q->u == SNX_CONTROLS_FONT_X + 'P' % 16 * 8 && q->v == SNX_CONTROLS_FONT_Y + 'P' / 16 * 16 &&
+                     q->y == band && q->x > boxx)
+@@ -768,6 +912,24 @@ int main(void) {
          for (i = 0, pictures = 0; i < list.n; ++i) pictures += list.q[i].v == SNX_CONTROLS_ATLAS_HEIGHT;
          assert(!pictures && !shows("Player"));
      }
@@ -10598,13 +11846,13 @@ index 03330d3..989961d 100644
 +        assert(overlay_controls(1, down, 12000) == OVERLAY_NONE);
 +        assert(overlay_select() == OVERLAY_NONE);
 +        draw();
-+        assert(text_at(1, 0, "SCARLETNX  /  CONTROLS")); /* still on the first root item */
++        assert(text_at(1, 0, "CONTROLS  /  TEST GAME")); /* still on the first root item */
 +        assert(overlay_back() == OVERLAY_NONE);
 +        assert(overlay_controls(0, still, 12001) == OVERLAY_NONE);
 +        assert(overlay_controls(0, down, 12002) == OVERLAY_NONE);
 +        assert(overlay_controls(1, still, 12003) == OVERLAY_NONE);
 +        draw();
-+        assert(text_at(1, 0, "SCARLETNX  /  CONTROLLERS")); /* a fresh down and confirm */
++        assert(text_at(1, 0, "CONTROLLERS  /  TEST GAME")); /* a fresh down and confirm */
 +    }
      puts("overlay: placing, pages, taps, keys, values, scrolling, look, the error's panel, the atlas and the user "
           "passed");
@@ -10889,10 +12137,19 @@ index a9d357a..6d09d89 100644
      (void)what, (void)file, (void)line;
      return r == VK_SUCCESS;
 diff --git a/tests/vpad.c b/tests/vpad.c
-index f9f4388..25aa2df 100644
+index f9f4388..ee8cdf9 100644
 --- a/tests/vpad.c
 +++ b/tests/vpad.c
-@@ -30,6 +30,13 @@ void options_language_set(const IniOpt* o, const char* v) {
+@@ -12,6 +12,8 @@
+ 
+ /* ui.c's lock, without the platform layer */
+ #include "nx/runtime/platform/plat.h"
++
++char g_datadir[1024]; /* ui.c reads the key art from it: none here */
+ void pm_lock(PMutex* m) { (void)m; }
+ void pm_unlock(PMutex* m) { (void)m; }
+ 
+@@ -30,6 +32,13 @@ void options_language_set(const IniOpt* o, const char* v) {
      (void)o;
      (void)v;
  }

@@ -12,6 +12,9 @@ namespace PortForge
     public sealed class NativeRequest
     {
         public string Name, Input, Backend, Output, ProductKeys, TitleKeys;
+        /// <summary>Folder of .pchtxt code patches to apply (CodePatches.FolderPath when null; empty for none).</summary>
+        public string PatchFolder;
+        public List<string> AppliedPatches = new List<string>();
         public bool AutoOptimize;
         public bool MatchHardware = true;
         public HardwareProfile Hardware;
@@ -108,6 +111,11 @@ namespace PortForge
                     int jobs = HardwareProfile.CompilerJobsFor(Environment.ProcessorCount);
                     ReportStatus(status, "Converting the game", "Creating Windows game code with " + jobs + " CPU workers. You can follow the details below or cancel at any time.");
                     log.WriteLine("Compiler jobs: " + jobs + " (logical CPUs: " + Environment.ProcessorCount + ")");
+                    // Code patches (.pchtxt, such as a game's 60 FPS patch) go into the game's mods folder before the
+                    // compile, which builds the game from the patched modules; the runtime loads the same ones
+                    string exefsIn = Directory.Exists(Path.Combine(input, "exefs")) ? Path.Combine(input, "exefs") : input;
+                    r.AppliedPatches = CodePatches.PrepareMods(exefsIn, r.PatchFolder ?? CodePatches.FolderPath, Path.Combine(compiled, r.Name, r.Name + "_data"));
+                    foreach (string line in r.AppliedPatches) { log.WriteLine(line); progress.Report(line); }
                     // Scale --jobs with the PC instead of a hard-coded 2. Do not pass --keep-ir: writing IR for every
                     // function multiplies disk I/O and is not needed for a finished game folder.
                     Run(r.Backend, new[] { "--repo", repo, "-r", input, r.Name, "--outdir", compiled, "--runtime", Path.GetFullPath(r.Backend), "--jobs", jobs.ToString() }, stage, log, progress, token);
