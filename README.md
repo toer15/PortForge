@@ -91,9 +91,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test -BackendPa
 
 ## Releasing a version
 
+### Automatic (recommended)
+
+Push a version tag — the CI builds, tests, and publishes the release:
+
+```powershell
+# 1. Update version in src/AssemblyInfo.cs and src/NativeApp.cs (e.g. 0.54.0.0)
+# 2. Commit and tag
+git add src/AssemblyInfo.cs src/NativeApp.cs
+git commit -m "PortForge 0.54"
+git tag v0.54
+git push origin main --tags
+```
+
+The **CI & Release** workflow (`.github/workflows/ci.yml`) will:
+- Build the Engine and app on Windows
+- Run engine pacing tests and FG cadence tests
+- Create `PortForge-<version>-Windows-and-Source.zip`, `PortForge-<version>-source.zip`, `PortForge-Setup-<version>.exe`, `PortForge-<version>-SHA256.txt`
+- Publish a GitHub release tagged `v<version>` with `VALIDATION-<version>.md` as release notes
+- The in-app **Check for updates** button picks it up automatically
+
+### Manual (for testing or hotfixes)
+
 1. Raise the version in `src/AssemblyInfo.cs` (and the window title in `src/NativeApp.cs`), build with `-Test`.
 2. Run `build-release.ps1 -Version <version>` (or `-SkipBuild` after a local build). It stages the Windows+Source ZIP, source-only ZIP, Setup.exe and SHA256 sums under `build\release-<version>`, and **excludes** `.git`, `.cache` and `build` from Source (required so older in-app updaters can install the package).
 3. Create a GitHub release tagged `v<version>` and attach those assets. The in-app **Check for updates** button picks it up.
+
+Or run the **Ship PortForge** workflow manually from the Actions tab with the version input.
 
 ## More documentation
 

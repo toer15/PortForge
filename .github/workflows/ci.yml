@@ -1,0 +1,242 @@
+# Automatic build and release on version changes
+# On push to main: builds and tests
+# On tag push (v*): builds, tests, and publishes GitHub release
+name: CI & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows Build & Test
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: msys2 {0}
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+      is-tag: ${{ steps.check-tag.outputs.is-tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up MSYS2 CLANG64
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: CLANG64
+          update: true
+          path-type: strict
+          install: >-
+            git make patch perl patchutils
+            mingw-w64-clang-x86_64-glslang
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-lld
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-nasm
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-spirv-tools
+            mingw-w64-clang-x86_64-ccache
+
+      - name: Check required dependencies
+        run: |
+          set -euo pipefail
+          clang --version
+          llvm-config --version
+          test -f "$(llvm-config --includedir)/llvm-c/Core.h"
+          test -d "$(llvm-config --libdir)"
+          llvm-config --libs core native passes target analysis
+          make --version
+          perl --version
+          nasm --version
+          spirv-val --version
+          spirv-dis --version
+
+      - name: Get version from AssemblyInfo.cs
+        id: get-version
+        run: |
+          ver=$(grep 'AssemblyVersion' src/AssemblyInfo.cs | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)\.0".*/\1/')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Check if this is a version tag push
+        id: check-tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            tag_version="${{ github.ref_name }}"
+            tag_version="${tag_version#v}"
+            echo "is-tag=true" >> "$GITHUB_OUTPUT"
+            echo "tag_version=$tag_version" >> "$GITHUB_OUTPUT"
+            if [[ "$tag_version" != "${{ steps.get-version.outputs.version }}" ]]; then
+              echo "::error::Tag version ($tag_version) doesn't match AssemblyInfo.cs (${{ steps.get-version.outputs.version }})"
+              exit 1
+            fi
+          else
+            echo "is-tag=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Engine source (ScarletNX at engine/BASE + the PortForge patch)
+        id: src
+        run: |
+          set -euo pipefail
+          base=$(tr -d '\r\n' < engine/BASE)
+          version=$(tr -d '\r\n' < engine/VERSION)
+          git -c core.autocrlf=false clone --filter=blob:none https://github.com/scarletnx/ScarletNX engine/src
+          git -C engine/src config core.autocrlf false
+          git -C engine/src checkout -q "$base"
+          git -C engine/src apply --whitespace=nowarn "$PWD/engine/portforge-engine.patch"
+          grep -q "PF_ENGINE_VERSION \"$version\"" engine/src/src/nx/runtime/pf_engine_version.h
+          echo "Engine $version on ScarletNX $base"
+
+      - name: Restore caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            engine/src/.cache/cpm
+            engine/src/.cache/ccache
+          key: engine-${{ hashFiles('engine/BASE') }}-${{ github.run_id }}
+          restore-keys: engine-${{ hashFiles('engine/BASE') }}-
+
+      - name: Set up ccache environment
+        run: |
+          ws=${GITHUB_WORKSPACE//\\//}
+          {
+            echo "CCACHE_DIR=$ws/engine/src/.cache/ccache"
+            echo "CCACHE_BASEDIR=$ws/engine/src"
+            echo "CCACHE_NOHASHDIR=true"
+            echo "SNX_DEPS_CACHE=$ws/engine/src/.cache/deps"
+            echo "SNX_CCACHE_START=$(date +%s)"
+          } >> "$GITHUB_ENV"
+
+      - name: Build the Engine
+        id: engine
+        run: |
+          set -euo pipefail
+          cd engine/src
+          cmake --preset default \
+            -DSNX_LLVM_CONFIG="$(cygpath -m "$(command -v llvm-config)")" \
+            -DSNX_FFMPEG_SH="$(cygpath -m /usr/bin/sh.exe)" \
+            -DSNX_FFMPEG_MAKE="$(cygpath -m /usr/bin/make.exe)" \
+            -DPERL_EXECUTABLE="$(cygpath -m /usr/bin/perl.exe)" \
+            -DSNX_OPENSSL_MAKE="$(cygpath -m /usr/bin/make.exe)" \
+            -DCMAKE_DISABLE_FIND_PACKAGE_SDL3=ON -DSNX_DEPLOY=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)"
+          cmake --install build/default --prefix ../package
+          echo ENGINE_BUILD_OK
+
+      - name: Engine pacing tests
+        id: tests
+        run: |
+          set -euo pipefail
+          cd engine/src
+          {
+            cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file --parallel "$(getconf _NPROCESSORS_ONLN)"
+            ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file)$' --output-on-failure
+          } 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-tests.log"
+
+      - name: Package the Engine
+        id: package
+        run: |
+          set -euo pipefail
+          cd engine
+          base=$(cat BASE 2>/dev/null || git -C src log -1 --format=%h)
+          version=$(cat VERSION 2>/dev/null || echo 1.0)
+          printf 'version=%s\nbase=%s\nfeatures=%s\n' "$version" "$base" "$(cat FEATURES 2>/dev/null || echo 'Smart async shaders')" > package/ENGINE.txt
+          mkdir -p package/licenses
+          cp src/LICENSE package/licenses/ScarletNX-LICENSE.txt
+          cp src/src/nx/gpu/vk/fsr1/LICENSE.txt package/licenses/AMD-FidelityFX-FSR1-LICENSE.txt
+          cp src/src/nx/gpu/vk/fsr1/UPSTREAM.txt package/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt
+          echo "PACKAGE_OK package"; ls package
+
+      - name: Build the app
+        id: app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\build-native.ps1
+          $csc = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
+          & $csc /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /r:System.Core.dll /out:build\FgCadenceTests.exe tests\FgCadenceTests.cs
+          if ($LASTEXITCODE -ne 0) { throw 'FG cadence tests did not compile.' }
+          & .\build\FgCadenceTests.exe
+          if ($LASTEXITCODE -ne 0) { throw 'FG cadence tests failed.' }
+          if (-not (Test-Path build\PortForgeNative\Engine\scarletnx.exe)) { throw 'The app was built without its Engine.' }
+
+      - name: Build release artifacts
+        if: steps.check-tag.outputs.is-tag == 'true'
+        id: release-build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ steps.get-version.outputs.version }}'
+          .\build-release.ps1 -Version $v -SkipBuild
+          Get-ChildItem "build\release-$v" -File | Format-Table Name, Length
+          echo "release_dir=build\release-$v" >> $env:GITHUB_OUTPUT
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: portforge-${{ steps.get-version.outputs.version }}-${{ github.sha }}
+          path: |
+            build/PortForgeNative/
+            ${{ steps.release-build.outputs.release_dir }}/
+          if-no-files-found: warn
+
+      - name: Report failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "::error title=steps::source ${{ steps.src.outcome }}, engine ${{ steps.engine.outcome }}, tests ${{ steps.tests.outcome }}, package ${{ steps.package.outcome }}, app ${{ steps.app.outcome }}"
+          for f in ci-*.log; do
+            [ -f "$f" ] || continue
+            body=$(grep -v '^[[:space:]]*$' "$f" | tail -n 45 | cut -c1-300 | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=$f::$body"
+            grep -n -E 'error:|Error |FAILED|fatal' "$f" | head -n 8 | while IFS= read -r line; do echo "::error title=$f match::${line//%/%25}"; done
+          done
+
+  release:
+    name: Create GitHub Release
+    needs: windows
+    if: needs.windows.outputs.is-tag == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: portforge-${{ needs.windows.outputs.version }}-${{ github.sha }}
+          path: release-files
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${{ needs.windows.outputs.version }}"
+          tag="v$v"
+          engine=$(cat engine/VERSION | tr -d '\r\n')
+          notes="VALIDATION-$v.md"
+          [ -f "$notes" ] || notes=README.md
+          files=(
+            release-files/PortForge-$v-Windows-and-Source.zip
+            release-files/PortForge-$v-source.zip
+            release-files/PortForge-Setup-$v.exe
+            release-files/PortForge-$v-SHA256.txt
+          )
+          echo "Creating release $tag..."
+          gh release create "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "PortForge $v / Engine $engine" --notes-file "$notes" --latest
