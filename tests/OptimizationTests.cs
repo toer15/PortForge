@@ -272,6 +272,48 @@ internal static class OptimizationTests
                 Check(appliedGlobal["fps_limit"] == limit && appliedGlobal["frame_generation"] == (upscaleMode == 2 ? "1" : "0") && appliedGlobal["upscaler"] == (upscaleMode == 0 ? "0" : "1"),
                     "Global preference " + limit + "/" + upscaleMode + " keeps the exact limit and turns FSR 3 off when it is off");
             }
+            {
+                // code patches: a module whose code is one LZ4 literal run and whose data is stored as it is, both hashed
+                byte[] code = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray(), data = { 9, 9, 9, 9, 9, 9, 9, 9 };
+                byte[] lz4 = new byte[] { 0xF0, 32 - 15 }.Concat(code).ToArray();
+                var nso = new byte[0x100 + lz4.Length + data.Length];
+                Encoding.ASCII.GetBytes("NSO0").CopyTo(nso, 0);
+                BitConverter.GetBytes(1u | 8u | 32u).CopyTo(nso, 0x0C); // code compressed, code and data hashed
+                BitConverter.GetBytes(0x100u).CopyTo(nso, 0x10); BitConverter.GetBytes(0u).CopyTo(nso, 0x14); BitConverter.GetBytes(32u).CopyTo(nso, 0x18);
+                BitConverter.GetBytes((uint)(0x100 + lz4.Length)).CopyTo(nso, 0x30); BitConverter.GetBytes(0x40u).CopyTo(nso, 0x34); BitConverter.GetBytes(8u).CopyTo(nso, 0x38);
+                BitConverter.GetBytes((uint)lz4.Length).CopyTo(nso, 0x60);
+                new byte[] { 0x20, 0x94, 0xF1, 0x52, 0x83, 0x66, 0x83, 0xA3, 0x63, 0x2C, 0x61, 0x53, 0xFD, 0x84, 0xAB, 0x80 }.CopyTo(nso, 0x40);
+                lz4.CopyTo(nso, 0x100); data.CopyTo(nso, 0x100 + lz4.Length);
+                string nl = "\n";
+                var parsed = CodePatches.Parse("// a comment" + nl + "@nsobid-2094F152836683A3632C6153FD84AB8" + nl + "@flag offset_shift 0x100" + nl + "@enabled" + nl +
+                    "0004 1f2003d5" + nl + "0041 \"AB\"" + nl + "@disabled" + nl + "0008 ffffffff" + nl, "test.pchtxt");
+                Check(parsed.Count == 1 && parsed[0].Edits.Count == 2 && parsed[0].Edits[0].Offset == 4 && parsed[0].Edits[1].Offset == 0x41, "A .pchtxt's offsets are module offsets with offset_shift 0x100, and @disabled lines are left out");
+                Check(CodePatches.Parse("@nsobid-2094F152836683A3" + nl + "@enabled" + nl + "0104 00" + nl, "t")[0].Edits[0].Offset == 4, "Without offset_shift a .pchtxt offset counts from the NSO header, like an IPS");
+                string buildId = CodePatches.BuildId(nso);
+                Check(CodePatches.Matches(parsed[0], buildId) && !CodePatches.Matches(new CodePatch { BuildId = "2094F152836683A4" }, buildId) && !CodePatches.Matches(new CodePatch { BuildId = "2094" }, buildId),
+                    "A patch applies only to the module whose build ID it names (a dropped trailing 0 still matches)");
+                byte[] patched = CodePatches.Apply(nso, parsed[0].Edits);
+                uint codeAt = BitConverter.ToUInt32(patched, 0x10), dataAt = BitConverter.ToUInt32(patched, 0x30);
+                using (var sha = System.Security.Cryptography.SHA256.Create())
+                    Check((BitConverter.ToUInt32(patched, 0x0C) & 7) == 0 && patched[codeAt + 4] == 0x1F && patched[codeAt + 7] == 0xD5 && patched[codeAt + 8] == 8 &&
+                          patched[dataAt + 1] == (byte)'A' && patched[dataAt + 2] == (byte)'B' && patched[dataAt] == 9 &&
+                          sha.ComputeHash(patched, (int)codeAt, 32).SequenceEqual(patched.Skip(0xA0).Take(32)) && sha.ComputeHash(patched, (int)dataAt, 8).SequenceEqual(patched.Skip(0xE0).Take(32)),
+                        "A patched module is written uncompressed, with the edits in code and data and fresh segment hashes");
+                bool refused = false;
+                try { CodePatches.Apply(nso, new[] { new CodeEdit { Offset = 0x30, Bytes = new byte[4] } }); } catch (InvalidDataException) { refused = true; }
+                Check(refused, "A patch that writes outside the module's segments is refused");
+                string exefs = Path.Combine(root, "exefs"), patchDir = Path.Combine(root, "patches"), dataDir = Path.Combine(root, "game_data");
+                Directory.CreateDirectory(exefs); Directory.CreateDirectory(patchDir);
+                File.WriteAllBytes(Path.Combine(exefs, "main"), nso);
+                File.WriteAllText(Path.Combine(patchDir, "60fps.pchtxt"), "@nsobid-2094F152836683A3632C6153FD84AB8" + nl + "@flag offset_shift 0x100" + nl + "@enabled" + nl + "0004 1f2003d5" + nl);
+                File.WriteAllText(Path.Combine(patchDir, "other-game.pchtxt"), "@nsobid-0123456789ABCDEF" + nl + "@enabled" + nl + "0104 00" + nl);
+                var patchReport = CodePatches.PrepareMods(exefs, patchDir, dataDir);
+                string mod = Path.Combine(dataDir, "mods", CodePatches.ModName, "exefs", "main");
+                Check(patchReport.Count == 1 && patchReport[0].Contains("60fps.pchtxt") && File.Exists(mod) && File.ReadAllBytes(mod)[0x100 + 4] == 0x1F,
+                    "Conversion puts the matching patch into the game's mods folder and ignores another game's");
+                Check(CodePatches.PrepareMods(exefs, Path.Combine(root, "no-patches"), Path.Combine(root, "untouched")).Count == 0 && !Directory.Exists(Path.Combine(root, "untouched")),
+                    "Without a patches folder conversion writes no mods");
+            }
             Console.WriteLine(checks + " optimization checks passed. Evidence: " + root); return 0;
         }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }
