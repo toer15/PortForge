@@ -22,6 +22,10 @@ base=$(cat "$root/BASE" 2>/dev/null || git -C "$root/src" log -1 --format=%h)
 version=$(cat "$root/VERSION" 2>/dev/null || echo 1.0)
 printf 'version=%s\nbase=%s\nfeatures=%s\n' "$version" "$base" "$(cat "$root/FEATURES" 2>/dev/null || echo 'Smart async shaders')" > "$pkg/ENGINE.txt"
 mkdir -p "$pkg/licenses"; cp "$root/src/LICENSE" "$pkg/licenses/ScarletNX-LICENSE.txt"
-cp "$root/src/src/nx/gpu/vk/fsr1/LICENSE.txt" "$pkg/licenses/AMD-FidelityFX-FSR1-LICENSE.txt"
-cp "$root/src/src/nx/gpu/vk/fsr1/UPSTREAM.txt" "$pkg/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt"
+if [[ -f "$root/src/src/nx/gpu/vk/fsr1/LICENSE.txt" ]]; then
+    cp "$root/src/src/nx/gpu/vk/fsr1/LICENSE.txt" "$pkg/licenses/AMD-FidelityFX-FSR1-LICENSE.txt"
+fi
+if [[ -f "$root/src/src/nx/gpu/vk/fsr1/UPSTREAM.txt" ]]; then
+    cp "$root/src/src/nx/gpu/vk/fsr1/UPSTREAM.txt" "$pkg/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt"
+fi
 echo "PACKAGE_OK $pkg"; ls "$pkg"
