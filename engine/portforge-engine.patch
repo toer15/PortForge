@@ -1285,10 +1285,10 @@ index 0000000..6579294
 +    fg_prop_spv_size;
 diff --git a/src/nx/gpu/vk/frame_policy.h b/src/nx/gpu/vk/frame_policy.h
 new file mode 100644
-index 0000000..a298fde
+index 0000000..013fac9
 --- /dev/null
 +++ b/src/nx/gpu/vk/frame_policy.h
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,33 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#ifndef PF_FRAME_POLICY_H
 +#define PF_FRAME_POLICY_H
@@ -1309,12 +1309,14 @@ index 0000000..a298fde
 +    int n = cpus / 4;
 +    return n < 2 ? 2 : n > 6 ? 6 : n;
 +}
-+/* With the host's physical cores known (cores > 0): half of them from 6 on. A driver makes each pipeline on one core,
-+   and the game's own threads (its cores, the GPU and recording threads) keep about four busy. An 8-core CPU without
-+   SMT, counted as 8 threads, had 2 workers and froze about 7 s on a cold driver cache; 4 cut that by about 15% */
++/* With the host's physical cores known (cores > 0): all of them but one from 6 on, at most 12. A driver makes each
++   pipeline on one core. The workers run below the game's priority (plat_thread_background), so the game's own threads
++   (its cores, the GPU and recording threads) still get theirs. A new level's first view needs hundreds of pipelines
++   that no draw may skip: an 8-core CPU without SMT froze 3.4 s on one game's with 4 workers and 2.2 s with 7, with
++   the same frame times outside the freezes */
 +static inline int pf_shader_workers_on(int setting, int cpus, int cores) {
 +    if (setting > 0 || cores < 6) return pf_shader_workers(setting, cpus);
-+    return cores / 2 > 6 ? 6 : cores / 2;
++    return cores - 1 > 12 ? 12 : cores - 1;
 +}
 +static inline int pf_background_workers(int workers, int guard) {
 +    return guard && workers > 1 ? workers - 1 : workers;
@@ -5274,7 +5276,7 @@ index 0000000..8ac3788
 +extern const u32 smooth_spv[];
 +extern const u64 smooth_spv_size;
 diff --git a/src/nx/gpu/vk/pipeline.c b/src/nx/gpu/vk/pipeline.c
-index 33f94b6..b49cbed 100644
+index 33f94b6..873a652 100644
 --- a/src/nx/gpu/vk/pipeline.c
 +++ b/src/nx/gpu/vk/pipeline.c
 @@ -16,6 +16,7 @@
@@ -5611,7 +5613,7 @@ index 33f94b6..b49cbed 100644
      if (made.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT)
          __atomic_add_fetch(e->prewarm ? &g_pf.hits : &g_pipe_hits, 1, __ATOMIC_RELAXED);
      return p;
-@@ -791,13 +1037,31 @@ static PCond g_pj_work, g_pj_done;
+@@ -791,13 +1037,32 @@ static PCond g_pj_work, g_pj_done;
  static Pipe *g_pj_head, *g_pj_tail; /* a draw's */
  static Pipe *g_pw_head, *g_pw_tail; /* the file's */
  static int g_pj_started, g_pj_threads;
@@ -5620,6 +5622,7 @@ index 33f94b6..b49cbed 100644
 +static void sh_job_run(ShJob* j);
  static void pipe_worker(void* arg) {
      (void)arg;
++    plat_thread_background(); /* a bind that needs a pipeline no worker took makes it itself (pipe_make_here) */
      for (;;) {
          Pipe* e;
          VkPipeline p;
@@ -5644,7 +5647,7 @@ index 33f94b6..b49cbed 100644
          if (g_pj_head) {
              e = g_pj_head;
              g_pj_head = e->job;
-@@ -806,11 +1070,13 @@ static void pipe_worker(void* arg) {
+@@ -806,11 +1071,13 @@ static void pipe_worker(void* arg) {
              e = g_pw_head;
              g_pw_head = e->job;
              if (!g_pw_head) g_pw_tail = NULL;
@@ -5658,7 +5661,7 @@ index 33f94b6..b49cbed 100644
          e->p = p;
          __atomic_store_n(&e->ready, 1, __ATOMIC_RELEASE);
          pc_broadcast(&g_pj_done);
-@@ -818,23 +1084,22 @@ static void pipe_worker(void* arg) {
+@@ -818,23 +1085,22 @@ static void pipe_worker(void* arg) {
      }
  }
  int vk_pipeline_worker_count(int setting, int cpus) {
@@ -5689,22 +5692,11 @@ index 33f94b6..b49cbed 100644
      }
      return g_pj_threads;
  }
-@@ -848,7 +1113,33 @@ static void pipe_queue(Pipe* e, int queue) {
+@@ -848,29 +1114,75 @@ static void pipe_queue(Pipe* e, int queue) {
          *head = e;
      *tail = e;
      e->queued = queue;
 -    pc_signal(&g_pj_work);
-+    pc_broadcast(&g_pj_work);
-+}
-+/* PortForge: a draw's new pipeline goes to the front of the draws' queue, and one the draw may skip (vk_pipeline_skippable)
-+   moves to the back. A bind that must wait for its pipeline (a loading screen, an image drawn once) used to queue behind
-+   every pipeline of the 3D world, which are skipped while they are made: one game's loading screen waited 1.6 s for 13
-+   pipelines of 125 ms each, with hundreds of skippable ones ahead of them. */
-+static void pipe_queue_front(Pipe* e) {
-+    e->job = g_pj_head;
-+    g_pj_head = e;
-+    if (!g_pj_tail) g_pj_tail = e;
-+    e->queued = 1;
 +    pc_broadcast(&g_pj_work);
 +}
 +/* e out of the draws' queue (g_pj_lock held): 1 when it was in it */
@@ -5721,19 +5713,73 @@ index 33f94b6..b49cbed 100644
 +    e->job = NULL;
 +    e->queued = 0;
 +    return 1;
++}
++/* e out of the file's queue (g_pj_lock held): 1 when it was in it */
++static int pipe_dequeue_file(Pipe* e) {
++    Pipe *q, *before = NULL;
++    if (e->queued != 2) return 0;
++    for (q = g_pw_head; q && q != e; q = q->job) before = q;
++    if (!q) return 0;
++    if (before)
++        before->job = e->job;
++    else
++        g_pw_head = e->job;
++    if (g_pw_tail == e) g_pw_tail = before;
++    e->job = NULL;
++    e->queued = 0;
++    return 1;
  }
- /* a pipeline of the file that a draw asks for before a worker took it goes to the draws' queue: 1 when it did */
+-/* a pipeline of the file that a draw asks for before a worker took it goes to the draws' queue: 1 when it did */
++/* a pipeline of the file that a draw asks for before a worker took it goes to the draws' queue, in the order draws ask
++   for theirs: 1 when it did */
  static int pipe_promote(Pipe* e) {
-@@ -862,7 +1153,7 @@ static int pipe_promote(Pipe* e) {
-         else
-             g_pw_head = e->job;
-         if (g_pw_tail == e) g_pw_tail = before;
--        pipe_queue(e, 1);
-+        pipe_queue_front(e);
+     int moved = 0;
+     pm_lock(&g_pj_lock);
+-    if (e->queued == 2) {
+-        Pipe *q, *before = NULL;
+-        for (q = g_pw_head; q != e; q = q->job) before = q;
+-        if (before)
+-            before->job = e->job;
+-        else
+-            g_pw_head = e->job;
+-        if (g_pw_tail == e) g_pw_tail = before;
++    if (pipe_dequeue_file(e)) {
+         pipe_queue(e, 1);
          moved = 1;
      }
      pm_unlock(&g_pj_lock);
-@@ -880,11 +1171,174 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+     return moved;
+ }
+-/* e's pipeline once ready, waiting at most ns for it (a negative ns: until it is) */
++/* PortForge: a pipeline a bind must wait for, made on the waiting thread when no worker has taken it yet: 1 when it
++   was. The draws' queue is in the order the GPU thread asked for pipelines, which runs ahead of the recording thread's
++   binds. A new pipeline used to go to the front of the queue, so each one asked for later went ahead of the ones asked
++   for before: one game's first view of a level stopped for 3.5 s on a pipeline made in 7 ms, behind 290 others asked
++   for after it (13.9 s of work for 4 workers). Made here, a bind waits for its own pipeline only, while the workers
++   make the ones after it */
++static int pipe_make_here(Pipe* e) {
++    int taken;
++    VkPipeline p;
++    pm_lock(&g_pj_lock);
++    taken = pipe_dequeue_draw(e) || pipe_dequeue_file(e);
++    pm_unlock(&g_pj_lock);
++    if (!taken) return 0;
++    p = pipe_make(e, 0);
++    pm_lock(&g_pj_lock);
++    e->p = p;
++    __atomic_store_n(&e->ready, 1, __ATOMIC_RELEASE);
++    pc_broadcast(&g_pj_done);
++    pm_unlock(&g_pj_lock);
++    return 1;
++}
++/* e's pipeline once ready, waiting at most ns for it (a negative ns: until it is, made here if no worker took it) */
+ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
+     u64 until = ns < 0 ? 0 : plat_ns() + (u64)ns;
++    if (ns < 0 && pipe_make_here(e)) return e->p;
+     pm_lock(&g_pj_lock);
+     while (!e->ready) {
+         u64 now = plat_ns();
+@@ -880,11 +1192,174 @@ static VkPipeline pipe_wait(Pipe* e, i64 ns) {
      pm_unlock(&g_pj_lock);
      return __atomic_load_n(&e->ready, __ATOMIC_ACQUIRE) ? e->p : VK_NULL_HANDLE;
  }
@@ -5908,16 +5954,7 @@ index 33f94b6..b49cbed 100644
  #define PSTAND_PAGE    1024
  static Pipe** g_pstand[1024];
  static u32 g_npstand;
-@@ -964,7 +1418,7 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
-         pf_pipe_record(&p->k);
-         pm_lock(&g_pj_lock);
-         if (pipe_workers()) {
--            pipe_queue(p, 1);
-+            pipe_queue_front(p);
-             queued = 1;
-         }
-         pm_unlock(&g_pj_lock);
-@@ -981,17 +1435,45 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
+@@ -981,17 +1456,45 @@ VkPipeline vk_pipeline_get_deferred(const PipeKey* k) {
  }
  /* on the recording thread: the pipeline a handle from vk_pipeline_get_deferred names, waited for while a worker makes
     it. VK_NULL_HANDLE when it couldn't be made */
@@ -5967,7 +6004,7 @@ index 33f94b6..b49cbed 100644
  void vk_pipeline_stats(u64* pipes, u64* hits, u64* make_ms, u64* wait_ms, u64* shaders, u64* shader_ms) {
      *pipes = g_pipes_new;
      *hits = __atomic_load_n(&g_pipe_hits, __ATOMIC_RELAXED);
-@@ -1064,6 +1546,20 @@ static void pf_shader_record(const VkSh* s, const u32* spv, size_t nw) {
+@@ -1064,6 +1567,20 @@ static void pf_shader_record(const VkSh* s, const u32* spv, size_t nw) {
      memcpy(&r.si, &s->si, sizeof r.si);
      pf_shader(&g_pf.file, mod_bits(s->mod), &r, (const u32*)(const void*)s->cbr.r, spv);
  }
@@ -5988,7 +6025,7 @@ index 33f94b6..b49cbed 100644
  /* a draw's pipeline, made: kept for the next run, its modules by their shaders' records (any thread) */
  static void pf_pipe_record(const PipeKey* k) {
      PipeKey c;
-@@ -1084,6 +1580,7 @@ static u64 pf_load_shader(void* ctx, const PfShader* r, const u32* cbr, const u3
+@@ -1084,6 +1601,7 @@ static u64 pf_load_shader(void* ctx, const PfShader* r, const u32* cbr, const u3
      VkSh* s;
      (void)ctx;
      if (r->si.ntex < 0 || r->si.ntex > SH_MAXTEX || vk_spirv_unavailable(spv, r->nspv)) return 0;
@@ -5996,7 +6033,7 @@ index 33f94b6..b49cbed 100644
      s = calloc(1, sizeof *s);
      if (!s) return 0;
      if (r->ncbr) {
-@@ -1157,15 +1654,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
+@@ -1157,15 +1675,13 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
      g_pf.npipe++;
  }
  
@@ -6017,7 +6054,7 @@ index 33f94b6..b49cbed 100644
      u32 caps[] = {(u32)g_vk.has_divisor,
                    (u32)g_vk.has_dynamic_stride,
                    (u32)g_vk.has_shader_draw_parameters,
-@@ -1187,20 +1682,9 @@ static void pf_key(char* out, size_t n) {
+@@ -1187,20 +1703,9 @@ static void pf_key(char* out, size_t n) {
                    g_vk_buffer_image_slots,
                    d->limits.maxPerStageDescriptorStorageImages,
                    d->limits.maxDescriptorSetStorageImages};
@@ -8889,7 +8926,7 @@ index 408db9e..69aae23 100644
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
 new file mode 100644
-index 0000000..f681c1f
+index 0000000..0d7624f
 --- /dev/null
 +++ b/src/nx/runtime/pf_engine_version.h
 @@ -0,0 +1,6 @@
@@ -8897,7 +8934,7 @@ index 0000000..f681c1f
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.35"
++#define PF_ENGINE_VERSION "1.36"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5..38b9267 100644
@@ -10056,11 +10093,16 @@ index 8e29f7b..e3e6f72 100644
     holds, within OVERLAY_COLS and OVERLAY_COLS_MAX */
  int overlay_cols(int sw, int scale);
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
-index d3e4e35..b50e68e 100644
+index d3e4e35..9b74d4f 100644
 --- a/src/nx/runtime/platform/plat.h
 +++ b/src/nx/runtime/platform/plat.h
-@@ -42,6 +42,9 @@ int plat_thread(PThreadFn fn, void* arg, size_t stack);
+@@ -40,8 +40,14 @@ typedef void (*PThreadFn)(void* arg);
+    could not be started */
+ int plat_thread(PThreadFn fn, void* arg, size_t stack);
  void plat_thread_exit(void); /* ends the calling thread (one plat_thread started) */
++/* PortForge: the calling thread below the process's other threads in the scheduler, for work that may wait (pipelines
++   made ahead of the draws that need them) */
++void plat_thread_background(void);
  /* the host CPUs the process may run on, at most max of them, into ids; 0 where the runtime doesn't choose them */
  int plat_cpus(int* ids, int max);
 +/* PortForge: the host's CPU threads and physical cores, for sizing worker pools; 0 where the host doesn't tell */
@@ -10069,7 +10111,7 @@ index d3e4e35..b50e68e 100644
  /* the calling thread runs only on the n host CPUs in ids */
  void plat_thread_cpus(const int* ids, int n);
  /* the host for the log's header, so a report needn't describe it: "<OS and version>, <CPU>, <n> threads, <n> GB RAM",
-@@ -173,6 +176,8 @@ void plat_install_crash_handler(void);
+@@ -173,6 +179,8 @@ void plat_install_crash_handler(void);
  void plat_prof_start(void); /* starts the sampling profiler (the profile option): Windows only */
  #if defined(_WIN32)
  void plat_prof_add_thread(HANDLE h); /* a thread to sample; the profiler keeps its own handle */
@@ -10079,10 +10121,37 @@ index d3e4e35..b50e68e 100644
  
  #endif
 diff --git a/src/nx/runtime/platform/plat_posix.c b/src/nx/runtime/platform/plat_posix.c
-index cd639e4..0502a88 100644
+index cd639e4..89e51df 100644
 --- a/src/nx/runtime/platform/plat_posix.c
 +++ b/src/nx/runtime/platform/plat_posix.c
-@@ -219,6 +219,9 @@ void plat_thread_cpus(const int* ids, int n) {
+@@ -38,8 +38,12 @@
+ #include <linux/userfaultfd.h>
+ #include <poll.h>
+ #include <sys/ioctl.h>
++#include <sys/resource.h>
+ #include <sys/syscall.h>
+ #endif
++#if defined(__APPLE__)
++#include <pthread/qos.h>
++#endif
+ #if defined(__ANDROID__)
+ #include <SDL3/SDL_system.h>
+ #include <sys/system_properties.h>
+@@ -188,6 +192,13 @@ void plat_thread_exit(void) {
+     alt_stack_off();
+     pthread_exit(NULL);
+ }
++void plat_thread_background(void) {
++#if defined(__linux__)
++    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 5); /* Linux keeps a nice value per thread */
++#elif defined(__APPLE__)
++    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
++#endif
++}
+ /* Linux only: Android's CPUs differ in speed, so a fixed share of them would make a core slow */
+ #if defined(__linux__) && !defined(__ANDROID__)
+ int plat_cpus(int* ids, int max) {
+@@ -219,6 +230,9 @@ void plat_thread_cpus(const int* ids, int n) {
      (void)n;
  }
  #endif
@@ -10093,10 +10162,18 @@ index cd639e4..0502a88 100644
  /* the text after "key" (and a '=' or ':' with the spaces around it) on the first line of path that starts with it,
     unquoted; out empty when there's none */
 diff --git a/src/nx/runtime/platform/plat_win32.c b/src/nx/runtime/platform/plat_win32.c
-index 1f9eebc..e9cbd58 100644
+index 1f9eebc..a9214e8 100644
 --- a/src/nx/runtime/platform/plat_win32.c
 +++ b/src/nx/runtime/platform/plat_win32.c
-@@ -112,6 +112,27 @@ void plat_thread_cpus(const int* ids, int n) {
+@@ -103,6 +103,7 @@ void plat_thread_exit(void) {
+     sleep_timer_close();
+     ExitThread(0);
+ }
++void plat_thread_background(void) { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
+ int plat_cpus(int* ids, int max) {
+     (void)ids;
+     (void)max;
+@@ -112,6 +113,27 @@ void plat_thread_cpus(const int* ids, int n) {
      (void)ids;
      (void)n;
  }
@@ -11048,7 +11125,7 @@ index 2329b11..7253c07 100644
      CHECK(fs_tree_create(&other, dir, "new.bin", 0, 1, NULL) == FS_TREE_READONLY);
 diff --git a/tests/frame_policy.c b/tests/frame_policy.c
 new file mode 100644
-index 0000000..8404f8a
+index 0000000..23c52e0
 --- /dev/null
 +++ b/tests/frame_policy.c
 @@ -0,0 +1,36 @@
@@ -11079,8 +11156,8 @@ index 0000000..8404f8a
 +    assert(pf_shader_workers(0, 64) == 6 && pf_shader_workers(0, 0) == 2);
 +    assert(pf_shader_workers(1, 64) == 1 && pf_shader_workers(32, 2) == 32);
 +    assert(pf_shader_workers(100, 8) == 32);
-+    assert(pf_shader_workers_on(0, 8, 8) == 4 && pf_shader_workers_on(0, 16, 8) == 4);
-+    assert(pf_shader_workers_on(0, 12, 6) == 3 && pf_shader_workers_on(0, 32, 16) == 6);
++    assert(pf_shader_workers_on(0, 8, 8) == 7 && pf_shader_workers_on(0, 16, 8) == 7);
++    assert(pf_shader_workers_on(0, 12, 6) == 5 && pf_shader_workers_on(0, 32, 16) == 12);
 +    assert(pf_shader_workers_on(0, 8, 4) == 2 && pf_shader_workers_on(0, 4, 4) == 1 && pf_shader_workers_on(0, 0, 0) == 2);
 +    assert(pf_shader_workers_on(3, 16, 8) == 3);
 +    assert(pf_background_workers(1, 1) == 1 && pf_background_workers(2, 1) == 1);
