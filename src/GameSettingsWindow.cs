@@ -336,21 +336,19 @@ namespace PortForge
         private async Task PrepareFirstLaunch(string exe,CancellationToken token)
         {
             string result;
-            using(var skip=CancellationTokenSource.CreateLinkedTokenSource(token))
             using(var screen=new PreparingScreen(exe,GameOptimization.GameplaySeconds+6))
             {
-                screen.SkipRequested+=(s,e)=>skip.Cancel();
                 screen.Show(this);
                 SetStatus("STARTING","Preparing the first launch","Playing the game's opening once, hidden, so its shaders are built before you play. Your save is backed up and put back.",Mint);
                 try
                 {
-                    result=await Task.Run(()=>GameOptimization.WarmCaches(exe,new Progress<string>(m=>screen.Status="Playing the opening"),skip.Token));
+                    result=await Task.Run(()=>GameOptimization.WarmCaches(exe,new Progress<string>(m=>screen.Status="Playing the opening"),token));
                     screen.Finish();
                     await Task.Delay(400);
                 }
-                catch(OperationCanceledException){if(token.IsCancellationRequested)throw;result="First launch preparation skipped by the player.";}
+                catch(OperationCanceledException){if(token.IsCancellationRequested)throw;result="First launch preparation stopped.";}
                 catch(Exception e){result="First launch preparation could not finish ("+e.Message+"). The game starts anyway.";}
-                finally{screen.Close();}
+                finally{screen.Done=true;screen.Close();}
             }
             history.AppendText(result+Environment.NewLine);
             FirstLaunch.Mark(exe,result);
