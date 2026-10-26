@@ -5,7 +5,8 @@ param(
 # Builds the PortForge installer: a single Setup.exe that carries the app and its Engine, with the logo as its icon.
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
+. (Join-Path $root 'tools\build-common.ps1')
+$compiler = Get-PortForgeCSharpCompiler
 $work = Join-Path ([IO.Path]::GetTempPath()) ('portforge-installer-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 try {

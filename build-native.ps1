@@ -3,7 +3,8 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $nativeRoot = Join-Path $projectRoot 'build\PortForgeNative'
 New-Item -ItemType Directory -Force -Path $nativeRoot,(Join-Path $nativeRoot 'NativeTest') | Out-Null
-$compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
+. (Join-Path $projectRoot 'tools\build-common.ps1')
+$compiler = Get-PortForgeCSharpCompiler
 $conversionSources = @('AssemblyInfo.cs','Core.cs','ConversionFeedback.cs','ConversionFiles.cs','GameOptimization.cs','GlobalSettings.cs','FrameTrace.cs','NativeConversion.cs','GameDownloads.cs','GameDiagnostics.cs','CodexDiagnosis.cs','AppUpdates.cs','GameStateGuard.cs','HardwareProfile.cs','PcOptimization.cs','CodePatches.cs','AutoFix.cs','LiveDoctor.cs','EngineManager.cs','EngineLab.cs','CloudSaves.cs','CloudSaveStores.cs','Controllers.cs') | ForEach-Object { Join-Path $projectRoot ('src\' + $_) }
 $downloadReferences = @('/r:System.IO.Compression.dll','/r:System.IO.Compression.FileSystem.dll','/r:System.Web.Extensions.dll','/r:System.Security.dll')
 & $compiler /nologo /codepage:65001 /optimize+ /target:winexe /platform:x64 /r:System.Core.dll /r:System.Xml.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll @downloadReferences (('/win32manifest:' + (Join-Path $projectRoot 'app.manifest'))) (('/win32icon:' + (Join-Path $projectRoot 'assets\portforge.ico'))) (('/out:' + (Join-Path $nativeRoot 'PortForge.exe'))) @conversionSources (Join-Path $projectRoot 'src\AppIcon.cs') (Join-Path $projectRoot 'src\NativeApp.cs') (Join-Path $projectRoot 'src\GameSettingsWindow.cs') (Join-Path $projectRoot 'src\PreparingScreen.cs') (Join-Path $projectRoot 'src\DownloadWindow.cs') (Join-Path $projectRoot 'src\UpdateWindow.cs') (Join-Path $projectRoot 'src\DoctorWindow.cs') (Join-Path $projectRoot 'src\EnginePanel.cs') (Join-Path $projectRoot 'src\CloudSaveWindow.cs') (Join-Path $projectRoot 'src\ControllerWindow.cs') (Join-Path $projectRoot 'src\GlobalSettingsPanel.cs') (Join-Path $projectRoot 'src\FrameTraceWindow.cs')
@@ -84,4 +85,3 @@ if ($Test) {
 
 }
 Write-Output ('Built native frontend: ' + (Join-Path $nativeRoot 'PortForge.exe'))
-

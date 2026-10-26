@@ -4,8 +4,8 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $buildRoot = Join-Path $projectRoot 'build'
 $releaseRoot = Join-Path $buildRoot 'PortForge'
-$compiler = Join-Path ([System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
-if (-not (Test-Path -LiteralPath $compiler)) { throw '.NET Framework C# compiler is required to rebuild from source.' }
+. (Join-Path $projectRoot 'tools\build-common.ps1')
+$compiler = Get-PortForgeCSharpCompiler
 New-Item -ItemType Directory -Force -Path $releaseRoot,(Join-Path $releaseRoot 'Demo\Runtime'),(Join-Path $releaseRoot 'Demo\Game') | Out-Null
 
 # Draw an original icon using Windows drawing APIs; no external assets or downloads.

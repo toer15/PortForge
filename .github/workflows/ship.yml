@@ -157,7 +157,8 @@ jobs:
           Start-Transcript -Path ci-app.log
           $v = '${{ inputs.version }}'.TrimStart('v')
           .\build-native.ps1
-          $csc = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
+          . .\tools\build-common.ps1
+          $csc = Get-PortForgeCSharpCompiler
           & $csc /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /r:System.Core.dll /out:build\FgCadenceTests.exe tests\FgCadenceTests.cs
           if ($LASTEXITCODE -ne 0) { throw 'FG cadence tests did not compile.' }
           & .\build\FgCadenceTests.exe
