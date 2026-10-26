@@ -25762,7 +25762,7 @@ index 408db9e..69aae23 100644
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
 new file mode 100644
-index 0000000..ba65ab0
+index 0000000..c358a23
 --- /dev/null
 +++ b/src/nx/runtime/pf_engine_version.h
 @@ -0,0 +1,6 @@
@@ -25770,7 +25770,7 @@ index 0000000..ba65ab0
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.38"
++#define PF_ENGINE_VERSION "1.39"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5..38b9267 100644
@@ -25908,7 +25908,7 @@ index ac4acd5..38b9267 100644
 +    return 0;
 +}
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
-index 87dfdc6..02c67eb 100644
+index 87dfdc6..5973bf4 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
 +++ b/src/nx/runtime/platform/backend/sdl3.c
 @@ -13,6 +13,7 @@
@@ -26057,7 +26057,7 @@ index 87dfdc6..02c67eb 100644
      vpad_release();
      keys_held = 0;
      /* a finger or button down before this (Home on the on-screen controls opened it) lifts without a tap */
-@@ -748,25 +793,50 @@ static void menu_open(int open) {
+@@ -748,25 +793,46 @@ static void menu_open(int open) {
  }
  static void overlay_do(int action) {
      if (action == OVERLAY_EXIT) g_quit = 1;
@@ -26072,18 +26072,14 @@ index 87dfdc6..02c67eb 100644
  static int menu_event(const SDL_Event* e) {
      int w, h;
      float d;
-+    /* PortForge: the preparing screen takes Esc, a right-click, Home or Back+Start, or a controller's A or B as asking
-+       to start at once */
++    /* PortForge: the preparing screen can't be skipped, so Esc, a right-click and the menu's buttons do nothing while it
++       shows (the menu would open under it) */
 +    if (overlay_preparing() &&
-+        ((e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.key == SDLK_ESCAPE) ||
-+         (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN && e->button.button == SDL_BUTTON_RIGHT) ||
-+         (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
-+          (e->gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH || e->gbutton.button == SDL_GAMEPAD_BUTTON_EAST ||
-+           gamepad_menu_button(e->gbutton.which, e->gbutton.button))))) {
-+        if (!overlay_prepare_skipped()) LOG("prepare: the player started the game before its shaders were made\n");
-+        overlay_prepare_skip();
++        ((e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE) ||
++         ((e->type == SDL_EVENT_MOUSE_BUTTON_DOWN || e->type == SDL_EVENT_MOUSE_BUTTON_UP) &&
++          e->button.button == SDL_BUTTON_RIGHT) ||
++         (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && gamepad_menu_button(e->gbutton.which, e->gbutton.button))))
 +        return 1;
-+    }
 +    /* Esc never quits. Consume repeats even with the menu closed, and the mouse's release as well, so a held
 +       shortcut cannot reopen the menu or reach the game's input after dismissing it. */
 +    if ((e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE) ||
@@ -26116,7 +26112,7 @@ index 87dfdc6..02c67eb 100644
          return 1;
      }
      if (!overlay_shown()) return 0;
-@@ -780,7 +850,6 @@ static int menu_event(const SDL_Event* e) {
+@@ -780,7 +846,6 @@ static int menu_event(const SDL_Event* e) {
              case SDLK_SPACE:
                  if (!e->key.repeat) overlay_do(overlay_select());
                  break;
@@ -26124,7 +26120,7 @@ index 87dfdc6..02c67eb 100644
              case SDLK_BACKSPACE:
                  if (!e->key.repeat) overlay_do(overlay_back());
                  break;
-@@ -917,11 +986,18 @@ void video_poll(void) {
+@@ -917,11 +982,18 @@ void video_poll(void) {
          switch (e.type) {
              case SDL_EVENT_QUIT: g_quit = 1; break;
              case SDL_EVENT_WINDOW_MINIMIZED:
@@ -26145,7 +26141,7 @@ index 87dfdc6..02c67eb 100644
              case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                  if (e.window.windowID == SDL_GetWindowID(g_win)) wsize_set(e.window.data1, e.window.data2);
                  wsafe_set();
-@@ -930,6 +1006,8 @@ void video_poll(void) {
+@@ -930,6 +1002,8 @@ void video_poll(void) {
              case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
                  overlay_set_display_scale(SDL_GetWindowDisplayScale(g_win));
                  break;
@@ -26154,7 +26150,7 @@ index 87dfdc6..02c67eb 100644
              case SDL_EVENT_FINGER_DOWN:
              case SDL_EVENT_FINGER_MOTION:
              case SDL_EVENT_FINGER_UP:
-@@ -946,10 +1024,6 @@ void video_poll(void) {
+@@ -946,10 +1020,6 @@ void video_poll(void) {
                  wsafe_set();
                  break;
              case SDL_EVENT_KEY_DOWN:
@@ -26165,7 +26161,7 @@ index 87dfdc6..02c67eb 100644
                  if (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT)) {
                      if (!e.key.repeat) set_fullscreen(!g_fullscreen);
                      break;
-@@ -962,6 +1036,7 @@ void video_poll(void) {
+@@ -962,6 +1032,7 @@ void video_poll(void) {
                  break;
              case SDL_EVENT_KEY_UP: keys_held &= ~keymap(e.key.scancode); break;
              case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -26173,7 +26169,7 @@ index 87dfdc6..02c67eb 100644
                  keys_held = 0;
                  ui_lock();
                  vpad_release();
-@@ -1037,7 +1112,7 @@ void video_poll(void) {
+@@ -1037,7 +1108,7 @@ void video_poll(void) {
          ui_lock();
          vpad_state(&vb, vs);
          acts = vpad_actions();
@@ -26182,7 +26178,7 @@ index 87dfdc6..02c67eb 100644
          /* with the menu open, the pads move it: the on-screen controls' and the connected ones', sticks too */
          overlay_do(overlay_controls(vb | pb, vs[0] || vs[1] ? vs : pad, SDL_GetTicks()));
          ui_unlock();
-@@ -1094,9 +1169,18 @@ void video_poll(void) {
+@@ -1094,9 +1165,18 @@ void video_poll(void) {
  
  void frontend_frame(void) {
      char p[1200];
@@ -26406,7 +26402,7 @@ index 0821ef7..c440b93 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2..42933c3 100644
+index 441a8c2..da80ea5 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
 @@ -4,7 +4,12 @@
@@ -26830,7 +26826,7 @@ index 441a8c2..42933c3 100644
      if (!shown) return;
      if (page == PAGE_MAP) {
          map_draw(l, sw, sh);
-@@ -625,3 +795,174 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e) {
+@@ -625,3 +795,188 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e) {
      e->link = at.link;
      for (i = 0; i < SNX_OVERLAY_ERROR_ITEMS; ++i) e->items[i] = at.item[i];
  }
@@ -26926,21 +26922,18 @@ index 441a8c2..42933c3 100644
 +}
 +
 +/* ---- the preparing screen (PortForge) */
-+static int g_prep_on, g_prep_skip;
++static int g_prep_on;
 +static u32 g_prep_done, g_prep_total;
 +static u64 g_prep_since;
 +void overlay_prepare(int on, u32 done, u32 total) {
 +    if (on && !__atomic_load_n(&g_prep_on, __ATOMIC_ACQUIRE)) {
 +        __atomic_store_n(&g_prep_since, plat_ns(), __ATOMIC_RELAXED);
-+        __atomic_store_n(&g_prep_skip, 0, __ATOMIC_RELAXED);
 +    }
 +    __atomic_store_n(&g_prep_done, done, __ATOMIC_RELAXED);
 +    __atomic_store_n(&g_prep_total, total, __ATOMIC_RELAXED);
 +    __atomic_store_n(&g_prep_on, on, __ATOMIC_RELEASE);
 +}
 +int overlay_preparing(void) { return __atomic_load_n(&g_prep_on, __ATOMIC_ACQUIRE); }
-+void overlay_prepare_skip(void) { __atomic_store_n(&g_prep_skip, 1, __ATOMIC_RELAXED); }
-+int overlay_prepare_skipped(void) { return __atomic_load_n(&g_prep_skip, __ATOMIC_RELAXED); }
 +/* the game's key art blurred over the whole window, its poster in an accent frame, and beside it the game's name, what
 +   is being made and a bar of how much is done; a moving bar while the file is still read */
 +static void prepare_draw(SnxUiList* l, int sw, int sh) {
@@ -26971,13 +26964,13 @@ index 441a8c2..42933c3 100644
 +        if (textw < 24 * cw) side = gap = 0, textw = (float)sw - 2 * cw;
 +    }
 +    x0 = ((float)sw - side - gap - textw) / 2;
-+    y0 = ((float)sh - (side > 10 * ch ? side : 10 * ch)) / 2;
++    y0 = ((float)sh - (side > 12 * ch ? side : 12 * ch)) / 2;
 +    if (side) {
 +        ui_fill(l, x0 - (float)s, y0 - (float)s, side + 2 * (float)s, side + 2 * (float)s, ACCENT);
 +        ui_poster(l, x0, y0, side, side, 0xFF);
 +    }
 +    tx = x0 + side + gap;
-+    ty = y0 + (side > 10 * ch ? (side - 10 * ch) / 2 : 0);
++    ty = y0 + (side > 12 * ch ? (side - 12 * ch) / 2 : 0);
 +    ui_text(l, tx, ty, s, "PREPARING", ACCENT);
 +    /* the name in capitals at twice the size, cut to the column */
 +    fit = (size_t)(textw / (2 * cw));
@@ -26988,25 +26981,42 @@ index 441a8c2..42933c3 100644
 +    ui_text(l, tx, ty + 4.2f * ch, s, "Building shaders so the game plays smoothly", SOFT);
 +    bw = textw;
 +    bh = ch * 0.5f;
-+    by = ty + 5.8f * ch;
++    by = ty + 9.0f * ch; /* room above it for the runner */
 +    ui_fill(l, tx, by, bw, bh, faded(INK, 0.3f));
-+    if (total)
-+        ui_fill(l, tx, by, bw * (float)done / (float)total, bh, ACCENT);
-+    else { /* not known yet: a quarter of the bar sweeping across */
++    float front; /* where the bar's fill ends, which the runner leads */
++    if (total) {
++        front = bw * (float)done / (float)total;
++        ui_fill(l, tx, by, front, bh, ACCENT);
++    } else { /* not known yet: a quarter of the bar sweeping across */
 +        float seg = bw / 4, at = (float)fmod(t * 0.7, 1.0) * (bw + seg) - seg;
 +        float from = at < 0 ? 0 : at, to = at + seg > bw ? bw : at + seg;
 +        if (to > from) ui_fill(l, tx + from, by, to - from, bh, ACCENT);
++        front = to;
++    }
++    if (poster) {
++        /* the game's character running at the fill's front: a stride every 0.4 s, up and down with it, a puff of dust
++           behind each footfall drifting back and fading */
++        float rs = 3.2f * ch, phase = (float)fmod(t / 0.4, 1.0), hop = fabsf(sinf(phase * 3.14159265f)) * rs * 0.3f;
++        float rx = tx + front - rs / 2, top = by - (float)s - rs - hop;
++        if (rx < tx - rs / 2) rx = tx - rs / 2;
++        for (int k = 3; k >= 0; --k) {
++            double born = (floor(t / 0.2) - k) * 0.2, age = t - born;
++            float size = rs * 0.16f * (1 + (float)age * 2.5f);
++            if (age < 0 || age > 0.8 || born < 0) continue;
++            disc(l, rx + rs * 0.2f - (float)age * rs * 0.9f - size / 2, by - (float)age * rs * 0.3f - size / 2, size, size,
++                 faded(SNX_OVERLAY_RGBA(0xE6E1D7u, 0xFFu), 0.55f * (1 - (float)age / 0.8f)));
++        }
++        ui_runner(l, rx, top, rs, rs, 0xFF); /* its rings are in the badge */
 +    }
 +    if (total)
 +        snprintf(line, sizeof line, "%u of %u shaders   %u%%", done, total, (u32)((u64)done * 100 / total));
 +    else
 +        snprintf(line, sizeof line, "Reading the shaders of earlier runs%.*s", (int)(t * 3) % 4, "...");
 +    ui_text(l, tx, by + bh + 0.7f * ch, s, line, INK);
-+    ui_text(l, tx, by + bh + 2.3f * ch, s, "Shown only while shaders need building", SOFT);
-+    ui_text(l, tx, by + bh + 3.5f * ch, s, "Esc: start now", SOFT);
++    ui_text(l, tx, by + bh + 2.3f * ch, s, "Only while shaders need building", SOFT);
 +}
 diff --git a/src/nx/runtime/platform/overlay.h b/src/nx/runtime/platform/overlay.h
-index 8e29f7b..94a362a 100644
+index 8e29f7b..479b4ff 100644
 --- a/src/nx/runtime/platform/overlay.h
 +++ b/src/nx/runtime/platform/overlay.h
 @@ -1,6 +1,6 @@
@@ -27039,17 +27049,15 @@ index 8e29f7b..94a362a 100644
  /* the columns the menu's pages and the stopped panel take at scale on a picture sw wide: as many as three quarters of it
     holds, within OVERLAY_COLS and OVERLAY_COLS_MAX */
  int overlay_cols(int sw, int scale);
-@@ -70,4 +78,12 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e);
+@@ -70,4 +78,10 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e);
  /* 1 when x, y falls in r, an empty one taking nothing */
  int overlay_error_hit(const SnxOverlayRect* r, float x, float y);
  
 +/* PortForge: the game's own screen while it waits for the shaders and pipelines of earlier runs (present.c's hold): its
-+   key art, its name and done of total (total 0 while they are still read). Esc or a controller's B asks to start at
-+   once (overlay_prepare_skipped). overlay_draw draws it in place of the menu while it is on */
++   key art, its name, its character running along a bar of done of total (total 0 while they are still read). It
++   can't be skipped. overlay_draw draws it in place of the menu while it is on */
 +void overlay_prepare(int on, u32 done, u32 total);
 +int overlay_preparing(void);
-+void overlay_prepare_skip(void);
-+int overlay_prepare_skipped(void);
 +
  #endif
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
@@ -27406,10 +27414,10 @@ index 0000000..2d0dad9
 +}
 +#endif
 diff --git a/src/nx/runtime/platform/ui.c b/src/nx/runtime/platform/ui.c
-index 4517b34..4b599f1 100644
+index 4517b34..b599d87 100644
 --- a/src/nx/runtime/platform/ui.c
 +++ b/src/nx/runtime/platform/ui.c
-@@ -3,6 +3,8 @@
+@@ -3,12 +3,15 @@
  #include "nx/runtime/platform/ui.h"
  #include "nx/runtime/platform/controls_atlas.h"
  #include "nx/runtime/platform/plat.h"
@@ -27418,7 +27426,14 @@ index 4517b34..4b599f1 100644
  #include "nx/runtime/platform/log.h"
  #include "common/utilities/endian.h"
  #include "common/utilities/font.h"
-@@ -16,6 +18,11 @@ static PMutex g_lock = PMUTEX_INIT;
+ #include "common/utilities/users.h"
+ #include "gui/splash.h"
+ #include "gui_theme_colors.h"
++#include <math.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -16,6 +19,13 @@ static PMutex g_lock = PMUTEX_INIT;
  static u32* g_atlas;
  static u32 g_version;
  #define UI_PICTURE_Y SNX_CONTROLS_ATLAS_HEIGHT /* the picture's first row, under the sprites' */
@@ -27426,11 +27441,13 @@ index 4517b34..4b599f1 100644
 +#define UI_EXTRA     SNX_UI_POSTER             /* the rows under the sprites: the picture's and the taller poster's */
 +#define UI_BLUR_X    400                       /* the blurred poster's first column, right of the poster */
 +#define UI_BLUR      64                        /* its side: 4x4 of the poster's texels each, then blurred */
++#define UI_RUNNER_X  480                       /* the character's round badge's first column, right of the blur */
++#define UI_RUNNER    96                        /* its side */
 +static int g_poster;                           /* the game's poster is in the atlas */
  /* the menu's look's shape for it, GuiPicture's: 0 none, 1 square, 2 round */
  #ifndef SNX_GUI_THEME_YORHA_PICTURE
  #error "the YoRHa theme names no [head] picture"
-@@ -70,6 +77,88 @@ static void user_picture(u32* a, int w) {
+@@ -70,6 +80,160 @@ static void user_picture(u32* a, int w) {
              at[(size_t)y * (size_t)w + (size_t)i] = (p & 0xFF00FF00u) | (p >> 16 & 0xFFu) | (p & 0xFFu) << 16;
          }
  }
@@ -27494,6 +27511,77 @@ index 4517b34..4b599f1 100644
 +    quad(l, x, y, w, h, UI_POSTER_X + u, UI_PICTURE_Y + v, uw, vh, alpha << 24 | alpha << 16 | alpha << 8 | alpha, 0, 0);
 +    return 1;
 +}
++int ui_runner(SnxUiList* l, float x, float y, float w, float h, u32 alpha) {
++    if (!g_poster || w <= 0 || h <= 0) return 0;
++    alpha &= 0xFFu;
++    quad(l, x, y, w, h, UI_RUNNER_X, UI_PICTURE_Y, UI_RUNNER, UI_RUNNER, alpha << 24 | alpha << 16 | alpha << 8 | alpha,
++         0, 0);
++    return 1;
++}
++/* a texel of the poster that looks like skin: a warm hue of 5 to 32 degrees at a middle lightness, which keeps out a
++   logo's gold (about 40 degrees) */
++static int skin(u32 p) {
++    int r = (int)(p & 0xFFu), g = (int)(p >> 8 & 0xFFu), b = (int)(p >> 16 & 0xFFu);
++    int mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
++    if (r <= 95 || g <= 40 || b <= 20 || mx - mn <= 15 || abs(r - g) <= 15 || r <= g || r <= b) return 0;
++    int hue = 60 * (g - b) / (mx - mn), light = (mx + mn) * 100 / 510; /* r is the largest */
++    return hue >= 5 && hue <= 32 && light >= 30 && light <= 86;
++}
++/* The game's character for the preparing screen's runner (overlay.c), as a round badge of UI_RUNNER texels in the
++   atlas's UI_RUNNER_X columns: the square of the poster, 40% of its side, with the most skin in it, counted twice in
++   its middle (a face, not a sunset's rim), resampled into a circle inside a white ring and the menu's red one, their
++   edges smooth. Key art without a face gives the whole poster. The app's first-launch screen finds it the same way (PreparingScreen.cs KeyArtSubject) */
++static void game_runner(u32* a, int w) {
++    enum { N = 64, K = SNX_UI_POSTER / N };
++    static int area[N + 1][N + 1];
++    const u32* poster = a + (size_t)UI_PICTURE_Y * (size_t)w + UI_POSTER_X;
++    int side = N * 40 / 100, q = side / 4, best = -1, bx = 0, by = 0;
++    memset(area, 0, sizeof area);
++    for (int y = 0; y < N; ++y)
++        for (int x = 0; x < N; ++x) {
++            int count = 0;
++            for (int j = 0; j < K; ++j)
++                for (int i = 0; i < K; ++i) count += skin(poster[(size_t)(y * K + j) * (size_t)w + (size_t)(x * K + i)]);
++            area[y + 1][x + 1] = (count * 2 > K * K) + area[y][x + 1] + area[y + 1][x] - area[y][x];
++        }
++#define AREA(x0, y0, x1, y1) (area[y1][x1] - area[y0][x1] - area[y1][x0] + area[y0][x0])
++    for (int y0 = 0; y0 + side <= N; ++y0)
++        for (int x0 = 0; x0 + side <= N; ++x0) {
++            int score = AREA(x0, y0, x0 + side, y0 + side) + 2 * AREA(x0 + q, y0 + q, x0 + side - q, y0 + side - q);
++            if (score > best) best = score, bx = x0, by = y0;
++        }
++#undef AREA
++    float sx = (float)(bx * K), sy = (float)(by * K), ss = (float)(side * K);
++    if (best < side * side / 20) sx = sy = 0, ss = SNX_UI_POSTER; /* no face to speak of */
++    const float outer = UI_RUNNER / 2.0f, white = outer - 4, inner = outer - 7; /* the red ring, the white, the picture */
++    const float ring[3] = {0xE6, 0x3B, 0x4B}; /* the menu's accent (overlay.c ACCENT) */
++    for (int y = 0; y < UI_RUNNER; ++y)
++        for (int x = 0; x < UI_RUNNER; ++x) {
++            float dx = (float)x + 0.5f - outer, dy = (float)y + 0.5f - outer, d = sqrtf(dx * dx + dy * dy);
++            /* the picture fills the inner circle: its square spans the inner circle's diameter */
++            float fx = sx + (dx / (2 * inner) + 0.5f) * ss - 0.5f, fy = sy + (dy / (2 * inner) + 0.5f) * ss - 0.5f;
++            fx = fx < 0 ? 0 : fx > SNX_UI_POSTER - 1 ? SNX_UI_POSTER - 1 : fx;
++            fy = fy < 0 ? 0 : fy > SNX_UI_POSTER - 1 ? SNX_UI_POSTER - 1 : fy;
++            int x0 = fx < 0 ? 0 : (int)fx, y0 = fy < 0 ? 0 : (int)fy;
++            int x1 = x0 + 1 < SNX_UI_POSTER ? x0 + 1 : x0, y1 = y0 + 1 < SNX_UI_POSTER ? y0 + 1 : y0;
++            float tx = fx - (float)x0, ty = fy - (float)y0;
++#define COVER(r) ((r) - d + 0.5f < 0 ? 0 : (r) - d + 0.5f > 1 ? 1 : (r) - d + 0.5f) /* a circle's edge over a texel */
++            float cover = COVER(outer), on_white = COVER(white), on_picture = COVER(inner);
++#undef COVER
++            u32 out = 0;
++            for (int c = 0; c < 4; ++c) {
++                float p00 = (float)(poster[(size_t)y0 * (size_t)w + (size_t)x0] >> (8 * c) & 0xFFu);
++                float p10 = (float)(poster[(size_t)y0 * (size_t)w + (size_t)x1] >> (8 * c) & 0xFFu);
++                float p01 = (float)(poster[(size_t)y1 * (size_t)w + (size_t)x0] >> (8 * c) & 0xFFu);
++                float p11 = (float)(poster[(size_t)y1 * (size_t)w + (size_t)x1] >> (8 * c) & 0xFFu);
++                float v = (p00 * (1 - tx) + p10 * tx) * (1 - ty) + (p01 * (1 - tx) + p11 * tx) * ty;
++                float under = c < 3 ? ring[c] + (255 - ring[c]) * on_white : 255; /* red, then white over it */
++                v = under + (v - under) * on_picture;
++                out |= (u32)(v * cover + 0.5f) << (8 * c); /* premultiplied, the poster opaque */
++            }
++            a[(size_t)(UI_PICTURE_Y + y) * (size_t)w + UI_RUNNER_X + (size_t)x] = out;
++        }
++}
 +/* the game's key art into the atlas's rows from UI_PICTURE_Y, from column UI_POSTER_X, w texels a row: icon.jpg in its
 +   data folder, which the extraction keeps. None leaves the menu without its poster */
 +static void game_poster(u32* a, int w) {
@@ -27511,6 +27599,7 @@ index 4517b34..4b599f1 100644
 +                at[(size_t)y * (size_t)w + (size_t)i] = (p & 0xFF00FF00u) | (p >> 16 & 0xFFu) | (p & 0xFFu) << 16;
 +            }
 +        game_blur(a, w);
++        game_runner(a, w);
 +        g_poster = 1;
 +    } else
 +        WARN("ui: the game's key art %s could not be drawn, the menu shows none\n", path);
@@ -27519,7 +27608,7 @@ index 4517b34..4b599f1 100644
  void ui_fill(SnxUiList* l, float x, float y, float w, float h, u32 rgba) {
      /* the block's inner texels: a blend at its edge never reaches the transparent ones around it */
      quad(l, x, y, w, h, SNX_CONTROLS_WHITE_X + 1, SNX_CONTROLS_WHITE_Y + 1, 2, 2, rgba, 0, 1);
-@@ -89,7 +178,7 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
+@@ -89,7 +253,7 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
      int x, y, c, i;
      u32* a;
      if (w != SNX_CONTROLS_ATLAS_WIDTH || h != SNX_CONTROLS_ATLAS_HEIGHT) return; /* not the image the header is for */
@@ -27528,7 +27617,7 @@ index 4517b34..4b599f1 100644
      if (!a) return;
      for (i = 0; i < w * h; ++i) { /* premultiplied: a blend between a sprite's edge and the clear texels around it */
          u32 p = snx_le32(sprites[i]), al = p >> 24;
-@@ -104,7 +193,8 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
+@@ -104,7 +268,8 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
      for (y = 0; y < 4; ++y)
          for (x = 0; x < 4; ++x) a[(SNX_CONTROLS_WHITE_Y + y) * w + SNX_CONTROLS_WHITE_X + x] = 0xFFFFFFFFu;
      user_picture(a, w);
@@ -27538,7 +27627,7 @@ index 4517b34..4b599f1 100644
      ui_lock();
      free(g_atlas);
      g_atlas = a;
-@@ -113,7 +203,7 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
+@@ -113,7 +278,7 @@ void ui_atlas_set(const u32* sprites, int w, int h) {
  }
  const u32* ui_atlas(int* w, int* h, u32* version) {
      *w = SNX_CONTROLS_ATLAS_WIDTH;
@@ -27548,10 +27637,10 @@ index 4517b34..4b599f1 100644
      return g_atlas;
  }
 diff --git a/src/nx/runtime/platform/ui.h b/src/nx/runtime/platform/ui.h
-index 0ccd9f1..50f8b67 100644
+index 0ccd9f1..86423a4 100644
 --- a/src/nx/runtime/platform/ui.h
 +++ b/src/nx/runtime/platform/ui.h
-@@ -29,13 +29,22 @@ void ui_fill(SnxUiList* l, float x, float y, float w, float h, u32 rgba);
+@@ -29,13 +29,24 @@ void ui_fill(SnxUiList* l, float x, float y, float w, float h, u32 rgba);
     none, which draws nothing */
  #define SNX_UI_PICTURE 96
  int ui_picture(SnxUiList* l, float x, float y, float side);
@@ -27564,6 +27653,8 @@ index 0ccd9f1..50f8b67 100644
 +int ui_has_poster(void);
 +/* the poster blurred to a wash of its colours, opaque over w x h at x, y (cut to that shape as ui_poster); 0 for none */
 +int ui_backdrop(SnxUiList* l, float x, float y, float w, float h);
++/* the game's character cut round from its key art (ui.c game_runner), over w x h at x, y at alpha; 0 for none */
++int ui_runner(SnxUiList* l, float x, float y, float w, float h, u32 alpha);
  /* ASCII text, 0xFE the font's square, in 8x16 glyphs at a whole scale; returns the width drawn */
  float ui_text(SnxUiList* l, float x, float y, int scale, const char* s, u32 rgba);
  
@@ -27577,7 +27668,7 @@ index 0ccd9f1..50f8b67 100644
  const u32* ui_atlas(int* w, int* h, u32* version);
  void ui_atlas_done(void);
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181..0e65aa0 100644
+index 2bd6181..7e8197c 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
 @@ -9,6 +9,7 @@
@@ -27588,7 +27679,7 @@ index 2bd6181..0e65aa0 100644
  #include "nx/runtime/platform/plat.h"
  
  int g_frames;
-@@ -31,14 +32,148 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +32,149 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -27687,18 +27778,19 @@ index 2bd6181..0e65aa0 100644
 +   own screen (overlay_prepare) over the window meanwhile: built in the background as the game played, each one it
 +   reached before a worker did stopped it, for 0.1 to 1.8 s each on a driver whose cache lacked them (after a driver
 +   update, or after the app's first-launch warm-up recorded them). A launch whose driver has them all makes them in
-+   moments, under the quarter second before the window shows anything but the game's first frame. Esc starts the game
-+   at once; three minutes at most */
++   moments, under the quarter second before the window shows anything but the game's first frame. It isn't skipped:
++   the game goes on once all of them are made, however long a slow computer takes, and only a build that makes no
++   progress for a minute (a driver stuck on one) lets it go on without the rest */
 +static int g_prepared;
 +static void prepare_hold(void) {
-+    u32 done = 0, total = 0;
-+    u64 t0 = plat_ns();
++    u32 done = 0, total = 0, seen = 0;
++    u64 t0 = plat_ns(), moved = t0;
 +    int busy;
 +    if (__atomic_exchange_n(&g_prepared, 1, __ATOMIC_ACQ_REL) || !g_settings.prepare_shaders || !g_renderer ||
 +        !g_renderer->prepare)
 +        return;
-+    while ((busy = g_renderer->prepare(&done, &total, 1)) && !overlay_prepare_skipped() &&
-+           plat_ns() - t0 < 180000000000ull) {
++    while ((busy = g_renderer->prepare(&done, &total, 1)) && plat_ns() - moved < 60000000000ull) {
++        if (done != seen || !total) seen = done, moved = plat_ns();
 +        overlay_prepare(1, done, total);
 +        plat_sleep_ns(20000000);
 +    }
@@ -27741,7 +27833,7 @@ index 2bd6181..0e65aa0 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac5..db4d1f5 100644
+index be57ac5..9b12020 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
 @@ -80,13 +80,122 @@ setting Game mods off
@@ -27782,7 +27874,7 @@ index be57ac5..db4d1f5 100644
 +    words Off|On
 +    help PortForge Engine. 1 = at launch the game waits behind its own screen (its key art, name and progress) until
 +    help the shaders and pipelines recorded in earlier runs are built, so it plays without stutter after a graphics
-+    help driver update or the first launch's warm-up. Esc starts it at once. 0 = they are built while the game plays
++    help driver update or the first launch's warm-up. It can't be skipped. 0 = they are built while the game plays
 +setting Frame-time graph
 +    key frametime_graph
 +    int 0 1
@@ -28988,7 +29080,7 @@ index 0000000..9c264d5
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45..67bcd0e 100644
+index 53c5e45..336cf13 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,8 @@
@@ -29000,17 +29092,16 @@ index 53c5e45..67bcd0e 100644
  static u64 now_ns, slept_ns;
  static unsigned checks, failures;
  #define CHECK(c, ...)                                                                                                  \
-@@ -36,6 +38,9 @@ void logf_(int lvl, const char* fmt, ...) {
+@@ -36,6 +38,8 @@ void logf_(int lvl, const char* fmt, ...) {
  }
  u64 nvmap_addr_by_id(u32 id) { return id == 7 ? 0x1000 : 0; }
  void cheats_frame(void) {}
 +/* the preparing screen: never on here (prepare_shaders is 0) */
 +void overlay_prepare(int on, u32 done, u32 total) { (void)on, (void)done, (void)total; }
-+int overlay_prepare_skipped(void) { return 0; }
  static u64 presented;
  static void test_present(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, const i32 crop[4], u32 t) {
      (void)w, (void)h, (void)pitch, (void)layout, (void)bhl, (void)fmt, (void)crop, (void)t;
-@@ -84,12 +89,158 @@ static void pacing(void) {
+@@ -84,12 +88,158 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -29170,7 +29261,7 @@ index 53c5e45..67bcd0e 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -98,6 +249,7 @@ int main(void) {
+@@ -98,6 +248,7 @@ int main(void) {
      clock_start();
      ticks();
      pacing();

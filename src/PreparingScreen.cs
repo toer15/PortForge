@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -38,25 +39,72 @@ namespace PortForge
     }
 
     /// <summary>
-    /// The game's own screen while its first launch is prepared, in the engine's colours: its key art blurred behind,
-    /// its poster in a red frame, its name, and a bar of how far the hidden play-through has got. Esc or Skip starts the
-    /// game at once.
+    /// Where a game's key art shows its character: the square, 40% of the picture's side, with the most skin in it,
+    /// counted twice in its middle (a face, not a sunset's rim). Skin is a warm hue of 5 to 32 degrees at a middle
+    /// lightness, which keeps out a logo's gold. Empty when the art shows none, and the whole picture stands in.
+    /// The engine's preparing screen finds its runner the same way (ui.c game_runner).
+    /// </summary>
+    public static class KeyArtSubject
+    {
+        private static bool Skin(Color c)
+        {
+            int r = c.R, g = c.G, b = c.B, mx = Math.Max(r, Math.Max(g, b)), mn = Math.Min(r, Math.Min(g, b));
+            float h = c.GetHue(), l = c.GetBrightness();
+            return r > 95 && g > 40 && b > 20 && mx - mn > 15 && Math.Abs(r - g) > 15 && r > g && r > b && h >= 5 && h <= 32 && l >= 0.3f && l <= 0.86f;
+        }
+        public static Rectangle Find(Bitmap art)
+        {
+            const int n = 64;
+            using (var small = new Bitmap(art, n, n))
+            {
+                var skin = new int[n + 1, n + 1]; // summed area table
+                for (int y = 0; y < n; y++)
+                    for (int x = 0; x < n; x++)
+                        skin[x + 1, y + 1] = (Skin(small.GetPixel(x, y)) ? 1 : 0) + skin[x, y + 1] + skin[x + 1, y] - skin[x, y];
+                Func<int, int, int, int, int> sum = (x0, y0, x1, y1) => skin[x1, y1] - skin[x0, y1] - skin[x1, y0] + skin[x0, y0];
+                int side = n * 40 / 100, best = -1, bx = 0, by = 0, q = side / 4;
+                for (int y0 = 0; y0 + side <= n; y0++)
+                    for (int x0 = 0; x0 + side <= n; x0++)
+                    {
+                        int score = sum(x0, y0, x0 + side, y0 + side) + 2 * sum(x0 + q, y0 + q, x0 + side - q, y0 + side - q);
+                        if (score > best) { best = score; bx = x0; by = y0; }
+                    }
+                if (best < side * side / 20) return Rectangle.Empty; /* no face to speak of */
+                float k = (float)art.Width / n;
+                return new Rectangle((int)(bx * k), (int)(by * k), (int)(side * k), (int)(side * k));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The game's own loading screen while its first launch is prepared, full screen as a game's own: its key art
+    /// blurred behind, its poster, its name, and along the foot a bar the game's character runs along as it fills,
+    /// bobbing, leaning into its stride and kicking up dust. It can't be skipped: the game starts once its shaders are
+    /// built, so its first play doesn't stutter on them.
     /// </summary>
     public sealed class PreparingScreen : Form
     {
-        private static readonly Color Accent = Color.FromArgb(230, 59, 75), Ink = Color.FromArgb(236, 239, 244), Soft = Color.FromArgb(160, 170, 188);
-        private readonly Bitmap blurred, poster;
+        private static readonly Color Accent = Color.FromArgb(230, 59, 75), Ink = Color.FromArgb(236, 239, 244), Soft = Color.FromArgb(175, 184, 200);
+        private sealed class Puff { public float X, Y, Age, Size; }
+        private readonly Bitmap blurred, poster, runner;
+        private Bitmap backdrop;
         private readonly string title;
         private readonly double expectedSeconds;
         private readonly Stopwatch clock = Stopwatch.StartNew();
-        private readonly Timer tick = new Timer { Interval = 50 };
-        private Rectangle skipArea;
+        private readonly Timer tick = new Timer { Interval = 16 };
+        private readonly List<Puff> puffs = new List<Puff>();
+        private double lastPuff, lastFrame;
         private bool finished;
         private string status = "Starting the game hidden";
 
-        /// <summary>The player asked to start the game at once.</summary>
-        public event EventHandler SkipRequested;
-        public string Status { get { return status; } set { status = value ?? ""; Invalidate(); } }
+        public string Status { get { return status; } set { status = value ?? ""; } }
+        /// <summary>Set by its owner once the warm-up is over: until then the screen doesn't close (Alt+F4 included).</summary>
+        public bool Done { get; set; }
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (!Done && e.CloseReason == CloseReason.UserClosing) e.Cancel = true;
+            base.OnFormClosing(e);
+        }
 
         public PreparingScreen(string exe, double expectedSeconds)
         {
@@ -71,35 +119,27 @@ namespace PortForge
                     using (var image = Image.FromStream(stream))
                     {
                         poster = new Bitmap(image);
-                        blurred = Shrink(image, 24); // drawn stretched back up, a soft wash of its colours
+                        blurred = Shrink(poster, 24); // drawn stretched back up, a soft wash of its colours
+                        var subject = KeyArtSubject.Find(poster);
+                        runner = subject.IsEmpty ? new Bitmap(poster) : poster.Clone(subject, poster.PixelFormat);
                     }
             }
-            catch (ArgumentException) { poster = blurred = null; }
-            catch (IOException) { poster = blurred = null; }
+            catch (ArgumentException) { poster = blurred = runner = null; }
+            catch (IOException) { poster = blurred = runner = null; }
             Text = "Preparing " + name;
             FormBorderStyle = FormBorderStyle.None;
-            StartPosition = FormStartPosition.CenterScreen;
-            var area = Screen.PrimaryScreen.WorkingArea;
-            Size = new Size(Math.Min(1180, area.Width * 9 / 10), Math.Min(640, area.Height * 9 / 10));
-            BackColor = Color.FromArgb(20, 24, 34);
+            StartPosition = FormStartPosition.Manual;
+            Bounds = Screen.PrimaryScreen.Bounds;
+            BackColor = Color.FromArgb(14, 16, 22);
             DoubleBuffered = true;
             KeyPreview = true;
             ShowInTaskbar = true;
             AppIcon.Apply(this);
-            KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Skip(); };
-            MouseUp += (s, e) => { if (skipArea.Contains(e.Location)) Skip(); };
-            MouseMove += (s, e) => Cursor = skipArea.Contains(e.Location) ? Cursors.Hand : Cursors.Default;
             tick.Tick += (s, e) => Invalidate();
             tick.Start();
         }
         /// <summary>The play-through finished: the bar fills before the screen closes.</summary>
         public void Finish() { finished = true; status = "Ready"; Invalidate(); Update(); }
-        private void Skip()
-        {
-            status = "Starting the game";
-            var handler = SkipRequested;
-            if (handler != null) handler(this, EventArgs.Empty);
-        }
         private static Bitmap Shrink(Image image, int side)
         {
             var small = new Bitmap(side, side);
@@ -110,61 +150,151 @@ namespace PortForge
             }
             return small;
         }
+        /// <summary>The key art blurred over w x h, darker toward the foot, made once a size: bilinear scaling, as
+        /// bicubic stretching a 24-texel picture to a screen overshoots into dark specks</summary>
+        private Bitmap Backdrop(int w, int h)
+        {
+            var b = new Bitmap(Math.Max(1, w), Math.Max(1, h));
+            using (var g = Graphics.FromImage(b))
+            {
+                g.Clear(BackColor);
+                if (blurred != null)
+                {
+                    /* up in steps of four, each one smooth: one stretch of 24 texels to a screen left dark specks */
+                    Bitmap step = blurred;
+                    for (int side = 96; side <= 384; side *= 4)
+                    {
+                        var next = new Bitmap(side, side);
+                        using (var sg = Graphics.FromImage(next))
+                        using (var attributes = new System.Drawing.Imaging.ImageAttributes())
+                        {
+                            sg.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                            attributes.SetWrapMode(WrapMode.TileFlipXY);
+                            sg.DrawImage(step, new Rectangle(0, 0, side, side), 0, 0, step.Width, step.Height, GraphicsUnit.Pixel, attributes);
+                        }
+                        if (step != blurred) step.Dispose();
+                        step = next;
+                    }
+                    float cover = Math.Max((float)w / step.Width, (float)h / step.Height), sw = w / cover, sh = h / cover;
+                    g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                    using (var attributes = new System.Drawing.Imaging.ImageAttributes())
+                    {
+                        attributes.SetWrapMode(WrapMode.TileFlipXY);
+                        g.DrawImage(step, new Rectangle(0, 0, w, h), (step.Width - sw) / 2, (step.Height - sh) / 2, sw, sh, GraphicsUnit.Pixel, attributes);
+                    }
+                    step.Dispose();
+                }
+                using (var shade = new LinearGradientBrush(new Rectangle(0, -1, w, h + 2), Color.FromArgb(120, 0, 0, 0), Color.FromArgb(235, 0, 0, 0), LinearGradientMode.Vertical))
+                    g.FillRectangle(shade, 0, 0, w, h);
+            }
+            return b;
+        }
+        private static GraphicsPath Rounded(RectangleF r, float radius)
+        {
+            var p = new GraphicsPath();
+            float d = radius * 2;
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
             int w = ClientSize.Width, h = ClientSize.Height;
+            double t = clock.Elapsed.TotalSeconds, dt = Math.Min(0.1, t - lastFrame);
+            lastFrame = t;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            if (blurred != null)
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            if (backdrop == null || backdrop.Width != w || backdrop.Height != h)
             {
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.PixelOffsetMode = PixelOffsetMode.Half;
-                // cover the window, cut to its shape from the middle, a texel in from each edge
-                float cover = Math.Max((float)w / blurred.Width, (float)h / blurred.Height);
-                float sw = w / cover, sh = h / cover;
-                using (var attributes = new System.Drawing.Imaging.ImageAttributes())
-                {
-                    attributes.SetWrapMode(WrapMode.TileFlipXY);
-                    g.DrawImage(blurred, new Rectangle(0, 0, w, h), (blurred.Width - sw) / 2, (blurred.Height - sh) / 2, sw, sh, GraphicsUnit.Pixel, attributes);
-                }
+                if (backdrop != null) backdrop.Dispose();
+                backdrop = Backdrop(w, h);
             }
-            using (var shade = new LinearGradientBrush(new Rectangle(0, 0, w, h), Color.FromArgb(blurred != null ? 140 : 0, 0, 0, 0), Color.FromArgb(blurred != null ? 225 : 90, 0, 0, 0), LinearGradientMode.Vertical))
-                g.FillRectangle(shade, 0, 0, w, h);
-            int side = poster != null ? h * 46 / 100 : 0, gap = poster != null ? 44 : 0;
-            int textWidth = Math.Min(560, w - side - gap - 120);
-            int x0 = (w - side - gap - textWidth) / 2, y0 = (h - Math.Max(side, 300)) / 2;
+            g.DrawImageUnscaled(backdrop, 0, 0);
+
+            // the poster and the name, a little above the middle
+            float side = poster != null ? h * 0.40f : 0, gap = poster != null ? h * 0.05f : 0, textWidth = Math.Min(w * 0.42f, h * 0.9f);
+            float x0 = (w - side - gap - textWidth) / 2, y0 = h * 0.40f - side / 2;
             if (poster != null)
             {
-                using (var frame = new SolidBrush(Accent)) g.FillRectangle(frame, x0 - 4, y0 - 4, side + 8, side + 8);
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.DrawImage(poster, new Rectangle(x0, y0, side, side));
+                var card = new RectangleF(x0, y0, side, side);
+                using (var glow = new SolidBrush(Color.FromArgb(70, Accent))) using (var p = Rounded(RectangleF.Inflate(card, h * 0.012f, h * 0.012f), h * 0.02f)) g.FillPath(glow, p);
+                using (var frame = new SolidBrush(Accent)) using (var p = Rounded(RectangleF.Inflate(card, h * 0.005f, h * 0.005f), h * 0.016f)) g.FillPath(frame, p);
+                using (var p = Rounded(card, h * 0.012f)) { g.SetClip(p); g.DrawImage(poster, card); g.ResetClip(); }
             }
-            int tx = x0 + side + gap, ty = y0 + Math.Max(0, (side - 300) / 2);
-            using (var small = new Font("Segoe UI", 11, FontStyle.Bold))
-            using (var big = new Font("Segoe UI", 26, FontStyle.Bold))
-            using (var body = new Font("Segoe UI", 11))
-            using (var accent = new SolidBrush(Accent))
+            float tx = x0 + side + gap, ty = y0 + side * 0.18f;
+            using (var label = new Font("Segoe UI", h * 0.016f, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var big = new Font("Segoe UI", h * 0.05f, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var body = new Font("Segoe UI", h * 0.019f, GraphicsUnit.Pixel))
             {
                 var flags = TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding;
-                TextRenderer.DrawText(g, "PREPARING THE FIRST LAUNCH", small, new Point(tx, ty), Accent, TextFormatFlags.NoPadding);
-                TextRenderer.DrawText(g, title, big, new Rectangle(tx, ty + 24, textWidth, 100), Ink, flags);
-                TextRenderer.DrawText(g, "Playing the game's opening once, hidden, so its shaders are built before you play. This happens only on the first launch.", body, new Rectangle(tx, ty + 130, textWidth, 50), Soft, flags);
-                double fraction = finished ? 1 : Math.Min(0.97, clock.Elapsed.TotalSeconds / expectedSeconds);
-                int barY = ty + 196, barH = 8;
-                using (var track = new SolidBrush(Color.FromArgb(80, 255, 255, 255))) g.FillRectangle(track, tx, barY, textWidth, barH);
-                g.FillRectangle(accent, tx, barY, (int)(textWidth * fraction), barH);
-                TextRenderer.DrawText(g, (int)(fraction * 100) + "%   " + status, body, new Rectangle(tx, barY + 18, textWidth, 24), Ink, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-                TextRenderer.DrawText(g, "Your save is backed up and put back afterwards.", body, new Point(tx, barY + 52), Soft, TextFormatFlags.NoPadding);
-                const string skipText = "Esc: skip and start now";
-                var size = TextRenderer.MeasureText(g, skipText, body, Size.Empty, TextFormatFlags.NoPadding);
-                skipArea = new Rectangle(tx, barY + 80, size.Width, size.Height);
-                TextRenderer.DrawText(g, skipText, body, skipArea.Location, Soft, TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(g, "PREPARING THE FIRST LAUNCH", label, new Point((int)tx, (int)ty), Accent, TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(g, title, big, new Rectangle((int)tx, (int)(ty + h * 0.03f), (int)textWidth, (int)(h * 0.14f)), Ink, flags);
+                TextRenderer.DrawText(g, "Building the game's shaders by playing its opening once, hidden, so it runs smoothly from the start. This happens only on the first launch, and your save is backed up and put back.", body, new Rectangle((int)tx, (int)(ty + h * 0.17f), (int)textWidth, (int)(h * 0.12f)), Soft, flags);
+
+                // the bar along the foot, and the character running at its front
+                double fraction = finished ? 1 : Math.Min(0.97, t / expectedSeconds);
+                float bx = w * 0.08f, bw = w * 0.84f, by = h * 0.86f, bh = Math.Max(6, h * 0.009f);
+                using (var track = new SolidBrush(Color.FromArgb(70, 255, 255, 255))) using (var p = Rounded(new RectangleF(bx, by, bw, bh), bh / 2)) g.FillPath(track, p);
+                float fill = (float)(bw * fraction);
+                if (fill > bh) using (var accent = new SolidBrush(Accent)) using (var p = Rounded(new RectangleF(bx, by, fill, bh), bh / 2)) g.FillPath(accent, p);
+                if (runner != null) DrawRunner(g, bx + fill, by, h, t, dt);
+                TextRenderer.DrawText(g, (int)(fraction * 100) + "%   " + status, body, new Point((int)bx, (int)(by + bh + h * 0.02f)), Ink, TextFormatFlags.NoPadding);
+                const string onceText = "Only on the first launch";
+                var size = TextRenderer.MeasureText(g, onceText, body, Size.Empty, TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(g, onceText, body, new Point((int)(bx + bw) - size.Width, (int)(by + bh + h * 0.02f)), Soft, TextFormatFlags.NoPadding);
             }
+        }
+        /// <summary>The character's badge running at x along a bar whose top is at barY: a stride every 0.4 s, up and
+        /// down with it, squashed as it lands and leaning into the run, dust puffing behind each footfall.</summary>
+        private void DrawRunner(Graphics g, float x, float barY, int h, double t, double dt)
+        {
+            float d = h * 0.11f, phase = (float)(t / 0.4 % 1.0);
+            float hop = (float)Math.Abs(Math.Sin(phase * Math.PI)) * d * 0.32f;
+            float squash = hop < d * 0.04f ? 0.9f : 1f;
+            float lean = 7f + (float)Math.Sin(t / 0.4 * 2 * Math.PI) * 4f;
+            float footY = barY - h * 0.004f;
+            if (t - lastPuff > 0.2 && hop < d * 0.06f)
+            {
+                lastPuff = t;
+                puffs.Add(new Puff { X = x - d * 0.2f, Y = footY, Size = d * 0.16f });
+            }
+            for (int i = puffs.Count - 1; i >= 0; i--)
+            {
+                var p = puffs[i];
+                p.Age += (float)dt;
+                p.X -= (float)dt * d * 0.9f;
+                p.Y -= (float)dt * d * 0.25f;
+                if (p.Age > 0.6f) { puffs.RemoveAt(i); continue; }
+                float s = p.Size * (1 + p.Age * 2.5f);
+                using (var b = new SolidBrush(Color.FromArgb((int)(150 * (1 - p.Age / 0.6f)), 230, 225, 215)))
+                    g.FillEllipse(b, p.X - s / 2, p.Y - s / 2, s, s);
+            }
+            // its shadow on the bar, smaller as it rises
+            float shadow = d * (0.7f - hop / d);
+            using (var b = new SolidBrush(Color.FromArgb(90, 0, 0, 0))) g.FillEllipse(b, x - shadow / 2, barY - shadow * 0.12f, shadow, shadow * 0.24f);
+            var state = g.Save();
+            g.TranslateTransform(x, footY - hop - d * squash / 2);
+            g.RotateTransform(lean);
+            g.ScaleTransform(1f / squash * 0.98f, squash);
+            var circle = new RectangleF(-d / 2, -d / 2, d, d);
+            using (var ring = new SolidBrush(Accent)) g.FillEllipse(ring, RectangleF.Inflate(circle, d * 0.06f, d * 0.06f));
+            using (var white = new SolidBrush(Color.White)) g.FillEllipse(white, RectangleF.Inflate(circle, d * 0.025f, d * 0.025f));
+            using (var clip = new GraphicsPath())
+            {
+                clip.AddEllipse(circle);
+                g.SetClip(clip, CombineMode.Intersect);
+                g.DrawImage(runner, circle);
+            }
+            g.Restore(state);
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { tick.Dispose(); if (poster != null) poster.Dispose(); if (blurred != null) blurred.Dispose(); }
+            if (disposing) { tick.Dispose(); if (poster != null) poster.Dispose(); if (blurred != null) blurred.Dispose(); if (runner != null) runner.Dispose(); if (backdrop != null) backdrop.Dispose(); }
             base.Dispose(disposing);
         }
     }
