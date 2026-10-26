@@ -17426,10 +17426,10 @@ index 0000000..db3275d
 +FFX_PASSES(FFX_SPV_DECLARE)
 diff --git a/src/nx/gpu/vk/fg.c b/src/nx/gpu/vk/fg.c
 new file mode 100644
-index 0000000..dcf33bc
+index 0000000..53fe325
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
-@@ -0,0 +1,584 @@
+@@ -0,0 +1,586 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* PortForge FSR 3 (from scratch, shaders/fg.comp): optical-flow frame generation inspired by AMD FSR 3 / AFMF
 +   (luma pyramid, hierarchical SAD search, median filter, bidirectional disocclusion, HUD lock, hole inpaint).
@@ -17913,7 +17913,6 @@ index 0000000..dcf33bc
 +    if (!g_fg.have_prev) return 0;
 +    vk_render_end();
 +    cb = vk_cmd();
-+    if (!fg_motion(cb)) goto failed;
 +    if (g_fg.up_w != dw || g_fg.up_h != dh) {
 +        g_fg.up_ready[0] = g_fg.up_ready[1] = 0;
 +        g_fg.up_w = dw;
@@ -17938,6 +17937,8 @@ index 0000000..dcf33bc
 +        return 1;
 +    }
 +    cb = vk_cmd();
++    /* AMD does not use med[]; search only when the legacy warps need it. */
++    if (!fg_motion(cb)) goto failed;
 +    for (i = 0; i < nmids; i++) {
 +        int phase = (int)(((long long)(i + 1) << 16) / (nmids + 1));
 +        Surf* mid = fg_warp(cb, &g_fg.up[p], &g_fg.up[c], &g_fg.up_mids[i], dw, dh, phase);
@@ -17957,6 +17958,7 @@ index 0000000..dcf33bc
 +    }
 +    vk_render_forget_state();
 +    cb = vk_cmd();
++    if (!fg_motion(cb)) goto failed;
 +    *out_cur = vk_fg_current();
 +    n = 0;
 +    for (i = 0; i < nmids; i++) {
@@ -25762,7 +25764,7 @@ index 408db9e..69aae23 100644
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
 new file mode 100644
-index 0000000..c358a23
+index 0000000..f69a898
 --- /dev/null
 +++ b/src/nx/runtime/pf_engine_version.h
 @@ -0,0 +1,6 @@
@@ -25770,7 +25772,7 @@ index 0000000..c358a23
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.39"
++#define PF_ENGINE_VERSION "1.40"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5..38b9267 100644
@@ -27668,7 +27670,7 @@ index 0ccd9f1..86423a4 100644
  const u32* ui_atlas(int* w, int* h, u32* version);
  void ui_atlas_done(void);
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181..7e8197c 100644
+index 2bd6181..3237d32 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
 @@ -9,6 +9,7 @@
@@ -27679,7 +27681,7 @@ index 2bd6181..7e8197c 100644
  #include "nx/runtime/platform/plat.h"
  
  int g_frames;
-@@ -31,14 +32,149 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +32,152 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -27789,8 +27791,11 @@ index 2bd6181..7e8197c 100644
 +    if (__atomic_exchange_n(&g_prepared, 1, __ATOMIC_ACQ_REL) || !g_settings.prepare_shaders || !g_renderer ||
 +        !g_renderer->prepare)
 +        return;
-+    while ((busy = g_renderer->prepare(&done, &total, 1)) && plat_ns() - moved < 60000000000ull) {
-+        if (done != seen || !total) seen = done, moved = plat_ns();
++    while ((busy = g_renderer->prepare(&done, &total, 1))) {
++        u64 now = plat_ns();
++        /* An unknown total is not progress. Only newly completed work restarts the idle deadline. */
++        if (done > seen) seen = done, moved = now;
++        if (now - moved >= 60000000000ull) break;
 +        overlay_prepare(1, done, total);
 +        plat_sleep_ns(20000000);
 +    }
@@ -29080,7 +29085,7 @@ index 0000000..9c264d5
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45..336cf13 100644
+index 53c5e45..9ef731b 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,8 @@
@@ -29092,16 +29097,103 @@ index 53c5e45..336cf13 100644
  static u64 now_ns, slept_ns;
  static unsigned checks, failures;
  #define CHECK(c, ...)                                                                                                  \
-@@ -36,6 +38,8 @@ void logf_(int lvl, const char* fmt, ...) {
+@@ -36,6 +38,14 @@ void logf_(int lvl, const char* fmt, ...) {
  }
  u64 nvmap_addr_by_id(u32 id) { return id == 7 ? 0x1000 : 0; }
  void cheats_frame(void) {}
-+/* the preparing screen: never on here (prepare_shaders is 0) */
-+void overlay_prepare(int on, u32 done, u32 total) { (void)on, (void)done, (void)total; }
++static unsigned prepare_shown, prepare_hidden;
++void overlay_prepare(int on, u32 done, u32 total) {
++    (void)done, (void)total;
++    if (on)
++        prepare_shown++;
++    else
++        prepare_hidden++;
++}
  static u64 presented;
  static void test_present(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, const i32 crop[4], u32 t) {
      (void)w, (void)h, (void)pitch, (void)layout, (void)bhl, (void)fmt, (void)crop, (void)t;
-@@ -84,12 +88,158 @@ static void pacing(void) {
+@@ -56,6 +66,80 @@ static void ticks(void) {
+     }
+ }
+ 
++/* Preparation runs against the same fake clock as pacing; no driver or real-time wait is involved. */
++typedef struct {
++    u64 at;
++    u32 done, total;
++    int busy;
++} PrepareStep;
++static const PrepareStep* prepare_steps;
++static size_t prepare_step_count;
++static u64 prepare_started;
++static unsigned prepare_calls, prepare_releases, prepare_guard_tripped;
++static int test_prepare(u32* done, u32* total, int all) {
++    size_t i = 0;
++    u64 elapsed = now_ns - prepare_started;
++    if (!all) {
++        prepare_releases++;
++        return 0;
++    }
++    prepare_calls++;
++    while (i + 1 < prepare_step_count && elapsed >= prepare_steps[i + 1].at) i++;
++    *done = prepare_steps[i].done;
++    *total = prepare_steps[i].total;
++    /* A broken watchdog must fail rather than hang the suite forever. */
++    if (elapsed >= 180000000000ull) {
++        prepare_guard_tripped++;
++        return 0;
++    }
++    return prepare_steps[i].busy;
++}
++static void preparation_case(const char* name, const PrepareStep* steps, size_t count, u64 elapsed) {
++    prepare_steps = steps;
++    prepare_step_count = count;
++    prepare_started = now_ns = 1000000000;
++    slept_ns = 0;
++    prepare_calls = prepare_releases = prepare_guard_tripped = prepare_shown = prepare_hidden = 0;
++    g_prepared = 0;
++    g_settings.prepare_shaders = 1;
++    test_renderer.prepare = test_prepare;
++    prepare_hold();
++    CHECK(now_ns - prepare_started == elapsed && slept_ns == elapsed,
++          "%s: preparation waited %llu ns, expected %llu", name,
++          (unsigned long long)(now_ns - prepare_started), (unsigned long long)elapsed);
++    CHECK(!prepare_guard_tripped, "%s: preparation needed the test's runaway guard", name);
++    CHECK(prepare_releases == 1 && prepare_hidden == 1, "%s: preparation did not release workers and hide once", name);
++    CHECK(prepare_shown == elapsed / 20000000, "%s: preparation overlay polling changed", name);
++    unsigned calls = prepare_calls;
++    prepare_hold();
++    CHECK(prepare_calls == calls && prepare_releases == 1 && prepare_hidden == 1,
++          "%s: a later frame repeated preparation", name);
++}
++static void preparation(void) {
++    static const PrepareStep unknown_stall[] = {{0, 0, 0, 1}};
++    static const PrepareStep known_stall[] = {{0, 0, 5, 1}};
++    static const PrepareStep unknown_progress[] = {{0, 0, 0, 1}, {40000000000ull, 1, 0, 1}};
++    static const PrepareStep total_discovered[] = {{0, 0, 0, 1}, {40000000000ull, 0, 5, 1}};
++    static const PrepareStep progress_complete[] = {
++        {0, 0, 4, 1}, {40000000000ull, 1, 4, 1}, {80000000000ull, 2, 4, 1}, {120000000000ull, 4, 4, 0}};
++    static const PrepareStep load_complete[] = {
++        {0, 0, 0, 1}, {1000000000, 0, 2, 1}, {2000000000, 1, 2, 1}, {3000000000, 2, 2, 0}};
++    static const PrepareStep deadline_progress[] = {
++        {0, 0, 2, 1}, {60000000000ull, 1, 2, 1}, {80000000000ull, 2, 2, 0}};
++    static const PrepareStep already_complete[] = {{0, 0, 0, 0}};
++    preparation_case("unknown total stalled", unknown_stall, 1, 60000000000ull);
++    preparation_case("known total stalled", known_stall, 1, 60000000000ull);
++    preparation_case("unknown total with progress", unknown_progress, 2, 100000000000ull);
++    preparation_case("total discovered without completed work", total_discovered, 2, 60000000000ull);
++    preparation_case("progress beyond one minute then completion", progress_complete, 4, 120000000000ull);
++    preparation_case("loading then normal completion", load_complete, 4, 3000000000);
++    preparation_case("progress at the idle deadline", deadline_progress, 3, 80000000000ull);
++    preparation_case("already complete", already_complete, 1, 0);
++    test_renderer.prepare = NULL;
++    g_settings.prepare_shaders = 0;
++    g_prepared = 0;
++}
++
+ static void pacing(void) {
+     const u64 refresh = 1000000000u / 60;
+     u64 before;
+@@ -84,12 +168,158 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -29261,9 +29353,11 @@ index 53c5e45..336cf13 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -98,6 +248,7 @@ int main(void) {
+@@ -97,7 +327,9 @@ int main(void) {
+     i32 crop[4] = {0, 0, 0, 0};
      clock_start();
      ticks();
++    preparation();
      pacing();
 +    speed_lock();
      test_renderer.present_buffer = test_present;
