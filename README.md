@@ -1,6 +1,8 @@
-# PortForge 0.56 / Engine 1.39
+# PortForge 0.57 / Engine 1.40
 
-**New in 0.56:** every game's first launch now shows a full-screen loading screen of its own while its shaders are built: its key art, its name, and its character (found in the key art automatically) running along the progress bar. The engine's preparing screen at later launches has the same running character. Neither can be skipped, so a game starts only once its shaders are ready. See [VALIDATION-0.56.md](VALIDATION-0.56.md).
+**New in 0.57:** enlarged AMD frame generation no longer runs the older motion search unless fallback is needed. Shader preparation also recovers after a minute without completed work when its total is still unknown. Windows game-process detection also avoids a .NET module-lookup crash while retaining exact-path matching and refusing unsafe save operations when a live process cannot be identified. The engine build, focused regressions, and short Mario runs with AMD and legacy interpolation passed; these runs do not establish a universal FPS gain. See [VALIDATION-0.57.md](VALIDATION-0.57.md) for the evidence and limits.
+
+**0.56:** every game's first launch now shows a full-screen loading screen of its own while its shaders are built: its key art, its name, and its character (found in the key art automatically) running along the progress bar. The engine's preparing screen at later launches has the same running character. Neither can be skipped, so a game starts only once its shaders are ready. See [VALIDATION-0.56.md](VALIDATION-0.56.md).
 
 **0.55:** PortForge FSR 3 now generates its pictures with AMD's own FidelityFX frame interpolation and optical flow (from AMD's open-source SDK 1.1.4), with about a fifth fewer visible artifacts on moving parts of Zelda BotW than before. Each game also gets its own preparing screen at launch (its key art, name and a progress bar) while the shaders it used before are built, so it plays without stopping for them; on a game's very first Play, PortForge first plays its opening once, hidden, to record them. Recorded shaders now survive engine updates. Play now updates a game's engine instead of cancelling the start. See [VALIDATION-0.55.md](VALIDATION-0.55.md).
 
@@ -97,33 +99,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test -BackendPa
 
 ## Releasing a version
 
-### Automatic (recommended)
-
-Push a version tag — the CI builds, tests, and publishes the release:
-
-```powershell
-# 1. Update version in src/AssemblyInfo.cs and src/NativeApp.cs (e.g. 0.54.0.0)
-# 2. Commit and tag
-git add src/AssemblyInfo.cs src/NativeApp.cs
-git commit -m "PortForge 0.54"
-git tag v0.54
-git push origin main --tags
-```
-
-The **CI & Release** workflow (`.github/workflows/ci.yml`) will:
-- Build the Engine and app on Windows
-- Run engine pacing tests and FG cadence tests
-- Create `PortForge-<version>-Windows-and-Source.zip`, `PortForge-<version>-source.zip`, `PortForge-Setup-<version>.exe`, `PortForge-<version>-SHA256.txt`
-- Publish a GitHub release tagged `v<version>` with `VALIDATION-<version>.md` as release notes
-- The in-app **Check for updates** button picks it up automatically
-
-### Manual (for testing or hotfixes)
-
 1. Raise the version in `src/AssemblyInfo.cs` (and the window title in `src/NativeApp.cs`), build with `-Test`.
 2. Run `build-release.ps1 -Version <version>` (or `-SkipBuild` after a local build). It stages the Windows+Source ZIP, source-only ZIP, Setup.exe and SHA256 sums under `build\release-<version>`, and **excludes** `.git`, `.cache` and `build` from Source (required so older in-app updaters can install the package).
 3. Create a GitHub release tagged `v<version>` and attach those assets. The in-app **Check for updates** button picks it up.
-
-Or run the **Ship PortForge** workflow manually from the Actions tab with the version input.
 
 ## More documentation
 
