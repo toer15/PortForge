@@ -134,6 +134,7 @@ jobs:
             -DPERL_EXECUTABLE="$(cygpath -m /usr/bin/perl.exe)" \
             -DSNX_OPENSSL_MAKE="$(cygpath -m /usr/bin/make.exe)" \
             -DCMAKE_DISABLE_FIND_PACKAGE_SDL3=ON -DSNX_DEPLOY=OFF \
+            -DCMAKE_INSTALL_BINDIR=. \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)"
           cmake --install build/default --prefix ../package
@@ -145,8 +146,8 @@ jobs:
           set -euo pipefail
           cd engine/src
           {
-            cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file --parallel "$(getconf _NPROCESSORS_ONLN)"
-            ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file)$' --output-on-failure
+            cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file snx-test-nx-jit-region snx-test-render-scale --parallel "$(getconf _NPROCESSORS_ONLN)"
+            ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file|nx_jit_region|render_scale)$' --output-on-failure
           } 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-tests.log"
 
       - name: Package the Engine
@@ -156,7 +157,10 @@ jobs:
           cd engine
           base=$(cat BASE 2>/dev/null || git -C src log -1 --format=%h)
           version=$(cat VERSION 2>/dev/null || echo 1.0)
-          printf 'version=%s\nbase=%s\nfeatures=%s\n' "$version" "$base" "$(cat FEATURES 2>/dev/null || echo 'Smart async shaders')" > package/ENGINE.txt
+          # the shader record's translation key: the app prepares a game's first launch again when it changes
+          shaders=$(./package/scarletnx.exe --shader-abi | tr -d '\r\n')
+          test -n "$shaders"
+          printf 'version=%s\nbase=%s\nshaders=%s\nfeatures=%s\n' "$version" "$base" "$shaders" "$(cat FEATURES 2>/dev/null || echo 'Smart async shaders')" > package/ENGINE.txt
           mkdir -p package/licenses
           cp src/LICENSE package/licenses/ScarletNX-LICENSE.txt
           cp src/src/nx/gpu/vk/fsr1/LICENSE.txt package/licenses/AMD-FidelityFX-FSR1-LICENSE.txt
@@ -193,10 +197,17 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: portforge-${{ steps.get-version.outputs.version }}-${{ github.sha }}
-          path: |
-            build/PortForgeNative/
-            ${{ steps.release-build.outputs.release_dir }}/
+          path: build/PortForgeNative/
           if-no-files-found: warn
+
+      # the release's four files alone, at the artifact's root, for the release job
+      - name: Upload release files
+        if: steps.check-tag.outputs.is-tag == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ steps.get-version.outputs.version }}-${{ github.sha }}
+          path: build/release-${{ steps.get-version.outputs.version }}/
+          if-no-files-found: error
 
       - name: Report failure
         if: failure()
@@ -217,10 +228,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # engine/VERSION and the release notes (VALIDATION-<version>.md) come from the tagged source
+      - uses: actions/checkout@v7
+
       - name: Download artifacts
         uses: actions/download-artifact@v7
         with:
-          name: portforge-${{ needs.windows.outputs.version }}-${{ github.sha }}
+          name: release-${{ needs.windows.outputs.version }}-${{ github.sha }}
           path: release-files
 
       - name: Create GitHub Release
@@ -232,6 +246,7 @@ jobs:
           tag="v$v"
           engine=$(cat engine/VERSION | tr -d '\r\n')
           notes="VALIDATION-$v.md"
+          [ -f "$notes" ] || notes="VALIDATION-${v%.0}.md" # 0.58.0's notes are VALIDATION-0.58.md
           [ -f "$notes" ] || notes=README.md
           files=(
             release-files/PortForge-$v-Windows-and-Source.zip

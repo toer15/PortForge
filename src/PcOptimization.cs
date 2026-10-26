@@ -114,6 +114,8 @@ namespace PortForge
                 if (cap == null || cap.Keys.Contains("fps_limit")) settings["fps_limit"] = g.Graphics.FpsLimit;
                 if ((cap == null || cap.Keys.Contains("display_resolution")) && GlobalSettings.IsDisplayResolution(g.DisplayResolution))
                     settings["display_resolution"] = g.DisplayResolution;
+                if (cap == null || cap.Keys.Contains("true_resolution")) settings["true_resolution"] = g.TrueResolution ? "1" : "0";
+                if (cap == null || cap.Keys.Contains("low_latency")) settings["low_latency"] = g.LowLatency ? "1" : "0";
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }

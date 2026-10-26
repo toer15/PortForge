@@ -3,14 +3,14 @@
 #      ScarletNX's own Windows CI does (engine/build-engine.sh), its pacing tests run, then packaged
 #   2. the app (build-native.ps1) with the Engine in its Engine folder, and the FG cadence tests
 #   3. the release files (build-release.ps1) and, when asked, the GitHub release that in-app updates read
-# Run it from the Actions tab: "Ship PortForge", Run workflow, the version (0.53).
+# Run it from the Actions tab: "Ship PortForge", Run workflow, the version (0.58).
 name: Ship PortForge
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: PortForge version (for example 0.53)
+        description: PortForge version (for example 0.58)
         required: true
       publish:
         description: Publish the GitHub release (in-app updates pick it up)
@@ -109,6 +109,7 @@ jobs:
             -DPERL_EXECUTABLE="$(cygpath -m /usr/bin/perl.exe)" \
             -DSNX_OPENSSL_MAKE="$(cygpath -m /usr/bin/make.exe)" \
             -DCMAKE_DISABLE_FIND_PACKAGE_SDL3=ON -DSNX_DEPLOY=OFF \
+            -DCMAKE_INSTALL_BINDIR=. \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build --preset default --parallel "$(getconf _NPROCESSORS_ONLN)"
           cmake --install build/default --prefix ../package
@@ -120,8 +121,8 @@ jobs:
           set -euo pipefail
           cd engine/src
           {
-            cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file --parallel "$(getconf _NPROCESSORS_ONLN)"
-            ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file)$' --output-on-failure
+            cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file snx-test-render-scale --parallel "$(getconf _NPROCESSORS_ONLN)"
+            ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file|render_scale)$' --output-on-failure
           } 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-tests.log"
 
       - name: Package the Engine
@@ -133,7 +134,9 @@ jobs:
           # package-engine.sh expects to copy from engine/package, so we just need to verify and create ENGINE.txt
           base=$(cat BASE 2>/dev/null || git -C src log -1 --format=%h)
           version=$(cat VERSION 2>/dev/null || echo 1.0)
-          printf 'version=%s\nbase=%s\nfeatures=%s\n' "$version" "$base" "$(cat FEATURES 2>/dev/null || echo 'Smart async shaders')" > package/ENGINE.txt
+          shaders=$(./package/scarletnx.exe --shader-abi | tr -d '\r\n')
+          test -n "$shaders"
+          printf 'version=%s\nbase=%s\nshaders=%s\nfeatures=%s\n' "$version" "$base" "$shaders" "$(cat FEATURES 2>/dev/null || echo 'Smart async shaders')" > package/ENGINE.txt
           mkdir -p package/licenses
           cp src/LICENSE package/licenses/ScarletNX-LICENSE.txt
           if [[ -f src/src/nx/gpu/vk/fsr1/LICENSE.txt ]]; then
@@ -142,6 +145,8 @@ jobs:
           if [[ -f src/src/nx/gpu/vk/fsr1/UPSTREAM.txt ]]; then
               cp src/src/nx/gpu/vk/fsr1/UPSTREAM.txt package/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt
           fi
+          cp src/src/nx/gpu/vk/ffx/LICENSE.txt package/licenses/AMD-FidelityFX-SDK-1.1.4-LICENSE.txt
+          cp src/src/nx/gpu/vk/ffx/UPSTREAM.txt package/licenses/AMD-FidelityFX-SDK-1.1.4-UPSTREAM.txt
           echo "PACKAGE_OK package"; ls package
 
       - name: Build the app and the release files

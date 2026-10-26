@@ -29,7 +29,8 @@ internal static class OptimizationTests
                 "An empty trace is safe to display");
             ControllerSettings.PathOverride = Path.Combine(root, "controller-settings.txt");
             string globalPath = Path.Combine(root, "global-settings.ini");
-            var global = new GlobalSettings(); global.Graphics.FpsLimit="144"; global.Graphics.Docked=false;
+            Check(GlobalSettings.LoadEnabledOrNull() == null, "Missing global settings do not alter first-launch shader warm-up");
+            var global = new GlobalSettings { DisplayResolution = "2160" }; global.Graphics.FpsLimit="144"; global.Graphics.Docked=false;
             global.Graphics.PixelSmoothing=true; global.HideCursor=false;
             global.UpscaleMode=2; global.ApplyUpscaleMode(); global.FrameTrace=true; global.FrameTimeGraph=true; global.Save(globalPath);
             var reloadedGlobal = GlobalSettings.Load(globalPath);
@@ -37,6 +38,12 @@ internal static class OptimizationTests
                 "Global settings round-trip without choosing a game");
             Check(reloadedGlobal.FrameGeneration && reloadedGlobal.FrameTrace && reloadedGlobal.FrameTimeGraph,
                 "Engine frame generation, trace recording and graph survive saving for all games");
+            Check(reloadedGlobal.TrueResolution && reloadedGlobal.LowLatency && reloadedGlobal.TrueResolutionActive &&
+                  reloadedGlobal.RenderResolutionNote().Contains("3840x2160") && reloadedGlobal.RenderResolutionNote().Contains("Dynamic-resolution"),
+                "Global 4K mode persists and explains its approximate screen-target behavior");
+            global.DisplayResolution="720"; global.Graphics.Docked=true;
+            Check(global.TrueResolutionActive && global.RenderResolutionNote().Contains("1280x720"),
+                "A 720p TV target scales screen-shaped game images down from the typical 1080p output");
             var offPath=Path.Combine(root,"global-defaults.ini"); new GlobalSettings().Save(offPath);
             Check(!GlobalSettings.Load(offPath).FrameGeneration && File.ReadAllText(offPath).Contains("frame_generation=0"),
                 "Frame generation defaults off and saves an explicit off value");

@@ -16,24 +16,77 @@ namespace PortForge
     public static class FirstLaunch
     {
         public const string MarkerName = "PortForge-first-launch.txt";
-        /// <summary>The engine's record of the game's shaders: shader_cache\&lt;game&gt;.vkshaders beside the exe.</summary>
+        /// <summary>The saved global settings when they apply to every game, else null.</summary>
+        public static GlobalSettings Global()
+        {
+            return GlobalSettings.LoadEnabledOrNull();
+        }
+        /// <summary>The engine's record of the game's shaders: shader_cache\&lt;game&gt;.vkshaders beside the exe, or
+        /// &lt;game&gt;.true-res.vkshaders when the next launch draws at a true resolution above the game's own (Engine 1.41
+        /// translates texel fetches differently there and keeps those shaders apart).</summary>
         public static string RecordPath(string exe)
         {
             string full = Path.GetFullPath(exe);
-            return Path.Combine(Path.GetDirectoryName(full), "shader_cache", Path.GetFileNameWithoutExtension(full) + ".vkshaders");
+            var g = Global();
+            string mode = g != null && g.TrueResolutionActive ? ".true-res" : "";
+            return Path.Combine(Path.GetDirectoryName(full), "shader_cache", Path.GetFileNameWithoutExtension(full) + mode + ".vkshaders");
         }
-        /// <summary>True for a game PortForge hasn't prepared yet and whose engine has recorded none of its shaders.</summary>
+        /// <summary>The engine's shader translation as ENGINE.txt names it (shaders=, Engine 1.41 and later), or null.</summary>
+        public static string EngineShaders(string exe)
+        {
+            try
+            {
+                string info = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe)), "ENGINE.txt");
+                if (!File.Exists(info)) return null;
+                foreach (var line in File.ReadLines(info))
+                    if (line.StartsWith("shaders=", StringComparison.Ordinal) && line.Length > 8) return line.Substring(8).Trim();
+            }
+            catch (IOException) { } catch (UnauthorizedAccessException) { }
+            return null;
+        }
+        /// <summary>The translation a record was written by: "shaders=" in its header's key, or null.</summary>
+        public static string RecordShaders(string record)
+        {
+            try
+            {
+                var buffer = new byte[2048];
+                int n;
+                using (var f = new FileStream(record, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) n = f.Read(buffer, 0, buffer.Length);
+                string head = System.Text.Encoding.ASCII.GetString(buffer, 0, n);
+                int at = head.IndexOf("shaders=", StringComparison.Ordinal);
+                if (at < 0) return null;
+                int end = head.IndexOf(' ', at);
+                return end < 0 ? null : head.Substring(at + 8, end - at - 8);
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+        }
+        private static string Stamp(string exe)
+        {
+            var g = Global();
+            return "for shaders=" + (EngineShaders(exe) ?? "unknown") + " mode=" + (g != null && g.TrueResolutionActive ? "true-res" : "native");
+        }
+        /// <summary>True when the next launch would find no record of the game's shaders to build behind its screen: none
+        /// recorded yet, none for the resolution mode now chosen, or one an engine with another shader translation wrote
+        /// (which the engine starts over). Once prepared for an engine's translation and a mode it isn't offered again,
+        /// whatever the warm-up managed to record.</summary>
         public static bool Needed(string exe)
         {
             string full = Path.GetFullPath(exe);
-            if (File.Exists(Path.Combine(Path.GetDirectoryName(full), MarkerName))) return false;
             var record = new FileInfo(RecordPath(full));
-            return !record.Exists || record.Length < 4096;
+            string engine = EngineShaders(full);
+            bool usable = record.Exists && record.Length >= 4096 &&
+                          (engine == null || RecordShaders(record.FullName) == null || RecordShaders(record.FullName) == engine);
+            if (usable) return false;
+            string marker = Path.Combine(Path.GetDirectoryName(full), MarkerName);
+            try { return !File.Exists(marker) || !File.ReadAllText(marker).Contains(Stamp(full)); }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
         }
-        /// <summary>Remembers that the first launch was prepared (or skipped), so it is offered once.</summary>
+        /// <summary>Remembers that the first launch was prepared (or skipped) for this engine and mode, so it is offered once.</summary>
         public static void Mark(string exe, string result)
         {
-            try { File.WriteAllText(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe)), MarkerName), "First launch prepared " + DateTime.Now.ToString("u") + Environment.NewLine + result + Environment.NewLine); }
+            try { File.WriteAllText(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe)), MarkerName), "First launch prepared " + DateTime.Now.ToString("u") + " " + Stamp(exe) + Environment.NewLine + result + Environment.NewLine); }
             catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }

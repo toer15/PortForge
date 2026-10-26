@@ -10,8 +10,13 @@ namespace PortForge
     public sealed class GlobalSettings
     {
         public bool Enabled = true, HideCursor = true, SaveIndicator = true, FrameTimeGraph, FrameTrace, FrameGeneration;
-        /// <summary>auto, 720, 1080, 1440, or 2160 — presentable color targets / swapchain height.</summary>
+        /// <summary>auto, 720, 1080, 1440, or 2160: the window and swapchain height.</summary>
         public string DisplayResolution = "auto";
+        /// <summary>Engine 1.41: screen-shaped render targets are scaled toward the selected resolution relative to
+        /// the game's typical output (1080 TV, 720 handheld). Dynamic-resolution games may differ.</summary>
+        public bool TrueResolution = true;
+        /// <summary>Engine 1.41: three swapchain images with VSync instead of five, the game ahead of ordinary programs.</summary>
+        public bool LowLatency = true;
         /// <summary>0 Linear, 1 FSR 1, 2 PortForge FSR 3 (FSR 1 + from-scratch optical-flow FG).</summary>
         public int UpscaleMode;
         public GraphicsProfile Graphics = new GraphicsProfile();
@@ -34,6 +39,8 @@ namespace PortForge
             if (v.TryGetValue("frame_trace", out x)) s.FrameTrace = x == "1";
             if (v.TryGetValue("frame_generation", out x)) s.FrameGeneration = x == "1";
             if (v.TryGetValue("display_resolution", out x) && IsDisplayResolution(x)) s.DisplayResolution = x;
+            if (v.TryGetValue("true_resolution", out x)) s.TrueResolution = x != "0";
+            if (v.TryGetValue("low_latency", out x)) s.LowLatency = x != "0";
             if (v.TryGetValue("upscale_mode", out x) && Int32.TryParse(x, out n) && n >= 0 && n <= 2) s.UpscaleMode = n;
             if (v.TryGetValue("fps_limit", out x)) s.Graphics.FpsLimit = x;
             if (v.TryGetValue("upscaler", out x) && Int32.TryParse(x, out n)) s.Graphics.Upscaler = n;
@@ -50,6 +57,13 @@ namespace PortForge
             return s;
         }
 
+        public static GlobalSettings LoadEnabledOrNull()
+        {
+            if (!File.Exists(FilePath)) return null;
+            var settings = Load(FilePath);
+            return settings.Enabled ? settings : null;
+        }
+
         public void ApplyUpscaleMode()
         {
             if (UpscaleMode < 0 || UpscaleMode > 2) UpscaleMode = 0;
@@ -61,6 +75,29 @@ namespace PortForge
         public static bool IsDisplayResolution(string value)
         {
             return value == "auto" || value == "720" || value == "1080" || value == "1440" || value == "2160";
+        }
+
+        /// <summary>The engine adjusts screen-shaped render targets (render_scale.h pf_true_scale) when the selected
+        /// display height differs from the game's typical output, 1080 lines in TV mode and 720 handheld.</summary>
+        public bool TrueResolutionActive
+        {
+            get
+            {
+                int height;
+                if (!Enabled || !TrueResolution || !Int32.TryParse(DisplayResolution, NumberStyles.Integer, CultureInfo.InvariantCulture, out height)) return false;
+                return height != (Graphics.Docked ? 1080 : 720);
+            }
+        }
+
+        /// <summary>Approximate screen-target size for Settings; dynamic-resolution games may produce different sizes.</summary>
+        public string RenderResolutionNote()
+        {
+            int height;
+            if (!Int32.TryParse(DisplayResolution, NumberStyles.Integer, CultureInfo.InvariantCulture, out height)) return "Auto keeps the game's own resolution and window.";
+            int own = Graphics.Docked ? 1080 : 720;
+            if (TrueResolution)
+                return "Screen-shaped targets aim for " + (height * 16 / 9) + "x" + height + " (" + ((double)height / own).ToString("0.##", CultureInfo.InvariantCulture) + "x the typical " + own + "p " + (Graphics.Docked ? "TV" : "handheld") + " output). Dynamic-resolution games and data-shaped targets may differ.";
+            return "The game keeps its typical " + own + "p " + (Graphics.Docked ? "TV" : "handheld") + " targets; the " + height + "p display scales the finished image.";
         }
 
         /// <summary>FPS limit and FSR 3 change pictures on screen. The game keeps its own pace.</summary>
@@ -78,10 +115,13 @@ namespace PortForge
             Graphics.Validate();
             if (!IsDisplayResolution(DisplayResolution)) DisplayResolution = "auto";
             var v = Graphics.Values();
-            // Presentable color targets may scale toward display_resolution; data RTs stay protected.
+            // resolution= stays 1 under protection; true_resolution scales the game's screen-sized targets toward
+            // display_resolution (square, small and odd-shaped ones, which may hold data, stay native).
             v["resolution"] = "1";
             v["render_scale_safety"] = "1";
             v["display_resolution"] = DisplayResolution;
+            v["true_resolution"] = TrueResolution ? "1" : "0";
+            v["low_latency"] = LowLatency ? "1" : "0";
             v["upscale_mode"] = UpscaleMode.ToString(CultureInfo.InvariantCulture);
             v["global_enabled"] = Enabled ? "1" : "0";
             v["hide_cursor"] = HideCursor ? "1" : "0";

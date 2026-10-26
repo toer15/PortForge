@@ -308,7 +308,13 @@ namespace PortForge
                 try
                 {
                     if (progress != null) progress.Report("Warming the shader cache by playing the opening of the game (" + GameplaySeconds + " seconds). Your save is backed up and restored.");
-                    string output = Run(exe, "-H --seconds=" + GameplaySeconds + " --log=1 --fullscreen=0 --vsync=0 --fps_limit=0 --script=" + GameplayScript + " --press_len=300", GameplaySeconds + 45, token);
+                    // A timed run leaves the global settings out, but true resolution translates shaders its own way and
+                    // keeps them in a record of its own: the warm-up plays in the mode the player's launches will use.
+                    string mode = "";
+                    var global = GlobalSettings.LoadEnabledOrNull();
+                    if (global != null && cap.Keys.Contains("true_resolution"))
+                        mode = " --display_resolution=" + global.DisplayResolution + " --docked=" + (global.Graphics.Docked ? "1" : "0") + " --true_resolution=" + (global.TrueResolution ? "1" : "0");
+                    string output = Run(exe, "-H --seconds=" + GameplaySeconds + " --log=1 --fullscreen=0 --vsync=0 --fps_limit=0" + mode + " --script=" + GameplayScript + " --press_len=300", GameplaySeconds + 45, token);
                     var last = Regex.Matches(output, @"(\d+) pipelines made \((\d+) from the cache, (\d+) ms making, (\d+) ms waited for\)").Cast<Match>().LastOrDefault();
                     return "Shader cache warmed by a " + GameplaySeconds + "-second play-through" + (last == null ? "." : ": " + last.Groups[1].Value + " pipelines built this run, " + last.Groups[2].Value + " already cached, " + last.Groups[4].Value + " ms waited for.");
                 }

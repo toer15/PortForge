@@ -12,7 +12,7 @@
 
 **Frame-time trace:** F7 or **Escape > Frame-time graph** shows the graph, with hitches in red. Turn on **Record frame-time trace** in Settings before launching to write `frametime-trace.csv` beside the game's log. After play, **View frame-time trace** shows the slowest frames and measured work. This measures real game frames; generated display frames do not inflate it. Cause labels identify the largest measured component; overlapping counters are not a complete causal profile. The CSV is replaced on each recorded launch.
 
-**Resolution and FSR:** TV/handheld modes let each game choose its own render resolution. FSR 1 enlarges the finished picture. True native resolution overrides (720p through 4K) and AMD FSR 2/3 are not implemented. No doubled simulation FPS or universally stutter-free promise is made.
+**Resolution and FSR:** choose a 720p, 1080p, 1440p or 4K display target. With Engine 1.41's experimental resolution matching on, screen-shaped render targets scale toward that 16:9 size relative to the game's typical 1080p TV or 720p handheld output; data-shaped targets stay native. Dynamic-resolution games can differ, so exact internal pixels are not guaranteed for every title. Scaling up costs GPU; scaling down loses detail but can reduce GPU work. Turn it off if artifacts appear. FSR 1 separately upscales the finished image. No zero-lag or universal-compatibility promise is made.
 
 # PortForge 0.33
 
@@ -42,7 +42,7 @@
 
 **Play game** opens the game or returns to its existing window. Background engine-settings probes do not count as gameplay. Play starts from the local save immediately; to fetch another PC's progress first, use **Cloud saves** before playing. Automatic cloud saving resumes after the game closes. If a game exits during startup, the status shows the exit and available log details.
 
-**Graphics protection:** Engine 1.9 keeps the internal render scale at **100%**, including when an old Performance preset saved 75%. Shrinking intermediate game images can corrupt geometry and lighting. The app shows the protected 100% value, keeps it when selecting any preset, and uses it in PC matching and Auto tune. Reduced or increased internal resolution is unavailable through these protected controls.
+**Graphics protection:** Engine 1.9 keeps the legacy render-scale setting at **100%**, including when an old Performance preset saved 75%. Engine 1.41's separate experimental resolution matching only scales screen-shaped targets together; square, tiny, array and unusual data targets stay native. Some titles may still show artifacts, so turn the option off for those games. Reduced or increased legacy render-scale presets remain protected.
 
 **Upscaler:** choose **AMD FSR 1 (automatic)** to reconstruct and sharpen the finished image when the game window is larger. This works at the game's native internal resolution. Linear is the off switch. Install Engine 1.9 from the Engine tab for graphics protection; new conversions and downloaded inputs receive it automatically. Your existing game needs an engine upgrade and a restart; a running game keeps its old engine.
 
