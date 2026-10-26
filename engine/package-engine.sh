@@ -24,4 +24,6 @@ printf 'version=%s\nbase=%s\nfeatures=%s\n' "$version" "$base" "$(cat "$root/FEA
 mkdir -p "$pkg/licenses"; cp "$root/src/LICENSE" "$pkg/licenses/ScarletNX-LICENSE.txt"
 cp "$root/src/src/nx/gpu/vk/fsr1/LICENSE.txt" "$pkg/licenses/AMD-FidelityFX-FSR1-LICENSE.txt"
 cp "$root/src/src/nx/gpu/vk/fsr1/UPSTREAM.txt" "$pkg/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt"
+cp "$root/src/src/nx/gpu/vk/ffx/LICENSE.txt" "$pkg/licenses/AMD-FidelityFX-SDK-1.1.4-LICENSE.txt"
+cp "$root/src/src/nx/gpu/vk/ffx/UPSTREAM.txt" "$pkg/licenses/AMD-FidelityFX-SDK-1.1.4-UPSTREAM.txt"
 echo "PACKAGE_OK $pkg"; ls "$pkg"
