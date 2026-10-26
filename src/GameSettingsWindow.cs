@@ -301,14 +301,21 @@ namespace PortForge
                 try{await Task.Run(()=>GameOptimization.SaveAndVerify(exe,desired,capabilities));}
                 catch(Exception e){history.AppendText("Settings could not be saved ("+e.Message+"). Starting with the last saved settings."+Environment.NewLine);}
                 ShowProfile(GameOptimization.Load(exe));
-                // Copy the app Engine into the game folder when it is older, so Esc shows the current Engine and FPS/FG fixes run.
-                try
+                // Play's own work on the game: the hold Play put on it above stops PortForge's background work, not this
+                using(PlayFirst.ForPlay(exe))
                 {
-                    string synced=await Task.Run(()=>EngineManager.EnsureForPlay(exe,new Progress<string>(m=>SetStatus("STARTING","Updating Engine",m,Mint)),token));
-                    if(synced!=null)history.AppendText(synced+Environment.NewLine);
+                    // Copy the app Engine into the game folder when it is older, so Esc shows the current Engine and FPS/FG fixes run.
+                    try
+                    {
+                        string synced=await Task.Run(()=>EngineManager.EnsureForPlay(exe,new Progress<string>(m=>SetStatus("STARTING","Updating Engine",m,Mint)),token));
+                        if(synced!=null)history.AppendText(synced+Environment.NewLine);
+                    }
+                    catch(OperationCanceledException){throw;}
+                    catch(Exception e){history.AppendText("Engine update before Play skipped ("+e.Message+"). Starting with the game's current scarletnx.exe."+Environment.NewLine);}
+                    // The very first launch: the game's opening played once, hidden, behind the game's own screen, so the
+                    // shaders it needs are recorded. The engine builds those behind its own screen at this launch and every one after
+                    if(FirstLaunch.Needed(exe))await PrepareFirstLaunch(exe,token);
                 }
-                catch(OperationCanceledException){throw;}
-                catch(Exception e){history.AppendText("Engine update before Play skipped ("+e.Message+"). Starting with the game's current scarletnx.exe."+Environment.NewLine);}
                 // Settings were saved once above. Do not repeat a stopped-game check after starting.
                 using(var process=GameOptimization.StartForPlayer(exe))
                 {
@@ -325,6 +332,28 @@ namespace PortForge
             catch(OperationCanceledException){SetStatus("CANCELLED","Game start cancelled","Any verified settings changes are kept; the game was not launched.",Muted);}
             catch(Exception e){Error(e);}
             finally{if(mine!=null&&cancellation==mine){mine.Dispose();cancellation=null;}starting=false;Busy(cancellation!=null);}
+        }
+        private async Task PrepareFirstLaunch(string exe,CancellationToken token)
+        {
+            string result;
+            using(var skip=CancellationTokenSource.CreateLinkedTokenSource(token))
+            using(var screen=new PreparingScreen(exe,GameOptimization.GameplaySeconds+6))
+            {
+                screen.SkipRequested+=(s,e)=>skip.Cancel();
+                screen.Show(this);
+                SetStatus("STARTING","Preparing the first launch","Playing the game's opening once, hidden, so its shaders are built before you play. Your save is backed up and put back.",Mint);
+                try
+                {
+                    result=await Task.Run(()=>GameOptimization.WarmCaches(exe,new Progress<string>(m=>screen.Status="Playing the opening"),skip.Token));
+                    screen.Finish();
+                    await Task.Delay(400);
+                }
+                catch(OperationCanceledException){if(token.IsCancellationRequested)throw;result="First launch preparation skipped by the player.";}
+                catch(Exception e){result="First launch preparation could not finish ("+e.Message+"). The game starts anyway.";}
+                finally{screen.Close();}
+            }
+            history.AppendText(result+Environment.NewLine);
+            FirstLaunch.Mark(exe,result);
         }
         private static string StartupDetails(string exe)
         {

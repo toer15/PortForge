@@ -24,6 +24,10 @@
 
 **Co-op (Engine 1.35):** **Esc > Co-op** lists players 1 to 4 and the controller driving each. Connect another controller, USB or Bluetooth, and it joins as the next player: a card pops in at the top right with the player number, the controller's name and how it is connected, and another when a controller leaves. Players 2 to 4 can be switched on or off on that page. The game decides how many players it uses: a game made for one player still has one character.
 
+**Preparing screen (0.55, Engine 1.37):** at launch a game waits behind its own screen (its key art, name and a progress bar) while the shaders it used in earlier runs are built, so it plays without stopping for them. It shows only when there is something to build, as after a graphics driver update. Esc starts the game at once. On a game's very first Play, PortForge plays its opening once, hidden (about 45 seconds, your save is backed up and put back), so those shaders are recorded before you play. Esc skips that too.
+
+**AMD FSR 3 frame generation (0.55, Engine 1.38):** with PortForge FSR 3 on, the extra pictures come from AMD's own FidelityFX optical flow and frame interpolation. Switch games don't give a PC motion vectors, so the motion comes from AMD's optical flow; fast close-up movement can still smear a little.
+
 **Code patches (0.53):** put `.pchtxt` code patches (the format emulators use, such as a game's 60 FPS patch) in `%LOCALAPPDATA%\PortForge\patches` before converting a game. PortForge applies each patch whose build ID matches the game's code, builds the game from the patched code, and lists the applied patches in the build log. Patches for other games or versions are skipped. A patch can change how a game behaves, game speed included.
 
 **Startup fixes:** Engine 1.14 selects the game's requested memory layout automatically and avoids opening every game asset before play. New conversions also receive the corrected atomic-instruction translation. An existing affected game-code DLL needs rebuilding once to receive a translator fix; installing a new runtime alone does not rewrite compiled game code.

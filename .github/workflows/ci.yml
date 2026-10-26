@@ -161,6 +161,8 @@ jobs:
           cp src/LICENSE package/licenses/ScarletNX-LICENSE.txt
           cp src/src/nx/gpu/vk/fsr1/LICENSE.txt package/licenses/AMD-FidelityFX-FSR1-LICENSE.txt
           cp src/src/nx/gpu/vk/fsr1/UPSTREAM.txt package/licenses/AMD-FidelityFX-FSR1-UPSTREAM.txt
+          cp src/src/nx/gpu/vk/ffx/LICENSE.txt package/licenses/AMD-FidelityFX-SDK-1.1.4-LICENSE.txt
+          cp src/src/nx/gpu/vk/ffx/UPSTREAM.txt package/licenses/AMD-FidelityFX-SDK-1.1.4-UPSTREAM.txt
           echo "PACKAGE_OK package"; ls package
 
       - name: Build the app

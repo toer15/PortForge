@@ -180,7 +180,28 @@ namespace PortForge
             return w;
         }
         public static bool Holding(string exe) { lock (gate) return HoldingLocked(FolderOf(exe)); }
-        private static bool HoldingLocked(string folder) { DateTime until; return holds.TryGetValue(folder, out until) && DateTime.UtcNow < until; }
+        private static bool HoldingLocked(string folder)
+        {
+            DateTime until;
+            if (String.Equals(playOwned.Value, folder, StringComparison.OrdinalIgnoreCase)) return false; // Play's own work
+            return holds.TryGetValue(folder, out until) && DateTime.UtcNow < until;
+        }
+        // The game whose Play is doing this work, for the tasks it starts: Play holds back every other background job on
+        // the game, but its own engine update and first-launch warm-up are what the player pressed Play for. Without it,
+        // Play's engine update met Play's own hold and the start ended as cancelled
+        private static readonly System.Threading.AsyncLocal<string> playOwned = new System.Threading.AsyncLocal<string>();
+        private sealed class PlayScope : IDisposable
+        {
+            public string Before; private bool done;
+            public void Dispose() { if (done) return; done = true; playOwned.Value = Before; }
+        }
+        /// <summary>Work Play itself does on exe's game until disposed, and in the tasks started meanwhile: Play's hold doesn't stop it.</summary>
+        public static IDisposable ForPlay(string exe)
+        {
+            var scope = new PlayScope { Before = playOwned.Value };
+            playOwned.Value = FolderOf(exe);
+            return scope;
+        }
         /// <summary>The player pressed Play: stop this game's background tests and hold new background work back for HoldTime.</summary>
         public static int Yield(string exe)
         {
