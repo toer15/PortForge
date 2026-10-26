@@ -1,6 +1,8 @@
-# PortForge 0.54 / Engine 1.36
+# PortForge 0.55 / Engine 1.38
 
-**New in 0.54:** shorter freezes the first time a game shows a new area. A frame no longer waits behind hundreds of shaders it doesn't need yet, and PortForge uses every CPU core but one to prepare them, at low priority so the game keeps its speed. Super Mario Odyssey's worst first-run freeze went from 3.8 s to 2.3 s. See [VALIDATION-0.54.md](VALIDATION-0.54.md).
+**New in 0.55:** PortForge FSR 3 now generates its pictures with AMD's own FidelityFX frame interpolation and optical flow (from AMD's open-source SDK 1.1.4), with about a fifth fewer visible artifacts on moving parts of Zelda BotW than before. Each game also gets its own preparing screen at launch (its key art, name and a progress bar) while the shaders it used before are built, so it plays without stopping for them; on a game's very first Play, PortForge first plays its opening once, hidden, to record them. Recorded shaders now survive engine updates. Play now updates a game's engine instead of cancelling the start. See [VALIDATION-0.55.md](VALIDATION-0.55.md).
+
+**0.54:** shorter freezes the first time a game shows a new area. A frame no longer waits behind hundreds of shaders it doesn't need yet, and PortForge uses every CPU core but one to prepare them, at low priority so the game keeps its speed. Super Mario Odyssey's worst first-run freeze went from 3.8 s to 2.3 s. See [VALIDATION-0.54.md](VALIDATION-0.54.md).
 
 **0.53:** a new Esc menu with the game's key art as a poster and, blurred, behind the whole menu. The FPS limit, PortForge FSR 3 and frame-time graph you choose in it are remembered for the next launch. **Esc > Co-op** lists players 1 to 4 and their controllers, and a card pops in when a controller joins or leaves, USB or Bluetooth. `.pchtxt` code patches in `%LOCALAPPDATA%\PortForge\patches` (such as a 60 FPS patch) are applied when a game is converted. Fewer shader stalls inside occlusion queries. See [VALIDATION-0.53.md](VALIDATION-0.53.md).
 

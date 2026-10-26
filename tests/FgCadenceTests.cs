@@ -2,7 +2,7 @@ using System;
 using System.IO;
 
 /// <summary>
-/// Engine 1.34-1.36's pacing, as shipped in the patch (and the engine source when it is on this PC): the speed lock always
+/// Engine 1.34-1.38's pacing, as shipped in the patch (and the engine source when it is on this PC): the speed lock always
 /// keeps a game at its own pace (a limit above it never speeds it up, FSR 3 on or off), the screen shows the limit
 /// with FSR 3 off (the game's real frames shown again above its own pace) and twice the limit with it on (one
 /// generated picture per real frame, the rest repeats). The behaviour itself is checked by the engine's
@@ -44,14 +44,14 @@ internal static class FgCadenceTests
         fails = 0;
         string root = FindRoot();
         string ver = Path.Combine(root, "engine", "VERSION");
-        Check(File.Exists(ver) && File.ReadAllText(ver).Trim() == "1.36", "engine/VERSION is 1.36");
+        Check(File.Exists(ver) && File.ReadAllText(ver).Trim() == "1.38", "engine/VERSION is 1.38");
         string patch = Path.Combine(root, "engine", "portforge-engine.patch");
         Check(File.Exists(patch), "the engine patch is there");
         if (File.Exists(patch))
         {
             string p = File.ReadAllText(patch);
             CheckPacing(p, "patch");
-            Check(p.Contains("#define PF_ENGINE_VERSION \"1.36\""), "patch: Esc shows Engine 1.36");
+            Check(p.Contains("#define PF_ENGINE_VERSION \"1.38\""), "patch: Esc shows Engine 1.38");
             Check(p.Contains("vk_fg_interpolate_mids(vk_cmd(), dw, dh, &cur, mids, 1)"), "patch: one generated picture per real frame");
             Check(p.Contains("vk_fg_hold("), "patch: FSR 3 off repeats a held copy of the real frame");
             Check(p.Contains("FG_PROP"), "patch: frame generation propagates motion vectors");
