@@ -101,6 +101,45 @@ namespace PortForge
         private static readonly HashSet<int> probes = new HashSet<int>();
         [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
         [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+        private const uint ProcessQueryLimitedInformation = 0x1000;
+        private const uint StillActive = 259;
+        private const string ProcessCheckFailure = "Windows could not check a process with this game's name. Close that process or retry Play.";
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref int size);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+        [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+
+        private static string RunningProcessImagePath(int processId)
+        {
+            // MainModule enumerates modules and can fail inside .NET even for our own live game.
+            // This API needs only limited query access and works across 32/64-bit processes.
+            IntPtr handle = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+            if (handle == IntPtr.Zero)
+            {
+                int error = Marshal.GetLastWin32Error();
+                if (error == 87) return null; // ERROR_INVALID_PARAMETER: this PID has already exited.
+                throw new IOException(ProcessCheckFailure, new System.ComponentModel.Win32Exception(error));
+            }
+            try
+            {
+                uint exitCode;
+                if (!GetExitCodeProcess(handle, out exitCode))
+                    throw new IOException(ProcessCheckFailure, new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
+                if (exitCode != StillActive) return null;
+                var path = new StringBuilder(32768); // Maximum Windows Unicode path, including the terminator.
+                int size = path.Capacity;
+                if (!QueryFullProcessImageName(handle, 0, path, ref size))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    // An exit between the status check and query is harmless; every other failure stays closed.
+                    if (GetExitCodeProcess(handle, out exitCode) && exitCode != StillActive) return null;
+                    throw new IOException(ProcessCheckFailure, new System.ComponentModel.Win32Exception(error));
+                }
+                if (size == 0) throw new IOException(ProcessCheckFailure);
+                return path.ToString();
+            }
+            finally { CloseHandle(handle); }
+        }
         // A --settings query has the game's filename too, but does not own its save or run the game.
         public static Process FindRunningGame(string exe)
         {
@@ -110,13 +149,13 @@ namespace PortForge
             {
                 bool keep = false;
                 try {
-                    if (probes.Contains(process.Id) || process.HasExited) continue;
-                    keep = String.Equals(process.MainModule.FileName, full, StringComparison.OrdinalIgnoreCase);
+                    if (probes.Contains(process.Id)) continue;
+                    keep = String.Equals(RunningProcessImagePath(process.Id), full, StringComparison.OrdinalIgnoreCase);
                     if (keep) return process;
                 }
                 catch (InvalidOperationException) { }
                 catch (System.ComponentModel.Win32Exception) {
-                    throw new IOException("Windows could not check a process with this game's name. Close that process or retry Play.");
+                    throw new IOException(ProcessCheckFailure);
                 }
                 finally { if (!keep) process.Dispose(); }
             }
