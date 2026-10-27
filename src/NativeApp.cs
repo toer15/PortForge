@@ -47,6 +47,7 @@ namespace PortForge
         private LiveDoctor doctor;
         private CloudSaveMonitor cloudMonitor;
         private readonly System.Windows.Forms.Timer doctorUiTimer = new System.Windows.Forms.Timer { Interval = 500 };
+        private readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 3600000 };
         private DoctorEvent pendingDoctorEvent, pendingDoctorNotice;
         private DateTime lastDoctorNotice = DateTime.MinValue;
         /// <summary>Tests turn this off so a test window never watches or repairs real games.</summary>
@@ -242,6 +243,9 @@ namespace PortForge
             { if (cancellation != null) { e.Cancel = true; CancelConversion(); } };
             Shown += delegate { AppPaths.RefreshRegistration(); };
             Shown += async delegate { await QuietUpdateCheck(); };
+            updateTimer.Tick += async delegate { await QuietUpdateCheck(); };
+            Shown += delegate { updateTimer.Start(); };
+            FormClosed += delegate { updateTimer.Stop(); updateTimer.Dispose(); };
             Shown += async delegate { await DetectHardware(); };
             Shown += delegate { if (StartDoctorOnShow) StartDoctor(); };
             FormClosed += delegate { doctorUiTimer.Stop(); doctorUiTimer.Dispose(); if (doctor != null) doctor.Dispose(); if(cloudMonitor!=null)cloudMonitor.Dispose(); tray.Visible = false; tray.Dispose(); };
@@ -305,14 +309,34 @@ namespace PortForge
             }
         }
 
+        /* A new GitHub release installs by itself, at start and every hour after: the update before this only showed
+           "Update available" on a button, so a player who launched games from their own folders stayed on the old
+           engine and its bugs (0.61 kept a game's FPS limit off after 0.62 had fixed it). Not during a conversion,
+           which the restart would cut short. Games get the new engine from the Doctor or at their next Play */
+        private bool updating;
         private async Task QuietUpdateCheck()
         {
+            if (updating || IsDisposed) return;
+            updating = true;
+            UpdateInfo found = null;
             try
             {
-                var found = await Task.Run(() => AppUpdates.Check(AppUpdates.ApiRoot, AppUpdates.Repository, AppUpdates.CurrentVersion, CancellationToken.None));
-                if (found.IsNewer && !IsDisposed) updates.Text = "Update available: " + found.Latest.ToString(3);
+                found = await Task.Run(() => AppUpdates.Check(AppUpdates.ApiRoot, AppUpdates.Repository, AppUpdates.CurrentVersion, CancellationToken.None));
+                if (!found.IsNewer || IsDisposed) return;
+                updates.Text = "Update available: " + found.Latest.ToString(3);
+                if (cancellation != null || !found.HasPackage) return;
+                updates.Text = "Updating to " + found.Latest.ToString(3) + "...";
+                string folder = await Task.Run(() => AppUpdates.Download(found, Path.Combine(Path.GetTempPath(), "PortForge-updates"), null, CancellationToken.None));
+                if (IsDisposed || cancellation != null) return;
+                AppUpdates.StartInstall(folder, AppDomain.CurrentDomain.BaseDirectory, Process.GetCurrentProcess().Id, true);
+                tray.ShowBalloonTip(6000, "Updating PortForge to " + found.Latest.ToString(3), "PortForge opens again in a few seconds. Your games get the new engine before their next start.", ToolTipIcon.Info);
+                Close();
             }
-            catch (Exception) { }
+            catch (Exception)
+            {
+                if (!IsDisposed && found != null && found.IsNewer) updates.Text = "Update available: " + found.Latest.ToString(3);
+            }
+            finally { updating = false; }
         }
 
         private void AddField(TableLayoutPanel parent, string label, TextBox box, string hint, Action browse, bool folder)

@@ -1,6 +1,8 @@
-# PortForge 0.62 / Engine 1.45
+# PortForge 0.63 / Engine 1.45
 
-**New in 0.62:** the FPS limit is followed again in games the Doctor had put in GPU safe mode after a GPU reset. That mode showed only the game's own frames while the in-game menu still read AMD FSR 3 On, so a 30 FPS game stayed at 30 at limit 120. The app now lifts it when a game gets a new engine (the Doctor sets it again if the GPU resets), turning AMD FSR 3 On in the Home/Esc menu lifts it too, and while it is on the menu says Off (GPU safe mode) and counts only real frames. See [VALIDATION-0.62.md](VALIDATION-0.62.md).
+**New in 0.63:** the app installs new versions by itself, at start and every hour while it is open, and reopens. Before, it only showed "Update available" on the Check for updates button, so a new engine and its fixes never reached games played from their own folders. Not during a conversion.
+
+**0.62:** the FPS limit is followed again in games the Doctor had put in GPU safe mode after a GPU reset. That mode showed only the game's own frames while the in-game menu still read AMD FSR 3 On, so a 30 FPS game stayed at 30 at limit 120. The app now lifts it when a game gets a new engine (the Doctor sets it again if the GPU resets), turning AMD FSR 3 On in the Home/Esc menu lifts it too, and while it is on the menu says Off (GPU safe mode) and counts only real frames. See [VALIDATION-0.62.md](VALIDATION-0.62.md).
 
 **0.61:** type any FPS limit from 10 to 1000 in the global settings, or change it in the in-game Home/Esc menu: left and right by 1, L/R by 10, A for presets. With AMD FSR 3 frame generation the screen locks to that exact number, for example 90 on a 60 FPS game is 60 real and 30 generated frames, with no repeated frames. See [VALIDATION-0.61.md](VALIDATION-0.61.md).
 
