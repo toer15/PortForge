@@ -17707,7 +17707,7 @@ new file mode 100644
 index 00000000..53fe3251
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
-@@ -0,0 +1,586 @@
+@@ -0,0 +1,587 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +/* PortForge FSR 3 (from scratch, shaders/fg.comp): optical-flow frame generation inspired by AMD FSR 3 / AFMF
 +   (luma pyramid, hierarchical SAD search, median filter, bidirectional disocclusion, HUD lock, hole inpaint).
@@ -24151,7 +24151,7 @@ index f3ac2e2d..c3c4fe75 100644
      }
      if (recreate && !g_lost && !g_vk.sc_lost) { /* not when this frame's create found the surface lost */
          vk_finish();
-@@ -544,6 +788,314 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -544,6 +788,328 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
@@ -24480,7 +24480,7 @@ index f3ac2e2d..c3c4fe75 100644
  }
  
  /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
-@@ -583,7 +1135,11 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+@@ -583,7 +1149,11 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
          g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
          g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
      }
@@ -24493,7 +24493,7 @@ index f3ac2e2d..c3c4fe75 100644
      __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
      vk_unlock();
  }
-@@ -600,7 +1156,10 @@ static void vkr_refresh(void) {
+@@ -600,7 +1170,10 @@ static void vkr_refresh(void) {
      if (!vk_trylock()) return;
      last = now;
      vk_render_end();
@@ -24505,7 +24505,7 @@ index f3ac2e2d..c3c4fe75 100644
      vk_unlock();
  }
  
-@@ -737,5 +1296,9 @@ const Renderer vk_renderer = {
+@@ -737,5 +1310,9 @@ const Renderer vk_renderer = {
      .refresh = vkr_refresh,
      .save = vk_pipeline_save,
      .release_window = vk_window_release,
@@ -26565,7 +26565,7 @@ diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
 index 408db9ed..69aae239 100644
 --- a/src/nx/runtime/options.h
 +++ b/src/nx/runtime/options.h
-@@ -34,7 +34,15 @@ void ini_poll(int final);
+@@ -34,7 +34,19 @@ void ini_poll(int final);
  /* fps_limit: 0 = no limit, SNX_FPS_GAME = the game's own pace (its swap interval), else frames a second (10 to 1000) */
  #define SNX_FPS_GAME (-1)
  extern int g_opt_fps;                              /* atomic: the game's threads read it */
@@ -28636,7 +28636,7 @@ index 2bd6181e..3816da02 100644
  #include "nx/runtime/platform/plat.h"
  
  int g_frames;
-@@ -31,14 +32,164 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +32,171 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -29654,7 +29654,7 @@ diff --git a/tests/overlay.c b/tests/overlay.c
 index 03330d3d..d02928f5 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
-@@ -10,11 +10,51 @@
+@@ -10,11 +10,54 @@
  #include "nx/runtime/platform/vpad.h"
  #include "nx/runtime/platform/controls_atlas.h"
  #include "nx/runtime/platform/plat.h"
@@ -29709,7 +29709,7 @@ index 03330d3d..d02928f5 100644
  /* the menu's page colour, its letters on the head's band, as R G B A bytes */
  #define LIGHT_RGBA                                                                                                     \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_PAGE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_PAGE & 0xFF00u) |                   \
-@@ -23,6 +63,7 @@
+@@ -23,6 +66,7 @@
  #define FAILURE                                                                                                        \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_FAILURE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_FAILURE & 0xFF00u) |             \
       (SNX_GUI_THEME_YORHA_FAILURE >> 16 & 0xFFu))
@@ -29717,7 +29717,7 @@ index 03330d3d..d02928f5 100644
  #include <assert.h>
  #include <stdarg.h>
  #include <stdio.h>
-@@ -64,6 +105,17 @@ int gamepad_layout(int i, int labels[4], int* symmetric) {
+@@ -64,6 +108,17 @@ int gamepad_layout(int i, int labels[4], int* symmetric) {
  unsigned gamepad_held(int i) { return i < 0 ? pads_held[0] | pads_held[1] | pads_held[2] : i < 3 ? pads_held[i] : 0; }
  const char* gamepad_name(int i) { return i >= 0 && i < 3 ? pad_names[i] : NULL; }
  int gamepad_of_player(int slot) { return slot >= 0 && slot < 3 ? pad_of_player[slot] : -1; }
@@ -29735,7 +29735,7 @@ index 03330d3d..d02928f5 100644
  const IniOpt g_backend_ini[] = {
      {"touch", "2", NULL, INI_INT, 0, &touch, 0, 2, NULL, "Touch screen", "Off|Fingers|Mouse too", 0, 0, 0},
      {NULL, NULL, NULL, 0, 0, NULL, 0, 0, NULL, NULL, NULL, 0, 0, 0}};
-@@ -95,11 +147,12 @@ static void store(const char* key, const char* value) {
+@@ -95,11 +150,12 @@ static void store(const char* key, const char* value) {
  
  enum { SW = 2424, SH = 1080 };
  static int px, py, s, C; /* C: the panel's columns, overlay_cols' */
@@ -29749,7 +29749,7 @@ index 03330d3d..d02928f5 100644
  }
  /* ui.c's warning for a picture that does not draw */
  void logf_(int lvl, const char* fmt, ...) {
-@@ -170,7 +223,7 @@ static SnxOverlayError panel_of(const char* name, const char* msg, const char* h
+@@ -170,7 +226,7 @@ static SnxOverlayError panel_of(const char* name, const char* msg, const char* h
      return e;
  }
  int main(void) {
@@ -29758,7 +29758,7 @@ index 03330d3d..d02928f5 100644
      int x, y, sc;
      vpad_set_store(store);
      snx_pad_map_unset(&pads.own); /* as gamepad.c starts it: every control the button in its place */
-@@ -179,15 +232,17 @@ int main(void) {
+@@ -179,15 +235,17 @@ int main(void) {
      overlay_toggle();
      assert(overlay_shown());
      /* letters half the screen's height at most, in whole steps, in the middle: a phone held wide, a small window. The
@@ -29780,7 +29780,7 @@ index 03330d3d..d02928f5 100644
      /* a phone's display scale: the Poco F8 (408 dpi, 2510x1156) and the Pixel 9 (420 dpi) at 3x, where half the
         picture gave 2x; a 4K picture at 100% keeps the 4x half of it gives */
      overlay_set_display_scale(408.0f / 160);
-@@ -202,25 +257,85 @@ int main(void) {
+@@ -202,25 +260,85 @@ int main(void) {
  
      /* the first page: the title on a band of ink, the items under it, the focused one on a band; the page hides the
         game, whose text would show through it */
@@ -29875,7 +29875,7 @@ index 03330d3d..d02928f5 100644
      /* named as the .ini's rows name them, in the launcher's order, the game's own actions among them */
      assert(text_at(1, 4, "\xFE Edit layout") && text_at(1, 5, "\xFE Snap to grid") &&
             text_at(1, 8, "\xFE Relative stick center"));
-@@ -271,7 +386,7 @@ int main(void) {
+@@ -271,7 +389,7 @@ int main(void) {
      /* the buttons' page: one hidden and kept, All shows them again; it scrolls to its last item */
      assert(tap(9, 3) == OVERLAY_NONE);
      draw();
@@ -29884,7 +29884,7 @@ index 03330d3d..d02928f5 100644
      log_[0] = 0;
      tap(1, 3);
      assert(!g_settings.control_shown[SNX_VPAD_L] && !strcmp(log_, "controls_l_shown=0;")); /* its place stays */
-@@ -294,10 +409,10 @@ int main(void) {
+@@ -294,10 +412,10 @@ int main(void) {
      /* Back on it, and the key Back, go up a page each */
      assert(overlay_select() == OVERLAY_NONE);
      draw();
@@ -29897,7 +29897,7 @@ index 03330d3d..d02928f5 100644
      /* a pad's buttons, as the game reads them: the D-pad and the left stick move, A selects, B goes back, the rest do
         nothing */
      {
-@@ -306,26 +421,36 @@ int main(void) {
+@@ -306,26 +424,36 @@ int main(void) {
          assert(overlay_pad(1ull << 13) == OVERLAY_NONE && overlay_pad(1ull << 2) == OVERLAY_NONE); /* X */
          assert(overlay_pad(1ull << 0) == OVERLAY_NONE);                                            /* Controllers */
          draw();
@@ -29943,7 +29943,7 @@ index 03330d3d..d02928f5 100644
          assert(overlay_controls(1ull << 0, still, 3000) == OVERLAY_EXIT);
          assert(overlay_controls(1ull << 13, still, 3001) == OVERLAY_NONE &&
                 overlay_controls(0, left, 3002) == OVERLAY_NONE);
-@@ -352,7 +477,7 @@ int main(void) {
+@@ -352,7 +480,7 @@ int main(void) {
              vpad_state(&b, st);
              assert(!b && overlay_controls(1ull << 0, still, 4001) == OVERLAY_NONE);
              draw();
@@ -29952,7 +29952,7 @@ index 03330d3d..d02928f5 100644
              assert(overlay_controls(1ull << 1, still, 4002) == OVERLAY_NONE); /* B: the menu */
              overlay_pointer_down(8, 5, 5, area);
              assert(overlay_pointer_up(8, 5, 5, SW, SH) == OVERLAY_CLOSE);
-@@ -368,10 +493,12 @@ int main(void) {
+@@ -368,10 +496,12 @@ int main(void) {
  
      /* the controllers' page: the ones connected, the Player row (every player's, or one's own), Swap A/B, the dead
         zone by fives, the vibration by tens down to Off and the background input, each kept */
@@ -29967,7 +29967,7 @@ index 03330d3d..d02928f5 100644
      assert(text_at(1, 4, "\xFE Swap A/B") && text_at(C - 4, 4, "Off"));
      tap(1, 3);
      assert(g_settings.swap_a_b && pad_stored == &g_settings.swap_a_b);
-@@ -445,7 +572,7 @@ int main(void) {
+@@ -445,7 +575,7 @@ int main(void) {
      }
      assert(overlay_back() == OVERLAY_NONE); /* no presets to go back to: up to its item at once */
      draw();
@@ -29976,7 +29976,7 @@ index 03330d3d..d02928f5 100644
      pads_held[0] = 0;
      /* the Player row steps to player 1: its Swap A/B and Vibration its own, As All until picked; its Button map
         its own map, kept as its key; round the eight back to All */
-@@ -494,19 +621,56 @@ int main(void) {
+@@ -494,19 +624,56 @@ int main(void) {
      assert(shows("< All >"));
      /* Back, on its item or the key, comes up to the controllers' item */
      assert(tap(6, 3) == OVERLAY_NONE);
@@ -30037,7 +30037,7 @@ index 03330d3d..d02928f5 100644
  
      /* ui.c: the atlas with the font's glyphs, white where a glyph's bit is, and sprites' alpha premultiplied */
      {
-@@ -521,7 +685,7 @@ int main(void) {
+@@ -521,7 +688,7 @@ int main(void) {
          assert(!ui_atlas(&w, &h, &version));
          ui_atlas_set(sprites, SNX_CONTROLS_ATLAS_WIDTH, SNX_CONTROLS_ATLAS_HEIGHT);
          a = ui_atlas(&w, &h, &version);
@@ -30046,7 +30046,7 @@ index 03330d3d..d02928f5 100644
          /* no user read yet: the picture's rows are transparent */
          for (y = 0; y < SNX_UI_PICTURE; ++y)
              for (x = 0; x < SNX_UI_PICTURE; ++x) assert(!a[(SNX_CONTROLS_ATLAS_HEIGHT + y) * w + x]);
-@@ -714,7 +878,7 @@ int main(void) {
+@@ -714,7 +881,7 @@ int main(void) {
          assert(SNX_GUI_THEME_YORHA_PICTURE == 1); /* square: the frame is the fills' */
          ui_atlas_set(sprites, SNX_CONTROLS_ATLAS_WIDTH, SNX_CONTROLS_ATLAS_HEIGHT);
          a = ui_atlas(&w, &h, &version);
@@ -30055,7 +30055,7 @@ index 03330d3d..d02928f5 100644
          for (y = 0; y < SNX_UI_PICTURE; ++y)
              for (x = 0; x < SNX_UI_PICTURE; ++x) {
                  u32 p = snx_le32(a[(SNX_CONTROLS_ATLAS_HEIGHT + y) * w + x]); /* the GPU's bytes R G B A */
-@@ -755,7 +919,7 @@ int main(void) {
+@@ -755,7 +922,7 @@ int main(void) {
                      assert(q->y == band + 2 * edge && q->h == side && q->w == side && !q->sharp);
                      assert(q->x + q->w == right - 2 * edge);
                  }
@@ -30064,7 +30064,7 @@ index 03330d3d..d02928f5 100644
                            q->x < right && q->y >= band && q->y < band + 16.0f * (float)s;
                  if (q->u == SNX_CONTROLS_FONT_X + 'P' % 16 * 8 && q->v == SNX_CONTROLS_FONT_Y + 'P' / 16 * 16 &&
                      q->y == band && q->x > boxx)
-@@ -768,6 +932,24 @@ int main(void) {
+@@ -768,6 +935,24 @@ int main(void) {
          for (i = 0, pictures = 0; i < list.n; ++i) pictures += list.q[i].v == SNX_CONTROLS_ATLAS_HEIGHT;
          assert(!pictures && !shows("Player"));
      }
@@ -30272,7 +30272,7 @@ index 53c5e45d..bd87f7eb 100644
  static void pacing(void) {
      const u64 refresh = 1000000000u / 60;
      u64 before;
-@@ -84,12 +168,158 @@ static void pacing(void) {
+@@ -84,12 +168,168 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -30442,7 +30442,7 @@ index 53c5e45d..bd87f7eb 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -97,7 +327,9 @@ int main(void) {
+@@ -97,7 +337,9 @@ int main(void) {
      i32 crop[4] = {0, 0, 0, 0};
      clock_start();
      ticks();
