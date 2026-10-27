@@ -123,7 +123,24 @@ namespace PortForge
                 CopyEngineInfo(package, folder, token);
                 CopyVerified(package.Exe, gameExe, token);
             }
-            return "Updated this game to the " + package.Name + " for this launch.";
+            return "Updated this game to the " + package.Name + " for this launch." + ReleaseSafePacing(gameExe);
+        }
+        /// <summary>
+        /// A new engine lifts the Doctor's own-frames repair (paced_display=0). The GPU reset it answered happened on an
+        /// older engine (up to Engine 1.42 the pictures between frames included repeats, gone since 1.43), and the Doctor
+        /// sets it again when the GPU resets on this one. Without this a game kept to its own frames for good, so its FPS
+        /// limit and FSR 3 did nothing while the game menu showed them on (a 30 FPS game stayed at 30 at limit 120).
+        /// </summary>
+        internal static string ReleaseSafePacing(string gameExe)
+        {
+            string path = GameOptimization.ConfigPath(gameExe);
+            if (!File.Exists(path)) return "";
+            string text = File.ReadAllText(path), value;
+            if (!GameOptimization.ReadValues(text).TryGetValue("paced_display", out value) || value.Trim() != "0") return "";
+            var changes = new Dictionary<string, string> { { "paced_display", "1" } };
+            GameOptimization.AtomicWrite(path, Encoding.UTF8.GetBytes(GameOptimization.Merge(text, changes)),
+                path + ".before-engine-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff", CultureInfo.InvariantCulture) + ".bak");
+            return " Frame generation and FPS limits above the game's own pace are on again for this game: the GPU reset that turned them off happened on an older engine, and the Doctor turns them off again if it happens on this one.";
         }
         private static void CopyEngineInfo(EnginePackage package, string folder, CancellationToken token)
         {
@@ -154,7 +171,7 @@ namespace PortForge
             catch (OperationCanceledException) { Restore(gameExe); throw; }
             catch (Exception e) { Restore(gameExe); Decline(gameExe, "The PortForge Engine could not run this game: " + e.Message); throw new IOException("The PortForge Engine could not run this game, so the original engine was put back. " + e.Message, e); }
             try { File.Delete(Path.Combine(backup, DeclinedFile)); } catch (IOException) { }
-            return "Installed the " + package.Name + " and checked that the game starts. Smart async shaders are on; turn them off in this tab if something looks wrong.";
+            return "Installed the " + package.Name + " and checked that the game starts. Smart async shaders are on; turn them off in this tab if something looks wrong." + ReleaseSafePacing(gameExe);
         }
 
         public const string DeclinedFile = "keep-original-engine.txt";

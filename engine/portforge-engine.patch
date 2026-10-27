@@ -26266,10 +26266,10 @@ index 6a667e6e..646659e7 100644
      {
          char version[16];
 diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
-index addf0820..ddcb7010 100644
+index addf0820..48526094 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
-@@ -38,5 +38,22 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -38,5 +38,23 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
  /* the wait before vi hands the game a buffer for its next frame, as fps_limit says: with fps_limit=game until the
     frame before has been on the display for interval refreshes (its swap interval) */
  void present_pace(u32 interval);
@@ -26282,6 +26282,7 @@ index addf0820..ddcb7010 100644
 +int present_game_side_fps(int fps_limit);
 +/* PortForge FSR 3 (frame generation) on, from the .ini or Esc */
 +int present_fg_on(void);
++int present_fg_chosen(void);
 +/* pictures a second the display gets: fps_limit with frame generation off, twice it on (the game's own frames for
 +   "game" and unlimited), at most the display's refresh with vsync; 0 while the game's pace is unknown */
 +int present_display_target(int fps_limit, int frame_generation);
@@ -26567,7 +26568,7 @@ index 408db9ed..69aae239 100644
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
 new file mode 100644
-index 00000000..a5a2b462
+index 00000000..0693be93
 --- /dev/null
 +++ b/src/nx/runtime/pf_engine_version.h
 @@ -0,0 +1,6 @@
@@ -26575,7 +26576,7 @@ index 00000000..a5a2b462
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.44"
++#define PF_ENGINE_VERSION "1.45"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5a..38b92670 100644
@@ -27207,14 +27208,15 @@ index 0821ef7c..c440b934 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2a..da25576a 100644
+index 441a8c2a..c15a9a10 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
-@@ -4,7 +4,12 @@
+@@ -4,7 +4,13 @@
  #include "nx/runtime/platform/backend.h"
  #include "nx/runtime/platform/fatal_screen.h"
  #include "nx/runtime/platform/gamepad.h"
 +#include "nx/runtime/platform/plat.h"
++#include "nx/runtime/platform/log.h"
  #include "nx/runtime/platform/vpad.h"
 +#include "nx/runtime/options.h"
 +#include "nx/runtime/main.h"
@@ -27223,7 +27225,7 @@ index 441a8c2a..da25576a 100644
  #include "gui_theme_colors.h"
  #include "common/utilities/pad_screen.h"
  #include "common/utilities/users.h"
-@@ -13,8 +18,9 @@
+@@ -13,8 +19,9 @@
  #include <string.h>
  
  enum { FIRST = 3, VISIBLE = OVERLAY_ROWS - FIRST - 1 }; /* the items' first row, and how many show at once */
@@ -27235,7 +27237,7 @@ index 441a8c2a..da25576a 100644
  enum { P_PLAYER, P_SWAP, P_DEADZONE, P_RUMBLE, P_BACKGROUND, P_MAP, P_BACK, P_COUNT }; /* the gamepads' page's */
  /* the controls page's items */
  enum {
-@@ -55,18 +61,24 @@ static const char* const PADS[P_COUNT] = {SNX_GAMEPAD_PLAYERS,
+@@ -55,18 +62,24 @@ static const char* const PADS[P_COUNT] = {SNX_GAMEPAD_PLAYERS,
                                            "Back"};
  static int shown, page, focus, top; /* top: the first item showing */
  static int pad_player;              /* the player the gamepads' page shows: 0 every player's, 1 to SNX_GAMEPADS */
@@ -27265,7 +27267,7 @@ index 441a8c2a..da25576a 100644
                                     : SNX_VPAD_COUNT + 2;
  }
  static void page_open(int p) {
-@@ -110,9 +122,47 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
+@@ -110,9 +123,50 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
          return;
      }
      if (page == PAGE_MAIN) {
@@ -27278,7 +27280,10 @@ index 441a8c2a..da25576a 100644
 +            snprintf(value, vsize, "%s", __atomic_load_n(&g_settings.frame_time_graph, __ATOMIC_RELAXED) ? "On" : "Off");
 +        else if (i == M_FSR3) {
 +            /* PortForge FSR 3 is the frame generation the renderer runs: On whenever it does, FSR 1 or not */
-+            snprintf(value, vsize, "%s", present_fg_on() ? "On" : "Off");
++            snprintf(value, vsize, "%s",
++                     present_fg_on()       ? "On"
++                     : present_fg_chosen() ? "Off (GPU safe mode)"
++                                           : "Off");
 +        } else if (i == M_FPS) {
 +            /* the limit, and the pictures a second it gives on this game: the limit with PortForge FSR 3 off, twice
 +               it on (the game itself keeps its own speed) */
@@ -27315,7 +27320,7 @@ index 441a8c2a..da25576a 100644
          return;
      }
      if (page == PAGE_BUTTONS) {
-@@ -207,14 +257,14 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
+@@ -207,14 +261,14 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
      h = (float)sh - 2 * ch;
      map_pad();
      ui_fill(l, x, y, w, h, LIGHT); /* the whole picture */
@@ -27332,7 +27337,7 @@ index 441a8c2a..da25576a 100644
          user_draw(l, x + cw * (float)(strlen(title) + 2), x + w - cw, y, s);
      }
      snx_pad_screen_lay(&map, x, y + ch, w, h - ch, cw, ch, &map_drawing);
-@@ -235,6 +285,23 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
+@@ -235,6 +289,23 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
      }
  }
  /* the item i done, or its value stepped (step -1 or 1; 0 for a select, which steps up) */
@@ -27356,7 +27361,7 @@ index 441a8c2a..da25576a 100644
  static int act(int i, int step) {
      const IniOpt* o = setting(i);
      if (o) {
-@@ -259,9 +326,38 @@ static int act(int i, int step) {
+@@ -259,9 +330,45 @@ static int act(int i, int step) {
          return OVERLAY_NONE;
      }
      if (page == PAGE_MAIN) {
@@ -27367,6 +27372,13 @@ index 441a8c2a..da25576a 100644
 +        if (i == M_FSR3) {
 +            /* On = FSR 1 + frame generation (PortForge FSR 3). Session layer so ini_poll cannot wipe it. */
 +            int on = !present_fg_on();
++            /* the player turning it On lifts the Doctor's own-frames repair (paced_display=0) for this game, kept in
++               its .ini: otherwise On would change nothing on screen. The Doctor sets it again after another GPU reset */
++            if (on && !__atomic_load_n(&g_settings.paced_display, __ATOMIC_RELAXED)) {
++                __atomic_store_n(&g_settings.paced_display, 1, __ATOMIC_RELAXED);
++                ini_set("paced_display", "1");
++                LOG("menu: frame generation turned on, paced_display=1 for this game\n");
++            }
 +            options_fsr3_live(on);
 +            return OVERLAY_NONE;
 +        }
@@ -27396,7 +27408,7 @@ index 441a8c2a..da25576a 100644
          return OVERLAY_NONE;
      }
      if (step) return OVERLAY_NONE;
-@@ -285,12 +381,24 @@ static int act(int i, int step) {
+@@ -285,12 +392,24 @@ static int act(int i, int step) {
  }
  
  int overlay_shown(void) { return __atomic_load_n(&shown, __ATOMIC_ACQUIRE); }
@@ -27423,7 +27435,7 @@ index 441a8c2a..da25576a 100644
  static int display_percent = 100; /* set on the event thread, read by the renderer's */
  void overlay_set_display_scale(float scale) {
      __atomic_store_n(&display_percent, scale > 0.0f ? (int)(scale * 100.0f) : 100, __ATOMIC_RELAXED);
-@@ -324,7 +432,8 @@ typedef struct {
+@@ -324,7 +443,8 @@ typedef struct {
  } DialogPara;
  typedef struct {
      const char* title;
@@ -27433,7 +27445,7 @@ index 441a8c2a..da25576a 100644
      DialogPara para[DIALOG_PARAS];
      int paras;
      const char* label[VISIBLE];   /* the items showing, from top on */
-@@ -350,11 +459,11 @@ static void user_draw(SnxUiList* l, float left, float right, float y, int s) {
+@@ -350,11 +470,11 @@ static void user_draw(SnxUiList* l, float left, float right, float y, int s) {
      }
      if (x < left) return;
      ui_picture(l, right - 2 * edge - side, y + 2 * edge, side);
@@ -27450,7 +27462,7 @@ index 441a8c2a..da25576a 100644
  }
  /* the rows paragraphs wrap into: each thread that lays a dialog out has its own */
  typedef char DialogRows[DIALOG_PARAS][DIALOG_LINES][FATAL_ROW];
-@@ -389,6 +498,11 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+@@ -389,6 +509,11 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
      }
      x = (float)((sw - cols * 8 * s) / 2);
      y = (float)((sh - total * (int)ch) / 2);
@@ -27462,7 +27474,7 @@ index 441a8c2a..da25576a 100644
      out->box.x = x;
      out->box.y = y;
      out->box.w = w;
-@@ -396,9 +510,24 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+@@ -396,9 +521,24 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
      out->cols = cols;
      out->scale = s;
      if (l) {
@@ -27489,7 +27501,7 @@ index 441a8c2a..da25576a 100644
          if (d->user) user_draw(l, x + cw * (float)(strlen(d->title) + 2), x + w - cw, y, s);
      }
      row = 1;
-@@ -429,11 +558,15 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+@@ -429,11 +569,15 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
          at->w = w;
          at->h = ch;
          if (!l) continue;
@@ -27508,7 +27520,7 @@ index 441a8c2a..da25576a 100644
      }
      /* more above or under: the font's arrows at the edge */
      if (l && d->shown && d->top) ui_text(l, x + cw * (float)(cols - 1), out->item[0].y, s, "\x18", SOFT);
-@@ -461,7 +594,10 @@ void overlay_scroll(int rows) {
+@@ -461,7 +605,10 @@ void overlay_scroll(int rows) {
  void overlay_side(int step) {
      if (page == PAGE_MAP)
          map_key(step < 0 ? SNX_PAD_KEY_LEFT : SNX_PAD_KEY_RIGHT);
@@ -27520,7 +27532,7 @@ index 441a8c2a..da25576a 100644
          act(focus, step);
  }
  int overlay_pad(u64 button) {
-@@ -476,29 +612,43 @@ int overlay_pad(u64 button) {
+@@ -476,29 +623,43 @@ int overlay_pad(u64 button) {
          case 1ull << 18: overlay_side(1); break;
          case 1ull << 15: /* down */
          case 1ull << 19: overlay_move(1); break;
@@ -27571,7 +27583,7 @@ index 441a8c2a..da25576a 100644
      for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
          if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
      return did;
-@@ -512,7 +662,7 @@ int overlay_back(void) {
+@@ -512,7 +673,7 @@ int overlay_back(void) {
          focus = C_BUTTONS;
      } else {
          page_open(PAGE_MAIN);
@@ -27580,7 +27592,7 @@ index 441a8c2a..da25576a 100644
      }
      keep_in_view();
      return OVERLAY_NONE;
-@@ -521,17 +671,53 @@ static const char* pads_hint(char* out, size_t size);
+@@ -521,17 +682,53 @@ static const char* pads_hint(char* out, size_t size);
  /* the page showing as a dialog: its title, its hint, the items in view, their texts in text and value */
  static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*value)[OVERLAY_COLS_MAX + 1], char* pads,
                          size_t size) {
@@ -27640,7 +27652,7 @@ index 441a8c2a..da25576a 100644
      d->items = n;
      d->top = top;
      d->focus = focus;
-@@ -557,6 +743,7 @@ int overlay_tap(float x, float y, int sw, int sh) {
+@@ -557,6 +754,7 @@ int overlay_tap(float x, float y, int sw, int sh) {
      focus = d.top + r;
      col = (int)((x - at.box.x) / (8.0f * (float)at.scale));
      /* a value's arrows: the left half of its last ten columns steps it down */
@@ -27648,7 +27660,7 @@ index 441a8c2a..da25576a 100644
      if (arrows(setting(focus))) return act(focus, col < at.cols - 5 ? -1 : 1);
      return act(focus, 0);
  }
-@@ -588,11 +775,16 @@ static const char* pads_hint(char* out, size_t size) {
+@@ -588,11 +786,16 @@ static const char* pads_hint(char* out, size_t size) {
          snprintf(out, size, "%s", gamepad_name(0));
      return out;
  }
@@ -27665,7 +27677,7 @@ index 441a8c2a..da25576a 100644
      if (!shown) return;
      if (page == PAGE_MAP) {
          map_draw(l, sw, sh);
-@@ -625,3 +817,188 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e) {
+@@ -625,3 +828,188 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e) {
      e->link = at.link;
      for (i = 0; i < SNX_OVERLAY_ERROR_ITEMS; ++i) e->items[i] = at.item[i];
  }
@@ -28594,7 +28606,7 @@ index 0ccd9f1e..86423a46 100644
  const u32* ui_atlas(int* w, int* h, u32* version);
  void ui_atlas_done(void);
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181e..16b5796e 100644
+index 2bd6181e..3816da02 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
 @@ -9,6 +9,7 @@
@@ -28605,7 +28617,7 @@ index 2bd6181e..16b5796e 100644
  #include "nx/runtime/platform/plat.h"
  
  int g_frames;
-@@ -31,14 +32,156 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +32,164 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -28676,7 +28688,13 @@ index 2bd6181e..16b5796e 100644
 +    return fps_limit > 0 ? fps_limit : g;
 +}
 +
++/* Frame generation as the renderer runs it: chosen, and the game not kept to its own frames (paced_display=0, the
++   Doctor's GPU-reset repair). Engine 1.44 counted it on in that mode too, so Esc promised 60 on a 30 FPS game that
++   showed 30 */
 +int present_fg_on(void) {
++    return present_fg_chosen() && __atomic_load_n(&g_settings.paced_display, __ATOMIC_RELAXED);
++}
++int present_fg_chosen(void) {
 +    return __atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
 +           __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED);
 +}
@@ -28692,6 +28710,8 @@ index 2bd6181e..16b5796e 100644
 +int present_display_target(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit), hz = __atomic_load_n(&g_display_hz, __ATOMIC_RELAXED), want, cap;
 +    if (side <= 0) return 0;
++    /* paced_display=0: only the game's own frames reach the display, whatever the limit above them */
++    if (!__atomic_load_n(&g_settings.paced_display, __ATOMIC_RELAXED)) return side;
 +    cap = fps_limit > 0 ? fps_limit : 0;
 +    if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && (!cap || hz < cap)) cap = hz;
 +    want = frame_generation ? side * 2 : side;
@@ -29605,10 +29625,10 @@ index 6d73ee2e..fb103016 100644
  static void put(u64 address, u32 word) { memcpy(memory + address, &word, sizeof word); }
  static size_t synthetic_images(void) {
 diff --git a/tests/overlay.c b/tests/overlay.c
-index 03330d3d..61cfdb6e 100644
+index 03330d3d..d02928f5 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
-@@ -10,11 +10,50 @@
+@@ -10,11 +10,51 @@
  #include "nx/runtime/platform/vpad.h"
  #include "nx/runtime/platform/controls_atlas.h"
  #include "nx/runtime/platform/plat.h"
@@ -29644,10 +29664,11 @@ index 03330d3d..61cfdb6e 100644
 +int present_game_side_fps(int fps_limit) {
 +    return fps_limit > 0 && fps_limit < 60 ? fps_limit : 60;
 +}
-+int present_fg_on(void) {
++int present_fg_chosen(void) {
 +    return __atomic_load_n(&g_opt_frame_generation, __ATOMIC_RELAXED) ||
 +           __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED);
 +}
++int present_fg_on(void) { return present_fg_chosen(); }
 +/* as present.c without a display: the limit, twice it with frame generation, the game's 60 for game and unlimited */
 +int present_display_target(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit), want = fps_limit > 0 ? fps_limit : side;
@@ -29659,7 +29680,7 @@ index 03330d3d..61cfdb6e 100644
  /* the menu's page colour, its letters on the head's band, as R G B A bytes */
  #define LIGHT_RGBA                                                                                                     \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_PAGE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_PAGE & 0xFF00u) |                   \
-@@ -23,6 +62,7 @@
+@@ -23,6 +63,7 @@
  #define FAILURE                                                                                                        \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_FAILURE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_FAILURE & 0xFF00u) |             \
       (SNX_GUI_THEME_YORHA_FAILURE >> 16 & 0xFFu))
@@ -29667,7 +29688,7 @@ index 03330d3d..61cfdb6e 100644
  #include <assert.h>
  #include <stdarg.h>
  #include <stdio.h>
-@@ -64,6 +104,17 @@ int gamepad_layout(int i, int labels[4], int* symmetric) {
+@@ -64,6 +105,17 @@ int gamepad_layout(int i, int labels[4], int* symmetric) {
  unsigned gamepad_held(int i) { return i < 0 ? pads_held[0] | pads_held[1] | pads_held[2] : i < 3 ? pads_held[i] : 0; }
  const char* gamepad_name(int i) { return i >= 0 && i < 3 ? pad_names[i] : NULL; }
  int gamepad_of_player(int slot) { return slot >= 0 && slot < 3 ? pad_of_player[slot] : -1; }
@@ -29685,7 +29706,7 @@ index 03330d3d..61cfdb6e 100644
  const IniOpt g_backend_ini[] = {
      {"touch", "2", NULL, INI_INT, 0, &touch, 0, 2, NULL, "Touch screen", "Off|Fingers|Mouse too", 0, 0, 0},
      {NULL, NULL, NULL, 0, 0, NULL, 0, 0, NULL, NULL, NULL, 0, 0, 0}};
-@@ -95,11 +146,12 @@ static void store(const char* key, const char* value) {
+@@ -95,11 +147,12 @@ static void store(const char* key, const char* value) {
  
  enum { SW = 2424, SH = 1080 };
  static int px, py, s, C; /* C: the panel's columns, overlay_cols' */
@@ -29699,7 +29720,7 @@ index 03330d3d..61cfdb6e 100644
  }
  /* ui.c's warning for a picture that does not draw */
  void logf_(int lvl, const char* fmt, ...) {
-@@ -170,7 +222,7 @@ static SnxOverlayError panel_of(const char* name, const char* msg, const char* h
+@@ -170,7 +223,7 @@ static SnxOverlayError panel_of(const char* name, const char* msg, const char* h
      return e;
  }
  int main(void) {
@@ -29708,7 +29729,7 @@ index 03330d3d..61cfdb6e 100644
      int x, y, sc;
      vpad_set_store(store);
      snx_pad_map_unset(&pads.own); /* as gamepad.c starts it: every control the button in its place */
-@@ -179,15 +231,17 @@ int main(void) {
+@@ -179,15 +232,17 @@ int main(void) {
      overlay_toggle();
      assert(overlay_shown());
      /* letters half the screen's height at most, in whole steps, in the middle: a phone held wide, a small window. The
@@ -29730,7 +29751,7 @@ index 03330d3d..61cfdb6e 100644
      /* a phone's display scale: the Poco F8 (408 dpi, 2510x1156) and the Pixel 9 (420 dpi) at 3x, where half the
         picture gave 2x; a 4K picture at 100% keeps the 4x half of it gives */
      overlay_set_display_scale(408.0f / 160);
-@@ -202,25 +256,85 @@ int main(void) {
+@@ -202,25 +257,85 @@ int main(void) {
  
      /* the first page: the title on a band of ink, the items under it, the focused one on a band; the page hides the
         game, whose text would show through it */
@@ -29825,7 +29846,7 @@ index 03330d3d..61cfdb6e 100644
      /* named as the .ini's rows name them, in the launcher's order, the game's own actions among them */
      assert(text_at(1, 4, "\xFE Edit layout") && text_at(1, 5, "\xFE Snap to grid") &&
             text_at(1, 8, "\xFE Relative stick center"));
-@@ -271,7 +385,7 @@ int main(void) {
+@@ -271,7 +386,7 @@ int main(void) {
      /* the buttons' page: one hidden and kept, All shows them again; it scrolls to its last item */
      assert(tap(9, 3) == OVERLAY_NONE);
      draw();
@@ -29834,7 +29855,7 @@ index 03330d3d..61cfdb6e 100644
      log_[0] = 0;
      tap(1, 3);
      assert(!g_settings.control_shown[SNX_VPAD_L] && !strcmp(log_, "controls_l_shown=0;")); /* its place stays */
-@@ -294,10 +408,10 @@ int main(void) {
+@@ -294,10 +409,10 @@ int main(void) {
      /* Back on it, and the key Back, go up a page each */
      assert(overlay_select() == OVERLAY_NONE);
      draw();
@@ -29847,7 +29868,7 @@ index 03330d3d..61cfdb6e 100644
      /* a pad's buttons, as the game reads them: the D-pad and the left stick move, A selects, B goes back, the rest do
         nothing */
      {
-@@ -306,26 +420,36 @@ int main(void) {
+@@ -306,26 +421,36 @@ int main(void) {
          assert(overlay_pad(1ull << 13) == OVERLAY_NONE && overlay_pad(1ull << 2) == OVERLAY_NONE); /* X */
          assert(overlay_pad(1ull << 0) == OVERLAY_NONE);                                            /* Controllers */
          draw();
@@ -29893,7 +29914,7 @@ index 03330d3d..61cfdb6e 100644
          assert(overlay_controls(1ull << 0, still, 3000) == OVERLAY_EXIT);
          assert(overlay_controls(1ull << 13, still, 3001) == OVERLAY_NONE &&
                 overlay_controls(0, left, 3002) == OVERLAY_NONE);
-@@ -352,7 +476,7 @@ int main(void) {
+@@ -352,7 +477,7 @@ int main(void) {
              vpad_state(&b, st);
              assert(!b && overlay_controls(1ull << 0, still, 4001) == OVERLAY_NONE);
              draw();
@@ -29902,7 +29923,7 @@ index 03330d3d..61cfdb6e 100644
              assert(overlay_controls(1ull << 1, still, 4002) == OVERLAY_NONE); /* B: the menu */
              overlay_pointer_down(8, 5, 5, area);
              assert(overlay_pointer_up(8, 5, 5, SW, SH) == OVERLAY_CLOSE);
-@@ -368,10 +492,12 @@ int main(void) {
+@@ -368,10 +493,12 @@ int main(void) {
  
      /* the controllers' page: the ones connected, the Player row (every player's, or one's own), Swap A/B, the dead
         zone by fives, the vibration by tens down to Off and the background input, each kept */
@@ -29917,7 +29938,7 @@ index 03330d3d..61cfdb6e 100644
      assert(text_at(1, 4, "\xFE Swap A/B") && text_at(C - 4, 4, "Off"));
      tap(1, 3);
      assert(g_settings.swap_a_b && pad_stored == &g_settings.swap_a_b);
-@@ -445,7 +571,7 @@ int main(void) {
+@@ -445,7 +572,7 @@ int main(void) {
      }
      assert(overlay_back() == OVERLAY_NONE); /* no presets to go back to: up to its item at once */
      draw();
@@ -29926,7 +29947,7 @@ index 03330d3d..61cfdb6e 100644
      pads_held[0] = 0;
      /* the Player row steps to player 1: its Swap A/B and Vibration its own, As All until picked; its Button map
         its own map, kept as its key; round the eight back to All */
-@@ -494,19 +620,56 @@ int main(void) {
+@@ -494,19 +621,56 @@ int main(void) {
      assert(shows("< All >"));
      /* Back, on its item or the key, comes up to the controllers' item */
      assert(tap(6, 3) == OVERLAY_NONE);
@@ -29987,7 +30008,7 @@ index 03330d3d..61cfdb6e 100644
  
      /* ui.c: the atlas with the font's glyphs, white where a glyph's bit is, and sprites' alpha premultiplied */
      {
-@@ -521,7 +684,7 @@ int main(void) {
+@@ -521,7 +685,7 @@ int main(void) {
          assert(!ui_atlas(&w, &h, &version));
          ui_atlas_set(sprites, SNX_CONTROLS_ATLAS_WIDTH, SNX_CONTROLS_ATLAS_HEIGHT);
          a = ui_atlas(&w, &h, &version);
@@ -29996,7 +30017,7 @@ index 03330d3d..61cfdb6e 100644
          /* no user read yet: the picture's rows are transparent */
          for (y = 0; y < SNX_UI_PICTURE; ++y)
              for (x = 0; x < SNX_UI_PICTURE; ++x) assert(!a[(SNX_CONTROLS_ATLAS_HEIGHT + y) * w + x]);
-@@ -714,7 +877,7 @@ int main(void) {
+@@ -714,7 +878,7 @@ int main(void) {
          assert(SNX_GUI_THEME_YORHA_PICTURE == 1); /* square: the frame is the fills' */
          ui_atlas_set(sprites, SNX_CONTROLS_ATLAS_WIDTH, SNX_CONTROLS_ATLAS_HEIGHT);
          a = ui_atlas(&w, &h, &version);
@@ -30005,7 +30026,7 @@ index 03330d3d..61cfdb6e 100644
          for (y = 0; y < SNX_UI_PICTURE; ++y)
              for (x = 0; x < SNX_UI_PICTURE; ++x) {
                  u32 p = snx_le32(a[(SNX_CONTROLS_ATLAS_HEIGHT + y) * w + x]); /* the GPU's bytes R G B A */
-@@ -755,7 +918,7 @@ int main(void) {
+@@ -755,7 +919,7 @@ int main(void) {
                      assert(q->y == band + 2 * edge && q->h == side && q->w == side && !q->sharp);
                      assert(q->x + q->w == right - 2 * edge);
                  }
@@ -30014,7 +30035,7 @@ index 03330d3d..61cfdb6e 100644
                            q->x < right && q->y >= band && q->y < band + 16.0f * (float)s;
                  if (q->u == SNX_CONTROLS_FONT_X + 'P' % 16 * 8 && q->v == SNX_CONTROLS_FONT_Y + 'P' / 16 * 16 &&
                      q->y == band && q->x > boxx)
-@@ -768,6 +931,24 @@ int main(void) {
+@@ -768,6 +932,24 @@ int main(void) {
          for (i = 0, pictures = 0; i < list.n; ++i) pictures += list.q[i].v == SNX_CONTROLS_ATLAS_HEIGHT;
          assert(!pictures && !shows("Player"));
      }

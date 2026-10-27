@@ -49,6 +49,12 @@ internal static class EngineTests
             Check(File.ReadAllBytes(Path.Combine(backup, "My Game.exe")).SequenceEqual(originalBytes) && File.ReadAllText(Path.Combine(backup, "zlib1.dll")) == "original zlib", "The original engine and the libraries it replaced are kept");
             Check(File.ReadAllText(Path.Combine(save, "slot.dat")) == "progress" && File.ReadAllText(Path.ChangeExtension(exe, ".ini")) == "fps_limit=120\r\n", "The start-up check leaves the save and settings exactly as they were");
             Check(EngineManager.Install(exe, package, null, CancellationToken.None).Contains("already installed"), "Installing twice changes nothing");
+            string gameIni = Path.ChangeExtension(exe, ".ini");
+            File.WriteAllText(gameIni, "fps_limit=120\r\npaced_display=0\r\n");
+            var lifted = EngineManager.ReleaseSafePacing(exe).Contains("on again") ? GameOptimization.ReadValues(File.ReadAllText(gameIni)) : null;
+            Check(lifted != null && lifted["paced_display"] == "1" && lifted["fps_limit"] == "120" && EngineManager.ReleaseSafePacing(exe) == "",
+                  "A new engine lifts the Doctor's own-frames repair once and keeps the player's FPS limit");
+            File.WriteAllText(gameIni, "fps_limit=120\r\n");
 
             EngineManager.Restore(exe);
             Check(File.ReadAllBytes(exe).SequenceEqual(originalBytes) && File.ReadAllText(Path.Combine(games, "zlib1.dll")) == "original zlib" && !File.Exists(Path.Combine(games, "libengine-test.dll")), "Restoring puts the original engine and libraries back and removes added ones");
