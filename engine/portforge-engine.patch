@@ -30384,7 +30384,7 @@ index 53c5e45d..bd87f7eb 100644
 +    {
 +        /* a 30 FPS game reaches four times its own frames at most: 120, whatever is typed above that */
 +        static const int want[][3] = {{SNX_FPS_GAME, 30, 60}, {0, 30, 60},     {30, 30, 30},   {60, 30, 60},
-+                                      {120, 30, 60},         {144, 30, 120},  {240, 30, 120},  {20, 20, 20}};
++                                      {120, 30, 120},        {144, 30, 120},  {240, 30, 120},  {20, 20, 20}};
 +        for (size_t w = 0; w < sizeof want / sizeof *want; w++) {
 +            CHECK(present_display_target(want[w][0], 0) == want[w][1], "a 30 FPS game, limit %d, FSR 3 off: %d, not %d",
 +                  want[w][0], present_display_target(want[w][0], 0), want[w][1]);
