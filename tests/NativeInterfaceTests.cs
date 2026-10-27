@@ -57,6 +57,24 @@ internal static class NativeInterfaceTests
                     "Startup detects and shows this PC's CPU, graphics and RAM with matching and measurement enabled");
                 Check(controls.OfType<GlobalSettingsPanel>().Any(), "Graphics and FPS settings are directly accessible from the main screen (the Settings tab)");
                 Check(controls.OfType<TabControl>().Any(t=>t.TabPages.Cast<TabPage>().Any(p=>p.Text=="Settings")), "Global settings have a tab without requiring a game executable");
+                /* the Settings tab's own prediction of the pictures a second (Engine 1.47's present_display_target) */
+                var settingsPanel = controls.OfType<GlobalSettingsPanel>().Single();
+                var settingsPanelControls = All(settingsPanel).ToList();
+                var frameLimit = settingsPanelControls.OfType<ComboBox>().Single(c => c.AccessibleName == "Frame limit");
+                var upscaling = settingsPanelControls.OfType<ComboBox>().Single(c => c.AccessibleName == "Upscaling");
+                int wasUpscaling = upscaling.SelectedIndex, wasLimit = frameLimit.SelectedIndex;
+                Func<string> limitNote = () => settingsPanelControls.OfType<Label>().Select(l => l.Text).Single(t => t.Contains("FPS in a 30 FPS game"));
+                upscaling.SelectedIndex = 2; /* AMD FSR 3 frame generation */
+                frameLimit.SelectedIndex = 6; /* Unlimited */
+                Check(limitNote().StartsWith("Unlimited with AMD FSR 3 frame generation shows 120 FPS in a 30 FPS game (like Zelda BotW) and 240 FPS in a 60 FPS game"),
+                    "Unlimited with FSR 3 asks for the most the engine can make: 240 in a 60 FPS game, not twice the game's frames");
+                frameLimit.SelectedIndex = 0; /* Game speed */
+                Check(limitNote().StartsWith("Game speed with AMD FSR 3 frame generation shows 60 FPS in a 30 FPS game (like Zelda BotW) and 120 FPS in a 60 FPS game"),
+                    "Game speed with FSR 3 stays at the game's own frames, doubled (120 in a 60 FPS game)");
+                frameLimit.SelectedIndex = 5; /* 240 */
+                Check(limitNote().StartsWith("A limit of 240 with AMD FSR 3 frame generation shows 120 FPS in a 30 FPS game (like Zelda BotW) and 240 FPS in a 60 FPS game"),
+                    "A typed 240 with FSR 3 is 240 in a 60 FPS game and 120 in a 30 FPS game (four a real frame at most)");
+                frameLimit.SelectedIndex = wasLimit; upscaling.SelectedIndex = wasUpscaling;
                 Check(controls.OfType<Button>().Any(b => b.Text == "Downloads"), "Downloads are directly accessible from the main screen");
                 var boxes = controls.OfType<TextBox>().ToDictionary(box => box.AccessibleName);
                 Func<string, Button> button = label => controls.OfType<Button>().Single(b => b.AccessibleName == label || b.Text == label);

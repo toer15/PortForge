@@ -26284,7 +26284,7 @@ diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
 index addf0820..48526094 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
-@@ -38,5 +38,23 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -38,5 +38,24 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
  /* the wait before vi hands the game a buffer for its next frame, as fps_limit says: with fps_limit=game until the
     frame before has been on the display for interval refreshes (its swap interval) */
  void present_pace(u32 interval);
@@ -26298,8 +26298,9 @@ index addf0820..48526094 100644
 +/* PortForge FSR 3 (frame generation) on, from the .ini or Esc */
 +int present_fg_on(void);
 +int present_fg_chosen(void);
-+/* pictures a second the display gets: fps_limit with frame generation off, twice it on (the game's own frames for
-+   "game" and unlimited), at most the display's refresh with vsync; 0 while the game's pace is unknown */
++/* pictures a second the display gets: fps_limit with frame generation off, twice it on, up to four times the game's
++   own for a typed limit above twice them and for Unlimited (0: no number, the most the pipeline can make), at most
++   the display's refresh with vsync; "game" is the game's own pace doubled; 0 while the game's pace is unknown */
 +int present_display_target(int fps_limit, int frame_generation);
 +int present_expected_display_fps(int fps_limit, int frame_generation);
 +/* atomic: the refresh in Hz of the display the window is on, 0 when not known (headless) */
@@ -26565,15 +26566,16 @@ diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
 index 408db9ed..69aae239 100644
 --- a/src/nx/runtime/options.h
 +++ b/src/nx/runtime/options.h
-@@ -34,7 +34,19 @@ void ini_poll(int final);
+@@ -34,7 +34,20 @@ void ini_poll(int final);
  /* fps_limit: 0 = no limit, SNX_FPS_GAME = the game's own pace (its swap interval), else frames a second (10 to 1000) */
  #define SNX_FPS_GAME (-1)
  extern int g_opt_fps;                              /* atomic: the game's threads read it */
 +extern int g_opt_speed_lock;                       /* atomic: speed_lock, 1 = no frame sooner than the game's pace */
 +extern int g_opt_frame_generation;                 /* atomic: frame_generation; on-screen rate is ~2x via FG presents */
 +/* Generated pictures one real frame can pay with when the player types an FPS limit above twice the game's pace (the
-+   240 preset on a 60 FPS game): the renderer's FG_MAX_MIDS, in nx/gpu/vk/vk.h, which neither this header nor
-+   present.c can include (host tests build them without the Vulkan headers). renderer.c asserts the two agree. */
++   240 preset on a 60 FPS game) or picks Unlimited: the renderer's FG_MAX_MIDS, in nx/gpu/vk/vk.h, which neither this
++   header nor present.c can include (host tests build them without the Vulkan headers). renderer.c asserts the two
++   agree. */
 +#define PRESENT_FG_MAX_MIDS 3
  void fps_limit_text(int fps, char* out, size_t n); /* g_opt_fps as fps_limit's value: "game", "0", "30"... */
 +/* Esc/Home or F4: set g_opt_fps above global settings so ini_poll cannot wipe it; kept for the next launch */
@@ -26595,7 +26597,7 @@ index 00000000..0693be93
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.46"
++#define PF_ENGINE_VERSION "1.47"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5a..38b92670 100644
@@ -27305,7 +27307,7 @@ index 441a8c2a..c15a9a10 100644
 +                                           : "Off");
 +        } else if (i == M_FPS) {
 +            /* the limit, and the pictures a second it gives on this game: the limit with PortForge FSR 3 off, twice
-+               it on (the game itself keeps its own speed) */
++               it on, the most the pipeline can make for Unlimited (the game itself keeps its own speed) */
 +            int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
 +            int fg = present_fg_on();
 +            int expect = present_expected_display_fps(fps, fg);
@@ -28636,7 +28638,7 @@ index 2bd6181e..3816da02 100644
  #include "nx/runtime/platform/plat.h"
  
  int g_frames;
-@@ -31,14 +32,171 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +32,173 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -28727,9 +28729,10 @@ index 2bd6181e..3816da02 100644
 +   refresh: a limit between the game's pace and twice it (90 on a 60 FPS game) gets exactly that many, a generated
 +   picture after as many real frames as the limit pays for. A typed limit above twice the game's pace (144, 165, 200,
 +   240) is paid with up to PRESENT_FG_MAX_MIDS generated pictures a frame, so the 240 preset is 240 in a 60 FPS game
-+   where the panel allows it (vsync caps it at the refresh). Unlimited and Game speed still show twice the game's
-+   frames: they ask for no number above them. 0 while the game's pace isn't known (a self-timed game without a
-+   limit) */
++   where the panel allows it (vsync caps it at the refresh). Unlimited (no number at all) asks for as many pictures as
++   the pipeline can make: the same four a real frame with FSR 3, and the game's own frames without it, since a picture
++   the game never drew cannot be shown. Game speed is the game's own pace, doubled by FSR 3. 0 while the game's pace
++   isn't known (a self-timed game without a limit) */
 +int present_display_target(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit), hz = __atomic_load_n(&g_display_hz, __ATOMIC_RELAXED), want, cap;
 +    if (side <= 0) return 0;
@@ -28738,9 +28741,10 @@ index 2bd6181e..3816da02 100644
 +    cap = fps_limit > 0 ? fps_limit : 0;
 +    if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && (!cap || hz < cap)) cap = hz;
 +    want = frame_generation ? side * 2 : side;
-+    /* the player typed a limit above twice the game's pace: up to three generated pictures a frame pay it, so the
-+       screen reaches the number that was typed and not just twice the game's own frames */
-+    if (frame_generation && fps_limit > 0 && fps_limit > want) want = side * (PRESENT_FG_MAX_MIDS + 1);
++    /* Unlimited (0) is no cap at all, and a typed limit above twice the game's pace is a number the screen should
++       reach: both are paid with up to three generated pictures a frame, four times the game's own */
++    if (frame_generation && fps_limit >= 0 && (fps_limit == 0 || fps_limit > want))
++        want = side * (PRESENT_FG_MAX_MIDS + 1);
 +    if (cap && want > cap) want = cap > side ? cap : side;
 +    return want;
 +}
@@ -30272,7 +30276,7 @@ index 53c5e45d..bd87f7eb 100644
  static void pacing(void) {
      const u64 refresh = 1000000000u / 60;
      u64 before;
-@@ -84,12 +168,168 @@ static void pacing(void) {
+@@ -84,12 +168,170 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -30348,13 +30352,14 @@ index 53c5e45d..bd87f7eb 100644
 +    CHECK(present_display_target(200, 1) == 200, "a typed 200 with FG is not 200 on a 60 FPS game");
 +    CHECK(present_display_target(240, 1) == 240, "240 with FG is not 240 on a 60 FPS game");
 +    CHECK(present_display_target(1000, 1) == 240, "1000 with FG went past four pictures a frame");
-+    CHECK(present_display_target(0, 1) == 120, "unlimited with FG is not the game's 60 doubled");
++    CHECK(present_display_target(0, 1) == 240, "unlimited with FG is not the most the pipeline can make (four a frame)");
 +    CHECK(present_display_target(SNX_FPS_GAME, 1) == 120, "game speed with FG is not the game's 60 doubled");
 +    CHECK(present_expected_display_fps(144, 1) == present_display_target(144, 1), "Esc expects another rate");
 +    /* with vsync never more than the display refreshes */
 +    g_display_hz = 144;
 +    CHECK(present_display_target(120, 1) == 120, "a 144 Hz display lost FG at 120");
 +    CHECK(present_display_target(240, 1) == 144, "a 144 Hz display was paced above its refresh for 240");
++    CHECK(present_display_target(0, 1) == 144, "a 144 Hz display was paced above its refresh for unlimited");
 +    CHECK(present_display_target(240, 0) == 60, "a 144 Hz display was given repeats without FG");
 +    g_display_hz = 60;
 +    CHECK(present_display_target(60, 1) == 60, "a 60 Hz display got generated pictures it can't show");
@@ -30362,6 +30367,7 @@ index 53c5e45d..bd87f7eb 100644
 +    g_settings.vsync = 0;
 +    CHECK(present_display_target(120, 0) == 60, "vsync off repeated frames without FG");
 +    CHECK(present_display_target(120, 1) == 120, "vsync off still capped FG at the display's 60");
++    CHECK(present_display_target(0, 1) == 240, "vsync off capped unlimited at the display's 60");
 +    g_settings.vsync = 1;
 +    g_display_hz = 280;
 +    g_opt_fps = 120;
@@ -30383,7 +30389,7 @@ index 53c5e45d..bd87f7eb 100644
 +    /* a 30 FPS game (Zelda BotW) on a 280 Hz display: every limit the menu offers, FSR 3 off and on */
 +    {
 +        /* a 30 FPS game reaches four times its own frames at most: 120, whatever is typed above that */
-+        static const int want[][3] = {{SNX_FPS_GAME, 30, 60}, {0, 30, 60},     {30, 30, 30},   {60, 30, 60},
++        static const int want[][3] = {{SNX_FPS_GAME, 30, 60}, {0, 30, 120},    {30, 30, 30},   {60, 30, 60},
 +                                      {120, 30, 120},        {144, 30, 120},  {240, 30, 120},  {20, 20, 20}};
 +        for (size_t w = 0; w < sizeof want / sizeof *want; w++) {
 +            CHECK(present_display_target(want[w][0], 0) == want[w][1], "a 30 FPS game, limit %d, FSR 3 off: %d, not %d",
@@ -30442,7 +30448,7 @@ index 53c5e45d..bd87f7eb 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -97,7 +337,9 @@ int main(void) {
+@@ -97,7 +339,9 @@ int main(void) {
      i32 crop[4] = {0, 0, 0, 0};
      clock_start();
      ticks();
