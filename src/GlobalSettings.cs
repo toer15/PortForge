@@ -110,7 +110,7 @@ namespace PortForge
             int fps;
             if (!FrameGeneration || !Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
                 return "";
-            return "Limit " + fps + " caps the pictures on screen. FSR 3 frame generation adds one AMD-generated picture between each two game frames when twice the game's frames fit under " + fps + " (and your monitor's refresh with VSync). No frame is repeated. The game keeps its own speed.";
+            return "Limit " + fps + " caps the pictures on screen. FSR 3 frame generation adds AMD-generated pictures between game frames up to " + fps + " (twice the game's frames at most, and your monitor's refresh with VSync). No frame is repeated. The game keeps its own speed.";
         }
 
         public void Save(string path)

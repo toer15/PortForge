@@ -42,7 +42,8 @@ namespace PortForge
             layout.Controls.Add(upscaleNote);
             layout.Controls.Add(amdFg);
             AddChoice(layout, "Rendering mode", mode);
-            AddChoice(layout, "FPS limit", fps);
+            fps.DropDownStyle = ComboBoxStyle.DropDown; /* type any limit from 10 to 1000, or pick a preset */
+            AddChoice(layout, "FPS limit (type any number from 10 to 1000)", fps);
             layout.Controls.Add(fpsNote);
             foreach (var check in new[] {vsync,lowLatency,smoothing,fullscreen,cursor,indicator,graph,trace}) layout.Controls.Add(check);
             AddText(layout, "Low latency reduces the VSync image queue when supported and gives the game a higher Windows scheduling priority. It can reduce queue delay, but frame generation and GPU load can still add latency.", 10);
@@ -61,6 +62,7 @@ namespace PortForge
             AddText(layout, "Global settings take priority over the per-game settings in Game tools. Turn global settings off and save to use each game's own choices again.", 10);
             upscale.SelectedIndexChanged += delegate { RefreshNotes(); };
             fps.SelectedIndexChanged += delegate { RefreshNotes(); };
+            fps.TextChanged += delegate { RefreshNotes(); };
             resolution.SelectedIndexChanged += delegate { RefreshNotes(); };
             mode.SelectedIndexChanged += delegate { RefreshNotes(); };
             trueRes.CheckedChanged += delegate { RefreshNotes(); };
@@ -85,7 +87,7 @@ namespace PortForge
             s.ApplyUpscaleMode();
             s.Graphics.Docked=mode.SelectedIndex==0;
             s.Graphics.Fullscreen=fullscreen.Checked; s.Graphics.VSync=vsync.Checked; s.Graphics.PixelSmoothing=smoothing.Checked;
-            s.Graphics.FpsLimit=fps.SelectedIndex==0 ? "game" : fps.SelectedIndex==6 ? "0" : fps.Text;
+            s.Graphics.FpsLimit=FpsKey();
             s.TrueResolution=trueRes.Checked; s.LowLatency=lowLatency.Checked; s.AmdFrameGeneration=amdFg.Checked;
         }
         private void ShowSettings(GlobalSettings s)
@@ -97,16 +99,18 @@ namespace PortForge
             fullscreen.Checked=s.Graphics.Fullscreen; vsync.Checked=s.Graphics.VSync; smoothing.Checked=s.Graphics.PixelSmoothing;
             mode.SelectedIndex=s.Graphics.Docked?0:1;
             fps.SelectedIndex=s.Graphics.FpsLimit=="game"?0:s.Graphics.FpsLimit=="0"?6:fps.Items.IndexOf(s.Graphics.FpsLimit);
-            if(fps.SelectedIndex<0) { fps.Items.Add(s.Graphics.FpsLimit); fps.SelectedIndex=fps.Items.Count-1; }
+            if(fps.SelectedIndex<0) fps.Text=s.Graphics.FpsLimit;
             trueRes.Checked=s.TrueResolution; lowLatency.Checked=s.LowLatency; amdFg.Checked=s.AmdFrameGeneration;
             RefreshNotes();
         }
-        /* pictures a second on screen for a game running at its own pace g (Engine 1.34's present_display_target,
-           ignoring the monitor's refresh), a real limiter: the game's frames at most the limit, doubled by FSR 3 when the limit leaves room for twice them */
+        /* pictures a second on screen for a game running at its own pace g (Engine 1.44's present_display_target,
+           ignoring the monitor's refresh), a real limiter: the game's frames at most the limit, and with FSR 3 up to twice
+           them, locked to a typed limit in between (90 on a 60 FPS game) */
         private static int OnScreen(int g, int limit, bool fsr3)
         {
             int shown = limit > 0 && limit < g ? limit : g;
-            return fsr3 && (limit <= 0 || 2 * shown <= limit) ? 2 * shown : shown;
+            if (!fsr3) return shown;
+            return limit <= 0 || 2 * shown <= limit ? 2 * shown : Math.Max(limit, shown);
         }
         private void RefreshNotes()
         {
@@ -114,14 +118,26 @@ namespace PortForge
             preview.Graphics.Docked = mode.SelectedIndex == 0;
             resolutionNote.Text = preview.RenderResolutionNote();
             bool fsr3 = upscale.SelectedIndex == 2;
-            string limit = fps.SelectedIndex == 0 ? "game" : fps.SelectedIndex == 6 ? "0" : fps.Text;
+            string limit = FpsKey();
             int n;
-            if (!Int32.TryParse(limit, NumberStyles.Integer, CultureInfo.InvariantCulture, out n)) n = 0;
-            string name = n > 0 ? "A limit of " + n : fps.SelectedIndex == 0 ? "Game speed" : "Unlimited";
+            if (!Int32.TryParse(limit, NumberStyles.None, CultureInfo.InvariantCulture, out n)) n = -1;
+            if (limit != "game" && limit != "0" && (n < 10 || n > 1000)) { fpsNote.Text = "Type a whole number from 10 to 1000, or pick Game speed or Unlimited."; return; }
+            string name = limit == "game" ? "Game speed" : limit == "0" ? "Unlimited" : "A limit of " + n;
+            if (n < 0) n = 0;
             fpsNote.Text = name + (fsr3 ? " with AMD FSR 3 frame generation" : "") + " shows " + OnScreen(30, n, fsr3) +
                 " FPS in a 30 FPS game (like Zelda BotW) and " + OnScreen(60, n, fsr3) + " FPS in a 60 FPS game, never more than your monitor refreshes with VSync on. " +
-                (fsr3 ? "FSR 3 adds one AMD-generated picture between each two real frames when the limit leaves room for twice the game's frames. No frame is shown twice. The game keeps its own speed."
+                (fsr3 ? "FSR 3 adds AMD-generated pictures between real frames up to the limit you set (twice the game's frames at most). No frame is shown twice. The game keeps its own speed."
                       : "Without frame generation the screen shows the game's own frames, at most the limit. A limit above the game's pace does not repeat frames, and the game keeps its own speed.");
+        }
+        /* the limit as the settings file keeps it: game, 0 for Unlimited, or the number typed or picked */
+        private string FpsKey()
+        {
+            int at = fps.FindStringExact(fps.Text);
+            if (at == 0) return "game";
+            if (at == 6) return "0";
+            string typed = fps.Text.Trim();
+            if (typed.EndsWith("fps", StringComparison.OrdinalIgnoreCase)) typed = typed.Substring(0, typed.Length - 3).Trim();
+            return typed;
         }
         private static string ResolutionKey(int index)
         {
