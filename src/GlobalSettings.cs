@@ -17,8 +17,11 @@ namespace PortForge
         public bool TrueResolution = true;
         /// <summary>Engine 1.41: three swapchain images with VSync instead of five, the game ahead of ordinary programs.</summary>
         public bool LowLatency = true;
-        /// <summary>0 Linear, 1 FSR 1, 2 PortForge FSR 3 (FSR 1 + from-scratch optical-flow FG).</summary>
+        /// <summary>0 Linear, 1 FSR 1, 2 FSR 3 frame generation (FSR 1 + AMD FidelityFX SDK frame interpolation).</summary>
         public int UpscaleMode;
+        /// <summary>Engine 1.38+: generated pictures come from AMD FidelityFX SDK 1.1.4's optical flow and frame
+        /// interpolation (amd_frame_generation=1). Off falls back to PortForge's earlier motion search.</summary>
+        public bool AmdFrameGeneration = true;
         public GraphicsProfile Graphics = new GraphicsProfile();
         /// <summary>Tests point this at a scratch file so they never touch the user's own settings.</summary>
         public static string PathOverride;
@@ -41,6 +44,7 @@ namespace PortForge
             if (v.TryGetValue("display_resolution", out x) && IsDisplayResolution(x)) s.DisplayResolution = x;
             if (v.TryGetValue("true_resolution", out x)) s.TrueResolution = x != "0";
             if (v.TryGetValue("low_latency", out x)) s.LowLatency = x != "0";
+            if (v.TryGetValue("amd_frame_generation", out x)) s.AmdFrameGeneration = x != "0";
             if (v.TryGetValue("upscale_mode", out x) && Int32.TryParse(x, out n) && n >= 0 && n <= 2) s.UpscaleMode = n;
             if (v.TryGetValue("fps_limit", out x)) s.Graphics.FpsLimit = x;
             if (v.TryGetValue("upscaler", out x) && Int32.TryParse(x, out n)) s.Graphics.Upscaler = n;
@@ -106,7 +110,7 @@ namespace PortForge
             int fps;
             if (!FrameGeneration || !Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
                 return "";
-            return "Limit " + fps + " with PortForge FSR 3 shows " + (fps * 2) + " FPS (at most your monitor's refresh with VSync). The game keeps its own speed.";
+            return "Limit " + fps + " caps the pictures on screen. FSR 3 frame generation adds one AMD-generated picture between each two game frames when twice the game's frames fit under " + fps + " (and your monitor's refresh with VSync). No frame is repeated. The game keeps its own speed.";
         }
 
         public void Save(string path)
@@ -129,6 +133,7 @@ namespace PortForge
             v["frametime_graph"] = FrameTimeGraph ? "1" : "0";
             v["frame_trace"] = FrameTrace ? "1" : "0";
             v["frame_generation"] = FrameGeneration ? "1" : "0";
+            v["amd_frame_generation"] = AmdFrameGeneration ? "1" : "0";
             v["portforge_fsr3"] = UpscaleMode == 2 ? "1" : "0";
             v["speed_lock"] = "1";
             v["pipeline_threads"] = "0";

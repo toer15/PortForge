@@ -111,6 +111,7 @@ namespace PortForge
                 if (!g.Enabled) return;
                 if (cap == null || cap.Keys.Contains("upscaler")) settings["upscaler"] = g.Graphics.Upscaler.ToString(CultureInfo.InvariantCulture);
                 if (cap == null || cap.Keys.Contains("frame_generation")) settings["frame_generation"] = g.FrameGeneration ? "1" : "0";
+            if (cap == null || cap.Keys.Contains("amd_frame_generation")) settings["amd_frame_generation"] = g.AmdFrameGeneration ? "1" : "0";
                 if (cap == null || cap.Keys.Contains("fps_limit")) settings["fps_limit"] = g.Graphics.FpsLimit;
                 if ((cap == null || cap.Keys.Contains("display_resolution")) && GlobalSettings.IsDisplayResolution(g.DisplayResolution))
                     settings["display_resolution"] = g.DisplayResolution;

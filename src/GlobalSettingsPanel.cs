@@ -12,9 +12,10 @@ namespace PortForge
             vsync = Check("VSync", true), smoothing = Check("Smooth jagged edges", false),
             graph = Check("Show frame-time graph in game (F7 toggles it)", false), trace = Check("Record frame-time trace (to find hitches)", false),
             trueRes = Check("Match screen-shaped render targets to the selected resolution (experimental)", true),
-            lowLatency = Check("Low latency: shorter VSync queue, game ahead of other programs", true);
+            lowLatency = Check("Low latency: shorter VSync queue, game ahead of other programs", true),
+            amdFg = Check("Generate frames with AMD FidelityFX SDK 1.1.4 (AMD's published FSR 3 optical flow and frame interpolation)", true);
         private readonly ComboBox resolution = Choice("Resolution", "Auto (game chooses)", "720p", "1080p", "1440p", "4K (2160p)"),
-            upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "PortForge FSR 3 (frame generation)"),
+            upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "AMD FSR 3 frame generation (FSR 1 + FidelityFX frame interpolation)"),
             mode = Choice("Rendering mode", "TV - game chooses its layout", "Handheld - lighter rendering where supported"),
             fps = Choice("Frame limit", "Game speed (recommended)", "30", "60", "120", "144", "240", "Unlimited");
         private readonly Label status = new Label { AutoSize = true, ForeColor = Color.FromArgb(105,226,183), AccessibleName = "Global settings status", Text = "READY - Settings apply on the next game launch." };
@@ -30,15 +31,16 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Games always run at their own speed: the FPS limit and PortForge FSR 3 only change how many pictures reach the screen. Display FPS is the limit with FSR 3 off and twice the limit with it on. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Games always run at their own speed. The FPS limit is a real limiter: it caps the pictures that reach the screen and never repeats a frame to reach a number. FSR 3 frame generation adds one AMD-generated picture between each two game frames when the limit leaves room for twice the game's frames. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             layout.Controls.Add(resolutionNote);
             layout.Controls.Add(trueRes);
             AddText(layout, "Engine 1.42 renders screen-shaped render targets at the selected 16:9 output. It records each game's own output height (many games draw 900 lines in TV mode) during its first run, including the warm-up after an engine install, and scales from that height from the next start. Data-shaped targets stay native. Dynamic-resolution games may differ, so this is not a per-game guarantee of exact internal pixels. Scaling up costs GPU; scaling down loses detail but can reduce GPU work. Turn this off if a game shows artifacts.", 10);
             AddChoice(layout, "Upscaling", upscale);
-            upscaleNote.Text = "PortForge FSR 3 = AMD FSR 1 upscaling plus PortForge's own frame generation (built from scratch from FSR 3 / AFMF ideas, not the AMD FidelityFX SDK). With it on the screen shows twice the FPS limit: one generated picture between each two real frames, the rest repeats (Zelda BotW at 30 FPS with a 60 limit shows 120). It never speeds the game up. Turn it on or off in game from Esc.";
+            upscaleNote.Text = "AMD FSR 3 frame generation = AMD FSR 1 upscaling plus the frame interpolation AMD publishes in the FidelityFX SDK 1.1.4 (its optical flow and frame interpolation shaders, MIT). Switch games give the PC no motion vectors or depth, so AMD's optical flow finds the motion and depth is flat. FSR 3's temporal upscaler needs those game motion vectors and cannot run on Switch games, so FSR 1 does the upscaling. One generated picture sits between each two real frames (a 30 FPS game shows 60). It never speeds the game up. Turn it on or off in game from Esc.";
             layout.Controls.Add(upscaleNote);
+            layout.Controls.Add(amdFg);
             AddChoice(layout, "Rendering mode", mode);
             AddChoice(layout, "FPS limit", fps);
             layout.Controls.Add(fpsNote);
@@ -84,7 +86,7 @@ namespace PortForge
             s.Graphics.Docked=mode.SelectedIndex==0;
             s.Graphics.Fullscreen=fullscreen.Checked; s.Graphics.VSync=vsync.Checked; s.Graphics.PixelSmoothing=smoothing.Checked;
             s.Graphics.FpsLimit=fps.SelectedIndex==0 ? "game" : fps.SelectedIndex==6 ? "0" : fps.Text;
-            s.TrueResolution=trueRes.Checked; s.LowLatency=lowLatency.Checked;
+            s.TrueResolution=trueRes.Checked; s.LowLatency=lowLatency.Checked; s.AmdFrameGeneration=amdFg.Checked;
         }
         private void ShowSettings(GlobalSettings s)
         {
@@ -96,15 +98,15 @@ namespace PortForge
             mode.SelectedIndex=s.Graphics.Docked?0:1;
             fps.SelectedIndex=s.Graphics.FpsLimit=="game"?0:s.Graphics.FpsLimit=="0"?6:fps.Items.IndexOf(s.Graphics.FpsLimit);
             if(fps.SelectedIndex<0) { fps.Items.Add(s.Graphics.FpsLimit); fps.SelectedIndex=fps.Items.Count-1; }
-            trueRes.Checked=s.TrueResolution; lowLatency.Checked=s.LowLatency;
+            trueRes.Checked=s.TrueResolution; lowLatency.Checked=s.LowLatency; amdFg.Checked=s.AmdFrameGeneration;
             RefreshNotes();
         }
         /* pictures a second on screen for a game running at its own pace g (Engine 1.34's present_display_target,
-           ignoring the monitor's refresh): the limit, twice it with FSR 3; Game speed and Unlimited are the game's own */
+           ignoring the monitor's refresh), a real limiter: the game's frames at most the limit, doubled by FSR 3 when the limit leaves room for twice them */
         private static int OnScreen(int g, int limit, bool fsr3)
         {
-            int shown = limit > 0 ? limit : g;
-            return fsr3 ? 2 * shown : shown;
+            int shown = limit > 0 && limit < g ? limit : g;
+            return fsr3 && (limit <= 0 || 2 * shown <= limit) ? 2 * shown : shown;
         }
         private void RefreshNotes()
         {
@@ -116,10 +118,10 @@ namespace PortForge
             int n;
             if (!Int32.TryParse(limit, NumberStyles.Integer, CultureInfo.InvariantCulture, out n)) n = 0;
             string name = n > 0 ? "A limit of " + n : fps.SelectedIndex == 0 ? "Game speed" : "Unlimited";
-            fpsNote.Text = name + (fsr3 ? " with PortForge FSR 3" : "") + " shows " + OnScreen(30, n, fsr3) +
+            fpsNote.Text = name + (fsr3 ? " with AMD FSR 3 frame generation" : "") + " shows " + OnScreen(30, n, fsr3) +
                 " FPS in a 30 FPS game (like Zelda BotW) and " + OnScreen(60, n, fsr3) + " FPS in a 60 FPS game, never more than your monitor refreshes with VSync on. " +
-                (fsr3 ? "FSR 3 shows twice the limit: one generated picture between each two real frames, then repeats. The game keeps its own speed."
-                      : "Above the game's own frames, each real frame is shown again until the limit is reached. Motion stays as smooth as the game's own frames, and the game keeps its own speed.");
+                (fsr3 ? "FSR 3 adds one AMD-generated picture between each two real frames when the limit leaves room for twice the game's frames. No frame is shown twice. The game keeps its own speed."
+                      : "Without frame generation the screen shows the game's own frames, at most the limit. A limit above the game's pace does not repeat frames, and the game keeps its own speed.");
         }
         private static string ResolutionKey(int index)
         {

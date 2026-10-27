@@ -23693,7 +23693,7 @@ index 00000000..a781c01e
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2d..fc6906c6 100644
+index f3ac2e2d..3b790475 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -6,8 +6,9 @@
@@ -24283,9 +24283,16 @@ index f3ac2e2d..fc6906c6 100644
 +        u64 now = plat_ns(), due = fg_next_due();
 +        if (!g_fg_qn)
 +            pc_wait(&g_fg_cond, &g_fg_lock, -1);
-+        else if (now < due)
-+            pc_wait(&g_fg_cond, &g_fg_lock, (i64)(due - now));
-+        else {
++        else if (now + 2000000ull < due)
++            /* a condition wait is whole milliseconds rounded up: woken short of the due time, the rest below */
++            pc_wait(&g_fg_cond, &g_fg_lock, (i64)(due - now - 1500000ull));
++        else if (now < due) {
++            /* the last stretch on the high-resolution timer, so the generated picture lands half a frame after the
++               real one, not up to two milliseconds late */
++            pm_unlock(&g_fg_lock);
++            plat_sleep_ns((i64)(due - now));
++            pm_lock(&g_fg_lock);
++        } else {
 +            pm_unlock(&g_fg_lock);
 +            vk_lock();
 +            fg_flush(1);
@@ -24391,18 +24398,11 @@ index f3ac2e2d..fc6906c6 100644
 +    /* a pace to divide: no hitch, pause or catch-up burst between the frames */
 +    int steady = g_fg_period >= 1000000ull && g_fg_period <= 250000000ull && interval >= g_fg_period / 2 &&
 +                 interval < g_fg_period * 3 / 2;
-+    int k = 1;
-+    if (steady) {
-+        /* this frame's share of the target, the fraction carried to the next: 144 on a 30 FPS game alternates 4
-+           and 5 pictures, 144 a second */
-+        g_fg_owed += target > 0 ? (double)target * (double)g_fg_period / 1e9 : fg ? 2.0 : 1.0;
-+        k = (int)g_fg_owed;
-+        if (k < 1) k = 1;
-+        if (k > FG_QMAX + 1) k = FG_QMAX + 1;
-+        g_fg_owed -= k;
-+        if (g_fg_owed < -1.0 || g_fg_owed > 1.0) g_fg_owed = 0;
-+    } else
-+        g_fg_owed = 0;
++    /* a real limiter (present_display_target): a generated picture and the real frame, or the real frame alone. Never
++       a repeat of either: a measured period's jitter carried as a fraction gave a third picture now and then, which
++       was the real frame again */
++    int k = steady && fg && target >= 2 * side ? 2 : 1;
++    g_fg_owed = 0;
 +    u32 dw = 0, dh = 0;
 +    present_dest_size(fw, fh, &dw, &dh);
 +    if (fg) {
@@ -25872,10 +25872,10 @@ index 00000000..3a4d381f
 +}
 +#endif
 diff --git a/src/nx/memory/mem.c b/src/nx/memory/mem.c
-index 17533196..1145db5d 100644
+index 17533196..b8827c40 100644
 --- a/src/nx/memory/mem.c
 +++ b/src/nx/memory/mem.c
-@@ -7,6 +7,7 @@
+@@ -7,10 +7,12 @@
  /* the guest address space: the host reservation every guest address is an offset into, its regions, and the list of
     memory blocks with the state, permission and attributes QueryMemory reports */
  #include "nx/memory/mem.h"
@@ -25883,7 +25883,12 @@ index 17533196..1145db5d 100644
  #include "nx/memory/own.h"
  #include "nx/gpu/gpu.h"
  #include "nx/runtime/platform/log.h"
-@@ -22,8 +23,7 @@
+ #include "nx/runtime/platform/plat.h"
++#include "nx/runtime/options.h"
+ #include <stdlib.h>
+ 
+ #define GIB  (1ull << 30)
+@@ -22,8 +24,7 @@
     address space (the ASLR region of GetInfo 12 and 13) ends there, and the kernel map region, 64 GiB on the console,
     is the 1 GiB the kernel's own pages (TLS) need. The alias region starts at 4 GiB, which leaves the code below it
     up to 3.9 GiB, as the end of the code isn't known yet when the layout is made */
@@ -25893,6 +25898,23 @@ index 17533196..1145db5d 100644
  u8* g_mem;
  u64 g_heap_size, g_phys_mapped, g_heap_max, g_code_memory, g_main_stack_size;
  u64 g_pool_size = 64 * GIB; /* sparse: only the pages in use take memory */
+@@ -481,6 +482,16 @@ void mem_init(void) {
+     g_nblk = 1;
+     runs_stale_nl();
+     mem_unlock();
++    /* PortForge crash guard (null_guard): the lowest 64 KiB, which nothing maps, are a scratch page zeroed at start. A game
++       that uses a structure it failed to get (a pool the SDK refused, an allocation that returned null) finds an empty
++       one, which its own state checks turn away, and its writes to it land there, instead of the game ending. A
++       game hit by one: it read 0x10 of a refused audio pool (state check failed, as hoped), then finalized it */
++    if (g_settings.crash_guard) {
++        if (plat_vm_null_guard(g_mem, (u64)64 << 10))
++            WARN("memory: crash guard unavailable: the lowest pages could not be made readable\n");
++        else
++            LOG("memory: crash guard on: a null pointer's reads and writes land in a scratch page instead of ending the game\n");
++    }
+     /* a view shares pages only at the same place in a host page as its source, which a game picking addresses in
+        4 KiB steps leaves to chance with larger pages: they copy, as hosts without a pool do */
+     g_pool_on = g_host_page == PAGE && !plat_alias_init(g_pool_size);
 diff --git a/src/nx/runtime/driver/container.c b/src/nx/runtime/driver/container.c
 index 7cce10b8..fdedda5e 100644
 --- a/src/nx/runtime/driver/container.c
@@ -26253,7 +26275,7 @@ index addf0820..ddcb7010 100644
  
  #endif
 diff --git a/src/nx/runtime/options.c b/src/nx/runtime/options.c
-index a0ef76b8..7bc199d2 100644
+index a0ef76b8..758e1107 100644
 --- a/src/nx/runtime/options.c
 +++ b/src/nx/runtime/options.c
 @@ -58,6 +58,20 @@ void options_fps_set(const IniOpt* o, const char* v) {
@@ -26395,7 +26417,7 @@ index a0ef76b8..7bc199d2 100644
 +static void global_load(void) {
 +    static const char* const allowed[] = {"fps_limit", "resolution", "render_scale_safety", "display_resolution", "true_resolution", "low_latency", "anisotropy", "upscaler",
 +        "pixel_smoothing", "shadows", "vsync", "docked", "fullscreen", "hide_cursor", "save_indicator", "speed_lock", "pipeline_threads",
-+        "frametime_graph", "frame_trace", "frame_generation", "portforge_fsr3"};
++        "frametime_graph", "frame_trace", "frame_generation", "amd_frame_generation", "portforge_fsr3"};
 +    const char* base = getenv("LOCALAPPDATA");
 +    char path[1400], *key, *value;
 +    SnxIni ini;
@@ -26527,7 +26549,7 @@ index 408db9ed..69aae239 100644
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
 new file mode 100644
-index 00000000..d2d2b58d
+index 00000000..8aac69e4
 --- /dev/null
 +++ b/src/nx/runtime/pf_engine_version.h
 @@ -0,0 +1,6 @@
@@ -26535,7 +26557,7 @@ index 00000000..d2d2b58d
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.42"
++#define PF_ENGINE_VERSION "1.43"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5a..38b92670 100644
@@ -27826,7 +27848,7 @@ index 8e29f7be..479b4fff 100644
 +
  #endif
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
-index d3e4e350..141293bb 100644
+index d3e4e350..2bbb65df 100644
 --- a/src/nx/runtime/platform/plat.h
 +++ b/src/nx/runtime/platform/plat.h
 @@ -40,8 +40,17 @@ typedef void (*PThreadFn)(void* arg);
@@ -27847,7 +27869,15 @@ index d3e4e350..141293bb 100644
  /* the calling thread runs only on the n host CPUs in ids */
  void plat_thread_cpus(const int* ids, int n);
  /* the host for the log's header, so a report needn't describe it: "<OS and version>, <CPU>, <n> threads, <n> GB RAM",
-@@ -173,6 +182,8 @@ void plat_install_crash_handler(void);
+@@ -68,6 +77,7 @@ i64 plat_tz_offset(void); /* local time minus UTC, in seconds */
+ u64 plat_vm_page(void);
+ u8* plat_vm_reserve(u64 size); /* aligned to plat_vm_page, inaccessible until committed; NULL on failure */
+ int plat_vm_commit(u8* p, u64 size);       /* readable and writable; 0, or -1 */
++int plat_vm_null_guard(u8* p, u64 size);   /* zeroed scratch pages, the first touch of each logged (Windows); 0, or -1 */
+ void plat_vm_decommit(u8* p, u64 size);    /* inaccessible again, and zero when committed next */
+ /* Calls cb for each run of pages in [p, p + size) written since they were last scanned, and watches them again.
+    -1 when the host can't tell (the caller then compares contents). Linux uses userfaultfd's asynchronous write
+@@ -173,6 +183,8 @@ void plat_install_crash_handler(void);
  void plat_prof_start(void); /* starts the sampling profiler (the profile option): Windows only */
  #if defined(_WIN32)
  void plat_prof_add_thread(HANDLE h); /* a thread to sample; the profiler keeps its own handle */
@@ -27857,7 +27887,7 @@ index d3e4e350..141293bb 100644
  
  #endif
 diff --git a/src/nx/runtime/platform/plat_posix.c b/src/nx/runtime/platform/plat_posix.c
-index cd639e42..3557abee 100644
+index cd639e42..3d28e595 100644
 --- a/src/nx/runtime/platform/plat_posix.c
 +++ b/src/nx/runtime/platform/plat_posix.c
 @@ -38,8 +38,12 @@
@@ -27901,8 +27931,16 @@ index cd639e42..3557abee 100644
  #if defined(__linux__) && !defined(__ANDROID__)
  /* the text after "key" (and a '=' or ':' with the spaces around it) on the first line of path that starts with it,
     unquoted; out empty when there's none */
+@@ -477,6 +495,7 @@ u8* plat_vm_reserve(u64 size) {
+     return p;
+ }
+ int plat_vm_commit(u8* p, u64 size) { return mprotect(p, (size_t)size, PROT_READ | PROT_WRITE) ? -1 : 0; }
++int plat_vm_null_guard(u8* p, u64 size) { return mprotect(p, (size_t)size, PROT_READ | PROT_WRITE) ? -1 : 0; }
+ void plat_vm_decommit(u8* p, u64 size) {
+ #if defined(__linux__)
+     madvise(p, (size_t)size, MADV_DONTNEED);
 diff --git a/src/nx/runtime/platform/plat_win32.c b/src/nx/runtime/platform/plat_win32.c
-index 1f9eebca..7eae463f 100644
+index 1f9eebca..de853841 100644
 --- a/src/nx/runtime/platform/plat_win32.c
 +++ b/src/nx/runtime/platform/plat_win32.c
 @@ -9,6 +9,7 @@
@@ -27975,6 +28013,36 @@ index 1f9eebca..7eae463f 100644
  typedef LONG(WINAPI* RtlGetVersionFn)(RTL_OSVERSIONINFOW*);
  void plat_system_info(char* out, size_t cap) {
      static const char key[] = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+@@ -259,6 +308,29 @@ int plat_vm_commit(u8* p, u64 size) {
+ }
+ void plat_vm_decommit(u8* p, u64 size) { VirtualFree(p, (SIZE_T)size, MEM_DECOMMIT); }
+ 
++/* PortForge crash guard: guarded scratch pages, zero at first. A page's first touch raises a guard-page exception,
++   which is logged here and retried; the page is then plain memory, so a null pointer's reads and writes land there */
++static u8* g_guard_base;
++static u64 g_guard_size;
++static LONG WINAPI null_guard_note(EXCEPTION_POINTERS* e) {
++    EXCEPTION_RECORD* r = e->ExceptionRecord;
++    u8* at;
++    if (r->ExceptionCode != EXCEPTION_GUARD_PAGE || r->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
++    at = (u8*)r->ExceptionInformation[1];
++    if (!g_guard_base || at < g_guard_base || at >= g_guard_base + g_guard_size) return EXCEPTION_CONTINUE_SEARCH;
++    WARN("crash guard: the game %s its memory at %llx through a null pointer (host pc %p); it lands in a scratch page and "
++         "goes on\n",
++         r->ExceptionInformation[0] == 1 ? "wrote" : "read", (unsigned long long)(at - g_guard_base),
++         r->ExceptionAddress);
++    return EXCEPTION_CONTINUE_EXECUTION;
++}
++int plat_vm_null_guard(u8* p, u64 size) {
++    if (!VirtualAlloc(p, (SIZE_T)size, MEM_COMMIT, PAGE_READWRITE | PAGE_GUARD)) return -1;
++    g_guard_size = size;
++    __atomic_store_n(&g_guard_base, p, __ATOMIC_RELEASE);
++    return AddVectoredExceptionHandler(1, null_guard_note) ? 0 : -1;
++}
++
+ /* No alias pool yet: views of the same pages need the reservation made of placeholders (VirtualAlloc2 and
+    MapViewOfFile3, Windows 10 1803), and whether the write watch survives that is untested. mem.c copies instead */
+ int plat_alias_init(u64 size) {
 diff --git a/src/nx/runtime/platform/profiler_win32.c b/src/nx/runtime/platform/profiler_win32.c
 index ebfd9c67..dc8cc1fd 100644
 --- a/src/nx/runtime/platform/profiler_win32.c
@@ -28474,7 +28542,7 @@ index 0ccd9f1e..86423a46 100644
  const u32* ui_atlas(int* w, int* h, u32* version);
  void ui_atlas_done(void);
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181e..3237d326 100644
+index 2bd6181e..6b7091fb 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
 @@ -9,6 +9,7 @@
@@ -28485,7 +28553,7 @@ index 2bd6181e..3237d326 100644
  #include "nx/runtime/platform/plat.h"
  
  int g_frames;
-@@ -31,14 +32,152 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,14 +32,154 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -28561,17 +28629,19 @@ index 2bd6181e..3237d326 100644
 +           __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED);
 +}
 +
-+/* Pictures a second on the display, what Display FPS shows: the limit with PortForge FSR 3 off, twice the limit with
-+   it on. The game keeps its own pace (speed lock), so pictures above its real frames are its newest frame shown again
-+   (FSR 3 off), or one generated picture between each two real frames plus repeats of both (FSR 3 on). "game" and
-+   Unlimited name no number: the game's own frames, doubled with FSR 3. With vsync never more than the display
-+   refreshes. 0 while the game's pace isn't known (a self-timed game without a limit) */
++/* Pictures a second on the display, what Display FPS shows. A real limiter: every picture is a distinct one, the game's
++   frames (at most the limit) and, with FSR 3 frame generation, one generated picture between each two of them. No frame
++   is shown twice to make the number bigger (Engine 1.41 and earlier repeated held copies up to the limit, and twice the
++   limit with FSR 3; those repeats were what the GPU was doing when it was reset in a long Pokemon run). Frame generation
++   doubles the game's frames when the limit and, with vsync, the display's refresh leave room for twice them, else the
++   game's own frames are shown. 0 while the game's pace isn't known (a self-timed game without a limit) */
 +int present_display_target(int fps_limit, int frame_generation) {
-+    int side = present_game_side_fps(fps_limit), hz = __atomic_load_n(&g_display_hz, __ATOMIC_RELAXED), want;
++    int side = present_game_side_fps(fps_limit), hz = __atomic_load_n(&g_display_hz, __ATOMIC_RELAXED), want, cap;
 +    if (side <= 0) return 0;
-+    want = fps_limit > 0 ? fps_limit : side;
-+    if (frame_generation) want *= 2;
-+    if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && want > hz) want = hz > side ? hz : side;
++    cap = fps_limit > 0 ? fps_limit : 0;
++    if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && (!cap || hz < cap)) cap = hz;
++    want = frame_generation ? side * 2 : side;
++    if (cap && want > cap) want = side;
 +    return want;
 +}
 +
@@ -28642,7 +28712,7 @@ index 2bd6181e..3237d326 100644
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac55..347a71c1 100644
+index be57ac55..8d8212c6 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
 @@ -80,13 +80,148 @@ setting Game mods off
@@ -28816,7 +28886,24 @@ index be57ac55..347a71c1 100644
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -188,8 +335,46 @@ setting Pipeline threads
+@@ -174,6 +321,16 @@ setting Memory (GB)
+     startup
+     help The memory the game sees: below 6 the console's 3.2 GB, 6 = 4.8 GB, 8 = 6.8 GB. A game that runs out on
+     help the console's amount needs 6
++setting Crash guard
++    key null_guard
++    int 0 1
++    default 1
++    startup
++    words Off|On
++    help 1 = the game's lowest 64 KiB of memory, never mapped, are a zeroed scratch page instead of ending the game:
++    help a structure the game failed to get (a null pointer) reads as an empty one, which its own checks turn away,
++    help and writes to it land there. The first touch of each page is logged. 0 = any access there ends the game,
++    help as on the console.
+ setting Heap limit (MB)
+     key heap_max_mb
+     text 32
+@@ -188,8 +345,46 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -29954,7 +30041,7 @@ index 00000000..e6859b79
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45d..9ef731b8 100644
+index 53c5e45d..14483e80 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,8 @@
@@ -30062,7 +30149,7 @@ index 53c5e45d..9ef731b8 100644
  static void pacing(void) {
      const u64 refresh = 1000000000u / 60;
      u64 before;
-@@ -84,12 +168,158 @@ static void pacing(void) {
+@@ -84,12 +168,156 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -30114,35 +30201,33 @@ index 53c5e45d..9ef731b8 100644
 +    CHECK(present_period(120, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 120");
 +    CHECK(present_period(240, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 240");
 +    /* pacing() left the last swap interval at 1, so the game pace is already 60 Hz */
-+    /* Display FPS is the limit with FSR 3 off, above the game's own 60 too (its frames are shown again, the game
-+       keeps its speed), and twice the limit with FSR 3 on. Game speed and Unlimited are the game's own frames */
++    /* A real limiter: Display FPS is distinct pictures, the game's frames (never above the limit) and, with FSR 3 frame
++       generation, one generated picture between each two of them while the limit and the display leave room for
++       twice the game's frames. No frame is repeated to reach a number. Game speed and Unlimited are the game's own */
 +    g_settings.vsync = 1;
 +    CHECK(present_display_target(30, 0) == 30, "30 without FG is not 30 on screen");
 +    CHECK(present_display_target(60, 0) == 60, "60 without FG is not 60 on screen");
-+    CHECK(present_display_target(120, 0) == 120, "120 without FG is not 120 on screen");
-+    CHECK(present_display_target(144, 0) == 144, "144 without FG is not 144 on screen");
-+    CHECK(present_display_target(240, 0) == 240, "240 without FG is not 240 on screen");
++    CHECK(present_display_target(120, 0) == 60, "120 without FG repeated the game's 60 frames");
++    CHECK(present_display_target(240, 0) == 60, "240 without FG repeated the game's 60 frames");
 +    CHECK(present_display_target(0, 0) == 60, "unlimited without FG is not the game's 60");
 +    CHECK(present_display_target(SNX_FPS_GAME, 0) == 60, "game speed without FG is not the game's 60");
-+    CHECK(present_display_target(30, 1) == 60, "30 with FG is not 60 on screen");
-+    CHECK(present_display_target(60, 1) == 120, "60 with FG is not 120 on screen");
-+    CHECK(present_display_target(120, 1) == 240, "120 with FG is not 240 on screen");
-+    CHECK(present_display_target(144, 1) == 288, "144 with FG is not 288 on screen");
-+    CHECK(present_display_target(240, 1) == 480, "240 with FG is not 480 on screen (display rate unknown)");
++    CHECK(present_display_target(30, 1) == 30, "a 30 limit with FG went over 30");
++    CHECK(present_display_target(60, 1) == 60, "a 60 limit with FG went over 60");
++    CHECK(present_display_target(120, 1) == 120, "120 with FG is not the game's 60 doubled");
++    CHECK(present_display_target(240, 1) == 120, "240 with FG repeated pictures above the game's 60 doubled");
 +    CHECK(present_display_target(0, 1) == 120, "unlimited with FG is not the game's 60 doubled");
 +    CHECK(present_display_target(SNX_FPS_GAME, 1) == 120, "game speed with FG is not the game's 60 doubled");
 +    CHECK(present_expected_display_fps(144, 1) == present_display_target(144, 1), "Esc expects another rate");
-+    /* with vsync never more than the display refreshes, never fewer than the game's frames */
++    /* with vsync never more than the display refreshes */
 +    g_display_hz = 144;
-+    CHECK(present_display_target(120, 1) == 144, "a 144 Hz display was given 240 pictures a second");
-+    CHECK(present_display_target(240, 0) == 144, "a 144 Hz display was given 240 pictures a second without FG");
-+    CHECK(present_display_target(120, 0) == 120, "a 144 Hz display lost a 120 limit");
++    CHECK(present_display_target(120, 1) == 120, "a 144 Hz display lost FG at 120");
++    CHECK(present_display_target(240, 0) == 60, "a 144 Hz display was given repeats without FG");
 +    g_display_hz = 60;
 +    CHECK(present_display_target(60, 1) == 60, "a 60 Hz display got generated pictures it can't show");
-+    CHECK(present_display_target(30, 1) == 60, "a 60 Hz display can still show 30 doubled");
++    CHECK(present_display_target(0, 1) == 60, "a 60 Hz display got generated pictures it can't show, unlimited");
 +    g_settings.vsync = 0;
-+    CHECK(present_display_target(120, 0) == 120, "vsync off still capped at the display's 60");
-+    CHECK(present_display_target(120, 1) == 240, "vsync off still capped FG at the display's 60");
++    CHECK(present_display_target(120, 0) == 60, "vsync off repeated frames without FG");
++    CHECK(present_display_target(120, 1) == 120, "vsync off still capped FG at the display's 60");
 +    g_settings.vsync = 1;
 +    g_display_hz = 280;
 +    g_opt_fps = 120;
@@ -30163,8 +30248,8 @@ index 53c5e45d..9ef731b8 100644
 +          (unsigned long long)(slept_ns - before));
 +    /* a 30 FPS game (Zelda BotW) on a 280 Hz display: every limit the menu offers, FSR 3 off and on */
 +    {
-+        static const int want[][3] = {{SNX_FPS_GAME, 30, 60}, {0, 30, 60},     {30, 30, 60},   {60, 60, 120},
-+                                      {120, 120, 240},       {144, 144, 280}, {240, 240, 280}, {20, 20, 40}};
++        static const int want[][3] = {{SNX_FPS_GAME, 30, 60}, {0, 30, 60},     {30, 30, 30},   {60, 30, 60},
++                                      {120, 30, 60},         {144, 30, 60},   {240, 30, 60},   {20, 20, 20}};
 +        for (size_t w = 0; w < sizeof want / sizeof *want; w++) {
 +            CHECK(present_display_target(want[w][0], 0) == want[w][1], "a 30 FPS game, limit %d, FSR 3 off: %d, not %d",
 +                  want[w][0], present_display_target(want[w][0], 0), want[w][1]);
@@ -30176,7 +30261,7 @@ index 53c5e45d..9ef731b8 100644
 +    present_pace(1);
 +    g_opt_frame_generation = 0;
 +    CHECK(present_period(120, 1, 1) == refresh, "without FG a higher cap sped the game up");
-+    CHECK(present_expected_display_fps(120, 0) == 120, "without FG the display is not the limit");
++    CHECK(present_expected_display_fps(120, 0) == 60, "without FG the display repeated the game's frames");
 +    CHECK(present_expected_display_fps(30, 0) == 30, "without FG a lower cap is the display rate, not 60");
 +    g_opt_fps = 120;
 +    now_ns += 100 * refresh;
@@ -30222,7 +30307,7 @@ index 53c5e45d..9ef731b8 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -97,7 +327,9 @@ int main(void) {
+@@ -97,7 +325,9 @@ int main(void) {
      i32 crop[4] = {0, 0, 0, 0};
      clock_start();
      ticks();

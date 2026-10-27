@@ -33,8 +33,9 @@ internal static class FgCadenceTests
     {
         Check(text.Contains("if (lock && game) return game;"), where + ": speed lock keeps the game's pace with FSR 3 on or off");
         Check(!text.Contains("FSR Off locks pace"), where + ": no FSR-off pace at the limit (it sped games up)");
-        Check(text.Contains("want = fps_limit > 0 ? fps_limit : side;"), where + ": the screen shows the limit with FSR 3 off");
-        Check(text.Contains("if (frame_generation) want *= 2;"), where + ": twice the limit with FSR 3");
+        Check(text.Contains("want = frame_generation ? side * 2 : side;"), where + ": real limiter: the game's frames, doubled by FSR 3 frame generation");
+        Check(text.Contains("if (cap && want > cap) want = side;") && !text.Contains("if (frame_generation) want *= 2;"),
+            where + ": the limit caps distinct pictures and never repeats a frame to reach it");
         Check(!text.Contains("PRESENT_FG_MAX_PICTURES") && !text.Contains("present_fg_slots(int"),
             where + ": no 3x-10x generated pictures per real frame");
     }
@@ -55,7 +56,7 @@ internal static class FgCadenceTests
             Check(version.Length != 0 && p.Contains("#define PF_ENGINE_VERSION \"" + version + "\""),
                 "patch: Esc shows Engine " + (version.Length == 0 ? "(unknown)" : version));
             Check(p.Contains("vk_fg_interpolate_mids(vk_cmd(), dw, dh, &cur, mids, 1)"), "patch: one generated picture per real frame");
-            Check(p.Contains("vk_fg_hold("), "patch: FSR 3 off repeats a held copy of the real frame");
+            Check(p.Contains("int k = steady && fg && target >= 2 * side ? 2 : 1;"), "patch: at most one generated picture and the real frame, never a repeat");
             Check(p.Contains("FG_PROP"), "patch: frame generation propagates motion vectors");
         }
         /* the engine source, when it was set up on this PC (engine/src is not part of the repository) */
