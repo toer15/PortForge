@@ -47,14 +47,11 @@ internal static class FgCadenceTests
             where + ": the typed limit caps distinct pictures and never repeats a frame to reach it");
         Check(!text.Contains("PRESENT_FG_MAX_PICTURES") && !text.Contains("present_fg_slots(int"),
             where + ": the ceiling is four pictures a real frame (three generated), not the old 3x to 10x generation");
-        /* Engine 1.48: the limit drives the game itself through the engine, and the menu's top entry is a real one */
+        /* Engine 1.48: the limit drives the game itself through the engine */
         Check(text.Contains("if (lock && game) return game;") && text.Contains("if (!fps) return 0;"),
             where + ": with the lock off a number is the game's frame rate and Maximum (0) waits for nothing at all");
-        Check(text.Contains("CHECK(present_period(0, 2, 0) == 0") &&
-              text.Contains("CHECK(present_period(240, 1, 0) == 1000000000u / 240") &&
-              text.Contains("CHECK(present_display_target(120, 0) == 120") &&
-              text.Contains("CHECK(present_display_target(240, 0) == 240"),
-            where + ": the engine's own tests hold the unlocked limit to the game's 240 and Maximum to no wait");
+        Check(text.Contains("made = present_game_fps_now();") && text.Contains("if (made > 0) return fps_limit > 0 && fps_limit < made ? fps_limit : made;"),
+            where + ": the display follows the limit until the game's own measured rate is there to cap it");
     }
 
     private static int Main()
@@ -82,6 +79,13 @@ internal static class FgCadenceTests
             Check(p.Contains("CHECK(present_display_target(240, 1) == 240") && p.Contains("CHECK(present_display_target(144, 1) == 144") &&
                   p.Contains("CHECK(present_display_target(0, 1) == 240") && p.Contains("CHECK(present_display_target(0, 1) == 144"),
                 "patch: the engine's own tests hold 240 and 144 to the rate typed, and Unlimited to the most the pipeline can make");
+            /* the engine's own suite, not the built source: these rows are in tests/runtime_present.c */
+            Check(p.Contains("CHECK(present_period(0, 2, 0) == 0") &&
+                  p.Contains("CHECK(present_period(240, 1, 0) == 1000000000u / 240") &&
+                  p.Contains("CHECK(present_display_target(120, 0) == 120") &&
+                  p.Contains("CHECK(present_display_target(240, 0) == 240") &&
+                  p.Contains("int g_opt_speed_lock = 0; /* pacing() checks the limits unlocked, speed_lock() with the lock */"),
+                "patch: the engine's own tests hold the unlocked limit to the game's 240 and Maximum to no wait");
             Check(p.Contains("FG_PROP"), "patch: frame generation propagates motion vectors");
             Check(p.Contains("snprintf(word, sizeof word, \"Maximum\")") && p.Contains("\"Maximum\"") &&
                   !p.Contains("if (fps == 0) snprintf(word, sizeof word, \"Unlimited\")"),
