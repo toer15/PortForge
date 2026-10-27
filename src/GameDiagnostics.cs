@@ -115,6 +115,13 @@ namespace PortForge
                 h.Issues.Add(new GameIssue("occlusion","The renderer reported unreliable occlusion counts","This is an engine-level graphics limitation and may affect visibility in the world. Configuration changes cannot prove it fixed. Preserve this report for a backend code fix."));
             if(Regex.IsMatch(h.Log,@"(?i)unsupported (?:shader|opcode)|shader[^\r\n]*(?:translation failed|failed to translate)|[1-9]\d* draws[^\r\n]*[1-9]\d* skipped|draws, [1-9]\d* skipped|batches[^\r\n]*[1-9]\d* skipped"))
                 h.Issues.Add(new GameIssue("renderer_failure","Unsupported or skipped rendering was reported","Some rendering operations failed or were skipped. A supported engine/code fix is needed; the app will not mark this resolved by hiding the message."));
+            /* GPU reset while pictures were shown between the game's frames (frame generation, or repeats up to an FPS limit
+               above the game's pace). In tests the same game at its own pace ran without a reset, so the repair keeps
+               this game's display to its own frames (paced_display=0, a per-game key the global settings don't change). */
+            var pace=Regex.Matches(h.Log,@"Display FPS \d+, target (\d+) \(fps_limit [^,]+, game (\d+)").Cast<Match>().LastOrDefault();
+            bool pacedRun=pace!=null&&Int32.Parse(pace.Groups[1].Value,CultureInfo.InvariantCulture)>Int32.Parse(pace.Groups[2].Value,CultureInfo.InvariantCulture);
+            if(Regex.IsMatch(h.Log,@"GPU device was lost")&&pacedRun&&get("paced_display","1")!="0")
+                h.Issues.Add(new GameIssue("gpu_reset_paced","The GPU reset while extra frames were shown","The session ended with a GPU device loss while frame generation or an FPS limit above the game's pace added pictures between its frames. The repair shows only this game's own frames (paced_display=0). Other games keep frame generation and their FPS limit.",cap!=null&&cap.Keys.Contains("paced_display")?"safe_pacing":null));
             /* Guest heap OOM: engine logs "null pointer plus an offset" / memory_gb=6 hint with FATAL invalid-memory-access.
                BOTW with FSR 3 can fill the default ~3.2 GB heap on Continue/load; raising memory_gb is the supported repair. */
             bool guestOom=Regex.IsMatch(h.Log,@"(?i)null pointer plus an offset|memory_gb=6 in its \.ini may help|a game short of memory");
@@ -159,6 +166,7 @@ namespace PortForge
             if(allowed.Contains("reduce_upscale")&&cap!=null&&cap.Keys.Contains("resolution"))changes["resolution"]="1";
             if(allowed.Contains("speed_lock")&&cap!=null&&cap.Keys.Contains("speed_lock"))changes["speed_lock"]="1";
             if(allowed.Contains("raise_memory"))changes["memory_gb"]="6";
+            if(allowed.Contains("safe_pacing")&&cap!=null&&cap.Keys.Contains("paced_display"))changes["paced_display"]="0";
             if(allowed.Contains("speed_pipelines")&&cap!=null&&cap.Keys.Contains("pipeline_threads")&&Environment.ProcessorCount>=6)
             {
                 int want=HardwareProfile.PipelineThreadsFor(Environment.ProcessorCount),now;string iniText=File.Exists(GameOptimization.ConfigPath(exe))?File.ReadAllText(GameOptimization.ConfigPath(exe)):"";

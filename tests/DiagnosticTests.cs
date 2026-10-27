@@ -47,6 +47,16 @@ internal static class DiagnosticTests
             var oomValues=GameOptimization.ReadValues(File.ReadAllText(Path.ChangeExtension(exe,".ini")));
             Check(oomValues["memory_gb"]=="6"&&oomValues["fps_limit"]=="120","The doctor raises memory_gb to 6 and keeps the player's FPS cap");
             Check(!GameDiagnostics.Inspect("memory_gb=6\r\n",oomLog,oomCap).Issues.Any(i=>i.Fix=="raise_memory"),"memory_gb=6 already applied is not offered again");
+            string resetLog="[  31.42] vulkan: Display FPS 226, target 240 (fps_limit 120, game 30, FSR 3 on)\n[  37.66] FATAL: vulkan: the GPU device was lost (driver reset or crash)\n";
+            var pacingCap=new RuntimeCapabilities();pacingCap.Keys.UnionWith(cap.Keys);pacingCap.Keys.Add("paced_display");
+            Check(GameDiagnostics.Inspect("fps_limit=120\r\n",resetLog,pacingCap).Issues.Any(i=>i.Id=="gpu_reset_paced"&&i.Fix=="safe_pacing"),"A GPU reset during paced presentation offers paced_display=0");
+            Check(!GameDiagnostics.Inspect("paced_display=0\r\n",resetLog,pacingCap).Issues.Any(i=>i.Fix=="safe_pacing")&&
+                  !GameDiagnostics.Inspect("",resetLog.Replace("target 240","target 30"),pacingCap).Issues.Any(i=>i.Id=="gpu_reset_paced"),"A GPU reset at the game's own pace, or after the repair, is not offered paced_display=0");
+            File.WriteAllText(Path.ChangeExtension(exe,".ini"),"fps_limit=120\r\n",new UTF8Encoding(false));
+            File.WriteAllText(Path.ChangeExtension(exe,".log"),resetLog,new UTF8Encoding(false));
+            GameDiagnostics.Repair(exe,pacingCap,null,new[]{"safe_pacing"});
+            var pacingValues=GameOptimization.ReadValues(File.ReadAllText(Path.ChangeExtension(exe,".ini")));
+            Check(pacingValues["paced_display"]=="0"&&pacingValues["fps_limit"]=="120","The doctor sets paced_display=0 and keeps the player's FPS cap");
             File.WriteAllText(Path.ChangeExtension(exe,".ini"),ini,new UTF8Encoding(false));
             File.WriteAllText(Path.ChangeExtension(exe,".log"),log,new UTF8Encoding(false));
             var profile=new GraphicsProfile {FpsLimit="144",Resolution=1,VSync=false,Anisotropy=8};GameOptimization.SaveAndVerify(exe,profile,cap);

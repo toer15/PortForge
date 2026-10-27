@@ -35,7 +35,7 @@ namespace PortForge
             AddChoice(layout, "Resolution", resolution);
             layout.Controls.Add(resolutionNote);
             layout.Controls.Add(trueRes);
-            AddText(layout, "Engine 1.41 scales screen-shaped render targets toward the selected 16:9 output, relative to the typical 1080p TV or 720p handheld image. Data-shaped targets stay native. Dynamic-resolution games may differ, so this is not a per-game guarantee of exact internal pixels. Scaling up costs GPU; scaling down loses detail but can reduce GPU work. Turn this off if a game shows artifacts.", 10);
+            AddText(layout, "Engine 1.42 renders screen-shaped render targets at the selected 16:9 output. It records each game's own output height (many games draw 900 lines in TV mode) during its first run, including the warm-up after an engine install, and scales from that height from the next start. Data-shaped targets stay native. Dynamic-resolution games may differ, so this is not a per-game guarantee of exact internal pixels. Scaling up costs GPU; scaling down loses detail but can reduce GPU work. Turn this off if a game shows artifacts.", 10);
             AddChoice(layout, "Upscaling", upscale);
             upscaleNote.Text = "PortForge FSR 3 = AMD FSR 1 upscaling plus PortForge's own frame generation (built from scratch from FSR 3 / AFMF ideas, not the AMD FidelityFX SDK). With it on the screen shows twice the FPS limit: one generated picture between each two real frames, the rest repeats (Zelda BotW at 30 FPS with a 60 limit shows 120). It never speeds the game up. Turn it on or off in game from Esc.";
             layout.Controls.Add(upscaleNote);

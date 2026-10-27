@@ -96,7 +96,7 @@ namespace PortForge
             if (!Int32.TryParse(DisplayResolution, NumberStyles.Integer, CultureInfo.InvariantCulture, out height)) return "Auto keeps the game's own resolution and window.";
             int own = Graphics.Docked ? 1080 : 720;
             if (TrueResolution)
-                return "Screen-shaped targets aim for " + (height * 16 / 9) + "x" + height + " (" + ((double)height / own).ToString("0.##", CultureInfo.InvariantCulture) + "x the typical " + own + "p " + (Graphics.Docked ? "TV" : "handheld") + " output). Dynamic-resolution games and data-shaped targets may differ.";
+                return "Screen-shaped targets render at " + (height * 16 / 9) + "x" + height + ". The engine learns each game's own output height in its first run (many games draw 900 lines, not " + own + ") and scales from that from the next start. Dynamic-resolution games and data-shaped targets may differ.";
             return "The game keeps its typical " + own + "p " + (Graphics.Docked ? "TV" : "handheld") + " targets; the " + height + "p display scales the finished image.";
         }
 
