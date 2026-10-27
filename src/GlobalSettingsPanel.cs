@@ -17,9 +17,9 @@ namespace PortForge
         private readonly ComboBox resolution = Choice("Resolution", "Auto (game chooses)", "720p", "1080p", "1440p", "4K (2160p)"),
             upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "AMD FSR 3 frame generation (FSR 1 + FidelityFX frame interpolation)"),
             mode = Choice("Rendering mode", "TV - game chooses its layout", "Handheld - lighter rendering where supported"),
-            fps = Choice("Frame limit", "Game speed (recommended)", "30", "60", "120", "144", "240", "Unlimited");
+            fps = Choice("Frame limit", "Game speed (recommended)", "30", "60", "120", "144", "240", "Maximum (this PC's speed)");
         private readonly Label status = new Label { AutoSize = true, ForeColor = Color.FromArgb(105,226,183), AccessibleName = "Global settings status", Text = "READY - Settings apply on the next game launch." };
-        private readonly Label fpsNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 8) };
+        private readonly Label fpsNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 8), AccessibleName = "Frame limit note" };
         private readonly Label upscaleNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 12) };
         private readonly Label resolutionNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 8), ForeColor = Color.FromArgb(105,226,183) };
         private GlobalSettings current;
@@ -31,14 +31,14 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Games always run at their own speed. The FPS limit is a real limiter: it caps the pictures that reach the screen and never repeats a frame to reach a number. FSR 3 frame generation adds AMD-generated pictures between each two game frames when the limit leaves room for twice the game's frames, and up to three a frame (four times the game's frames, so 240 in a 60 FPS game) when you type a limit above twice them or choose Unlimited, which asks for as many pictures as the engine can make (the game's own frames with FSR 3 off). In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. The FPS limit is the game's own frame rate: a number caps how fast the game runs (as a PC game's FPS cap does), Maximum lets the game run as fast as this PC can render it, and Game speed keeps the console's own 30 or 60 and lets AMD FSR 3 frame generation smooth it instead. No frame is ever repeated to reach a number. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             layout.Controls.Add(resolutionNote);
             layout.Controls.Add(trueRes);
             AddText(layout, "Engine 1.42 renders screen-shaped render targets at the selected 16:9 output. It records each game's own output height (many games draw 900 lines in TV mode) during its first run, including the warm-up after an engine install, and scales from that height from the next start. Data-shaped targets stay native. Dynamic-resolution games may differ, so this is not a per-game guarantee of exact internal pixels. Scaling up costs GPU; scaling down loses detail but can reduce GPU work. Turn this off if a game shows artifacts.", 10);
             AddChoice(layout, "Upscaling", upscale);
-            upscaleNote.Text = "AMD FSR 3 frame generation = AMD FSR 1 upscaling plus the frame interpolation AMD publishes in the FidelityFX SDK 1.1.4 (its optical flow and frame interpolation shaders, MIT). Switch games give the PC no motion vectors or depth, so AMD's optical flow finds the motion and depth is flat. FSR 3's temporal upscaler needs those game motion vectors and cannot run on Switch games, so FSR 1 does the upscaling. One generated picture sits between each two real frames (a 30 FPS game shows 60), and a 240 limit or Unlimited in a 60 FPS game uses three a frame. It never speeds the game up. Turn it on or off in game from Esc.";
+            upscaleNote.Text = "AMD FSR 3 frame generation = AMD FSR 1 upscaling plus the frame interpolation AMD publishes in the FidelityFX SDK 1.1.4 (its optical flow and frame interpolation shaders, MIT). Switch games give the PC no motion vectors or depth, so AMD's optical flow finds the motion and depth is flat. FSR 3's temporal upscaler needs those game motion vectors and cannot run on Switch games, so FSR 1 does the upscaling. One generated picture sits between each two real frames (a 30 FPS game shows 60), and up to three a frame where the limit leaves room for them. With Game speed it never speeds the game up; with a limit or Maximum the limit is the game's own frame rate, so its world runs faster than the console whenever that is above the console's pace. Turn it on or off in game from Esc.";
             layout.Controls.Add(upscaleNote);
             layout.Controls.Add(amdFg);
             AddChoice(layout, "Rendering mode", mode);
@@ -103,19 +103,11 @@ namespace PortForge
             trueRes.Checked=s.TrueResolution; lowLatency.Checked=s.LowLatency; amdFg.Checked=s.AmdFrameGeneration;
             RefreshNotes();
         }
-        /* pictures a second on screen for a game running at its own pace g (Engine 1.47's present_display_target,
-           ignoring the monitor's refresh), a real limiter: the game's frames at most the limit, with FSR 3 twice
-           them, and as many as the pipeline can make - four times them - for a limit typed above twice the game's
-           pace and for Unlimited (240 on a 60 FPS game, the engine's PRESENT_FG_MAX_MIDS). Game speed asks for no
-           number above the game's pace, so it stays at twice */
-        private static int OnScreen(int g, int limit, bool fsr3, bool unlimited)
-        {
-            int shown = limit > 0 && limit < g ? limit : g;
-            if (!fsr3) return shown;
-            int want = 2 * shown;
-            if (unlimited || (limit > 0 && limit > want)) want = 4 * shown;
-            return limit <= 0 || want <= limit ? want : Math.Max(limit, shown);
-        }
+        /* What each choice does, in the engine's own rules (Engine 1.48). Game speed (SNX_FPS_GAME) waits at the
+           console's pace and the screen gets its frames, doubled by frame generation. A number is the game's own
+           frame rate (present_period waits 1/limit), with FSR 3 filling pictures up to it when the game cannot
+           reach it. Maximum (0) is no wait at all: the game runs as fast as this PC renders it and the screen gets
+           those frames, doubled by frame generation. The monitor's refresh caps the pictures under VSync. */
         private void RefreshNotes()
         {
             var preview = new GlobalSettings { DisplayResolution = ResolutionKey(resolution.SelectedIndex), TrueResolution = trueRes.Checked };
@@ -125,16 +117,21 @@ namespace PortForge
             string limit = FpsKey();
             int n;
             if (!Int32.TryParse(limit, NumberStyles.None, CultureInfo.InvariantCulture, out n)) n = -1;
-            if (limit != "game" && limit != "0" && (n < 10 || n > 1000)) { fpsNote.Text = "Type a whole number from 10 to 1000, or pick Game speed or Unlimited."; return; }
-            string name = limit == "game" ? "Game speed" : limit == "0" ? "Unlimited" : "A limit of " + n;
-            bool unlimited = limit == "0";
-            if (n < 0) n = 0;
-            fpsNote.Text = name + (fsr3 ? " with AMD FSR 3 frame generation" : "") + " shows " + OnScreen(30, n, fsr3, unlimited) +
-                " FPS in a 30 FPS game (like Zelda BotW) and " + OnScreen(60, n, fsr3, unlimited) + " FPS in a 60 FPS game, never more than your monitor refreshes with VSync on. " +
-                (fsr3 ? "FSR 3 adds AMD-generated pictures between real frames up to the limit you set: twice the game's frames, and three a frame (four times them) when the limit is above twice them or Unlimited is chosen, so 240 on a 60 FPS game is 240 on a 240 Hz or faster monitor. No frame is shown twice. The game keeps its own speed."
-                      : "Without frame generation the screen shows the game's own frames, at most the limit. Unlimited adds nothing on top of them: a picture the game never drew cannot be shown. A limit above the game's pace does not repeat frames, and the game keeps its own speed.");
+            if (limit != "game" && limit != "0" && (n < 10 || n > 1000)) { fpsNote.Text = "Type a whole number from 10 to 1000, or pick Game speed or Maximum."; return; }
+            if (limit == "game")
+                fpsNote.Text = "Game speed keeps the game's own console timing: a 30 FPS game (like Zelda BotW) stays at 30 and a 60 FPS game at 60, with its physics, timers and music untouched. " +
+                    (fsr3 ? "AMD FSR 3 frame generation plays those frames twice, so the screen gets 60 pictures a second in a 30 FPS game and 120 in a 60 FPS game, never more than your monitor refreshes with VSync on. No frame is shown twice."
+                          : "The screen shows the game's own frames.");
+            else if (limit == "0")
+                fpsNote.Text = "Maximum runs the game itself as fast as this PC can render it, over the console's own 30 or 60, so its physics, timers and music follow its frames and the world runs faster than real time. Esc shows the rate it reaches; pick a number to cap it. " +
+                    (fsr3 ? "AMD FSR 3 frame generation doubles the pictures the game makes, up to your monitor's refresh."
+                          : "The screen shows every frame the game makes.");
+            else
+                fpsNote.Text = "A limit of " + n + " is the game's own frame rate, as a PC game's FPS cap is: it runs at up to " + n + " FPS (or its console 30 or 60 if that is lower), and its physics, timers and music follow its frames, so a game made for 30 runs faster than the console whenever the limit is above 30. Esc shows the rate it reaches. " +
+                    (fsr3 ? "If the game cannot reach the limit, AMD FSR 3 fills the gap with pictures generated between real frames, up to the limit and never above your monitor's refresh. No frame is shown twice."
+                          : "The screen shows the frames the game itself makes.");
         }
-        /* the limit as the settings file keeps it: game, 0 for Unlimited, or the number typed or picked */
+        /* the limit as the settings file keeps it: game, 0 for Maximum (no cap on the game), or the number typed or picked */
         private string FpsKey()
         {
             int at = fps.FindStringExact(fps.Text);

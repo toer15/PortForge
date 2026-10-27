@@ -53,6 +53,16 @@ internal static class OptimizationTests
                 "Disabling global settings is saved atomically with a backup");
             Check(File.ReadAllText(globalPath).Contains("render_scale_safety=1") && File.ReadAllText(globalPath).Contains("pipeline_threads=0"),
                 "Global settings preserve rendering safety and automatic core-based worker selection");
+            Check(File.ReadAllText(globalPath).Contains("fps_limit=144") && File.ReadAllText(globalPath).Contains("speed_lock=0"),
+                "Engine 1.48: a 144 limit is the game's own frame rate, saved with the speed lock off");
+            var gameSpeedGlobal = new GlobalSettings(); gameSpeedGlobal.Graphics.FpsLimit="game";
+            string gameSpeedPath=Path.Combine(root,"global-game-speed.ini"); gameSpeedGlobal.Save(gameSpeedPath);
+            Check(File.ReadAllText(gameSpeedPath).Contains("speed_lock=1"),
+                "Game speed keeps the console pace: the speed lock is saved on");
+            var maximumGlobal = new GlobalSettings(); maximumGlobal.Graphics.FpsLimit="0";
+            string maximumPath=Path.Combine(root,"global-maximum.ini"); maximumGlobal.Save(maximumPath);
+            Check(File.ReadAllText(maximumPath).Contains("fps_limit=0") && File.ReadAllText(maximumPath).Contains("speed_lock=0"),
+                "Maximum is saved as no limit on the game, without the speed lock, so the engine runs it flat out");
             global.Graphics.FpsLimit="invalid";
             Fails(()=>global.Save(globalPath),"Invalid global settings cannot overwrite the saved file");
             string exe = Path.Combine(root, "Tuning game.exe"), config = Path.ChangeExtension(exe, ".ini");
@@ -164,7 +174,9 @@ internal static class OptimizationTests
             Check(!guardedPlan.ContainsKey("speed_lock"),"Engines without a speed lock are not given the setting");
             var lockedCap=new RuntimeCapabilities();lockedCap.Keys.UnionWith(guarded.Keys);lockedCap.Keys.Add("speed_lock");
             var lockedPlan=PcOptimization.SettingsFor(strong,picked,lockedCap);
-            Check(lockedPlan["speed_lock"]=="1"&&lockedPlan["fps_limit"]=="120","PC matching keeps every game at its own speed while preserving the player's FPS cap");
+            Check(lockedPlan["speed_lock"]=="0"&&lockedPlan["fps_limit"]=="120","A 120 limit matches with the speed lock off: the limit is the game's own frame rate");
+            Check(PcOptimization.SettingsFor(strong,new GraphicsProfile{FpsLimit="game"},lockedCap)["speed_lock"]=="1","Game speed matches with the console pace locked");
+            Check(PcOptimization.SettingsFor(strong,new GraphicsProfile{FpsLimit="0"},lockedCap)["speed_lock"]=="0","Maximum matches without the lock, so the game runs as fast as this PC renders it");
             var steady=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=1,WorstFrameMs=70,Profile=new GraphicsProfile{Resolution=.75m}};
             var hitching=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=12,WorstFrameMs=500,Profile=new GraphicsProfile{Resolution=1m}};
             Check(GameOptimization.SelectSmooth(new[]{steady,hitching},60,1)==steady,"Automatic matching chooses fewer freezes when average FPS is equal");

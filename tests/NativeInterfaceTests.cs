@@ -57,23 +57,28 @@ internal static class NativeInterfaceTests
                     "Startup detects and shows this PC's CPU, graphics and RAM with matching and measurement enabled");
                 Check(controls.OfType<GlobalSettingsPanel>().Any(), "Graphics and FPS settings are directly accessible from the main screen (the Settings tab)");
                 Check(controls.OfType<TabControl>().Any(t=>t.TabPages.Cast<TabPage>().Any(p=>p.Text=="Settings")), "Global settings have a tab without requiring a game executable");
-                /* the Settings tab's own prediction of the pictures a second (Engine 1.47's present_display_target) */
+                /* the Settings tab's own account of what each limit does (Engine 1.48: the limit is the game's frame rate) */
                 var settingsPanel = controls.OfType<GlobalSettingsPanel>().Single();
                 var settingsPanelControls = All(settingsPanel).ToList();
                 var frameLimit = settingsPanelControls.OfType<ComboBox>().Single(c => c.AccessibleName == "Frame limit");
                 var upscaling = settingsPanelControls.OfType<ComboBox>().Single(c => c.AccessibleName == "Upscaling");
                 int wasUpscaling = upscaling.SelectedIndex, wasLimit = frameLimit.SelectedIndex;
-                Func<string> limitNote = () => settingsPanelControls.OfType<Label>().Select(l => l.Text).Single(t => t.Contains("FPS in a 30 FPS game"));
+                Func<string> limitNote = () => settingsPanelControls.OfType<Label>().Single(l => l.AccessibleName == "Frame limit note").Text;
+                Check(frameLimit.Items.Cast<object>().Select(o => o.ToString()).Last() == "Maximum (this PC's speed)",
+                    "The top of the list is Maximum: the game's own fastest rate, not a display trick");
                 upscaling.SelectedIndex = 2; /* AMD FSR 3 frame generation */
-                frameLimit.SelectedIndex = 6; /* Unlimited */
-                Check(limitNote().StartsWith("Unlimited with AMD FSR 3 frame generation shows 120 FPS in a 30 FPS game (like Zelda BotW) and 240 FPS in a 60 FPS game"),
-                    "Unlimited with FSR 3 asks for the most the engine can make: 240 in a 60 FPS game, not twice the game's frames");
+                frameLimit.SelectedIndex = 6; /* Maximum */
+                Check(limitNote().StartsWith("Maximum runs the game itself as fast as this PC can render it") && limitNote().Contains("AMD FSR 3 frame generation doubles the pictures the game makes"),
+                    "Maximum tells the player the game itself runs flat out, and that FSR 3 doubles those frames");
                 frameLimit.SelectedIndex = 0; /* Game speed */
-                Check(limitNote().StartsWith("Game speed with AMD FSR 3 frame generation shows 60 FPS in a 30 FPS game (like Zelda BotW) and 120 FPS in a 60 FPS game"),
-                    "Game speed with FSR 3 stays at the game's own frames, doubled (120 in a 60 FPS game)");
+                Check(limitNote().StartsWith("Game speed keeps the game's own console timing") && limitNote().Contains("plays those frames twice"),
+                    "Game speed keeps the console's 30 or 60 and lets FSR 3 play those frames twice");
                 frameLimit.SelectedIndex = 5; /* 240 */
-                Check(limitNote().StartsWith("A limit of 240 with AMD FSR 3 frame generation shows 120 FPS in a 30 FPS game (like Zelda BotW) and 240 FPS in a 60 FPS game"),
-                    "A typed 240 with FSR 3 is 240 in a 60 FPS game and 120 in a 30 FPS game (four a real frame at most)");
+                Check(limitNote().StartsWith("A limit of 240 is the game's own frame rate") && limitNote().Contains("its physics, timers and music follow its frames"),
+                    "A typed limit is the game's own frame rate, as a PC game's cap is, not a display-only cap");
+                frameLimit.SelectedIndex = 1; /* 30 */
+                Check(limitNote().StartsWith("A limit of 30 is the game's own frame rate"),
+                    "Even a limit below the console pace is the game's own rate in the new model");
                 frameLimit.SelectedIndex = wasLimit; upscaling.SelectedIndex = wasUpscaling;
                 Check(controls.OfType<Button>().Any(b => b.Text == "Downloads"), "Downloads are directly accessible from the main screen");
                 var boxes = controls.OfType<TextBox>().ToDictionary(box => box.AccessibleName);

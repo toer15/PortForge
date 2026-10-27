@@ -104,13 +104,27 @@ namespace PortForge
             return "The game keeps its typical " + own + "p " + (Graphics.Docked ? "TV" : "handheld") + " targets; the " + height + "p display scales the finished image.";
         }
 
-        /// <summary>FPS limit and FSR 3 change pictures on screen. The game keeps its own pace.</summary>
+        /// <summary>Engine 1.48: 1 while the game waits its own swap interval (Game speed: the limit and FSR 3 change
+        /// the pictures only), 0 when the FPS limit is the game's own frame rate - a number caps it, Maximum (0) runs
+        /// it as fast as the PC can render it. Written for the engine, which reads it at launch.</summary>
+        public static string SpeedLockFor(string fpsLimit)
+        {
+            return fpsLimit == "game" ? "1" : "0";
+        }
+
+        /// <summary>The FPS limit's own effect on this game, for the Settings tab and the game tools.</summary>
         public string EffectiveDisplayFpsNote()
         {
+            if (Graphics.FpsLimit == "game")
+                return "Game speed keeps the console's own timing: 30 FPS in a 30 FPS game, 60 in a 60 FPS game. " +
+                    (FrameGeneration ? "AMD FSR 3 frame generation plays those frames twice (60 and 120 pictures a second)." : "The limit and frame generation change nothing.");
+            if (Graphics.FpsLimit == "0")
+                return "Maximum runs the game itself as fast as this PC can render it, usually far above the console's 30 or 60. Esc shows the rate it reaches.";
             int fps;
-            if (!FrameGeneration || !Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps <= 0)
-                return "";
-            return "Limit " + fps + " caps the pictures on screen. FSR 3 frame generation adds AMD-generated pictures between game frames up to " + fps + " (twice the game's frames, or up to four times them when the limit is above twice them, and your monitor's refresh with VSync at most). No frame is repeated. The game keeps its own speed.";
+            if (!Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps < 10) return "";
+            return "Limit " + fps + " is the game's own frame rate: it runs at up to " + fps + " FPS, as a PC game does at its cap. " +
+                "A 30 FPS game at 120 runs four times its console speed, its physics and timers following its frames. " +
+                (FrameGeneration ? "AMD FSR 3 frame generation fills the frames the game cannot reach, up to the limit." : "Every frame the game makes is shown.");
         }
 
         public void Save(string path)
@@ -135,7 +149,7 @@ namespace PortForge
             v["frame_generation"] = FrameGeneration ? "1" : "0";
             v["amd_frame_generation"] = AmdFrameGeneration ? "1" : "0";
             v["portforge_fsr3"] = UpscaleMode == 2 ? "1" : "0";
-            v["speed_lock"] = "1";
+            v["speed_lock"] = SpeedLockFor(Graphics.FpsLimit);
             v["pipeline_threads"] = "0";
             var text = new StringBuilder("; PortForge settings for every game. Applied at the next launch.\r\n[PortForge]\r\n");
             foreach (var pair in v) text.Append(pair.Key).Append('=').Append(pair.Value).Append("\r\n");

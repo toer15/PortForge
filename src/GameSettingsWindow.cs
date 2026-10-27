@@ -14,7 +14,7 @@ namespace PortForge
         protected override CreateParams CreateParams { get { return SmoothPaint.Composited(base.CreateParams); } }
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183), Muted = Color.FromArgb(173, 185, 203);
         private readonly TextBox game = new TextBox { AccessibleName = "Windows game executable", Dock = DockStyle.Fill };
-        private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (recommended)", "Custom limit", "Unlimited"), filtering = Filtering();
+        private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (recommended)", "Custom limit", "Maximum"), filtering = Filtering();
         private readonly ComboBox upscaler = Choice("Upscaler", "Linear", "AMD FSR 1 (automatic)");
         private readonly ComboBox pixelSmoothing = Choice("Pixel smoothing", "Off", "On - smooth jagged edges");
         private readonly Label upscaleActivity = Label("FSR: no game session checked yet.", 9, Muted);
@@ -130,7 +130,7 @@ namespace PortForge
             {int cap=value;var button=Button(value+" FPS",false);button.AutoSize=true;button.Height=30;button.Click+=delegate{fpsMode.SelectedIndex=1;fps.Value=cap;vsync.Checked=false;Changed();};framePresets.Controls.Add(button);}
             options.Controls.Add(framePresets);options.Controls.Add(limiter);
             AddHint("Click an FPS button to set a custom cap and turn VSync off. Play game saves and verifies these settings automatically. Game speed uses the game's own timing; the hidden custom number is not active in that mode.");
-            AddHint("Speed lock: with PortForge Engine 1.6 or newer, a game always runs at its own speed, whatever the cap. A higher cap can't speed up a 30 or 60 FPS game, and a lower cap shows fewer frames instead of slowing the game down. Your PC's power goes into sharper graphics instead. VSync may also limit FPS to your display's refresh rate.");
+            AddHint("Engine 1.48 or newer: the FPS limit is the game's own frame rate, as a PC game's cap is, so a 30 FPS game at 120 runs four times its console speed (its physics, timers and music follow its frames) and Maximum runs it as fast as this PC can render it. Game speed keeps the console's own 30 or 60 with the speed lock and lets AMD FSR 3 frame generation smooth it instead. VSync caps the pictures at your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
             AddOption("Upscaler", upscaler, delegate { upscaler.SelectedIndex = 1; });
             AddOption("Pixel smoothing", pixelSmoothing, delegate { pixelSmoothing.SelectedIndex = 0; });
@@ -266,7 +266,7 @@ namespace PortForge
         private void UpdateLimiter()
         {
             if(loadedGame==null){limiter.Text="Load a game to check and change its FPS limit.";return;}
-            string value=fpsMode.SelectedIndex==0?"GAME SPEED (game's own timing)":fpsMode.SelectedIndex==2?"UNLIMITED":fps.Value.ToString("0")+" FPS maximum";
+            string value=fpsMode.SelectedIndex==0?"GAME SPEED (game's own timing)":fpsMode.SelectedIndex==2?"MAXIMUM (this PC's speed)":fps.Value.ToString("0")+" FPS cap on the game itself";
             limiter.Text=(dirty?"Selected limit: ":"Saved limit: ")+value+"; VSync "+(vsync.Checked?"on":"off")+". "+(dirty?"Play saves this automatically.":"Verified settings are used on next start.");
             limiter.MaximumSize=new Size(Math.Max(200,options.ClientSize.Width-24),0);
         }

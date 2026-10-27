@@ -33,10 +33,10 @@ internal static class DiagnosticTests
             Check(GameDiagnostics.Scan(exe,cap,null).Issues.Any(i=>i.Id=="occlusion"&&i.Fix==null),"Changing settings does not falsely clear recorded engine-level problems");
             GameDiagnostics.RestoreLastRepair(exe);Check(File.ReadAllText(Path.ChangeExtension(exe,".ini"))==ini,"Undo restores the exact pre-repair settings");
             var locked=new RuntimeCapabilities();locked.Keys.UnionWith(cap.Keys);locked.Keys.Add("speed_lock");
-            Check(GameDiagnostics.Inspect("fps_limit=120\r\nspeed_lock=0\r\n","",locked).Issues.Any(i=>i.Id=="speed_lock_off"&&i.Fix=="speed_lock")&&!GameDiagnostics.Inspect("fps_limit=120\r\n","",locked).Issues.Any(i=>i.Id=="timing"||i.Id=="speed_lock_off"),"A disabled speed lock is detected as repairable, and a high cap under the lock is not reported as a speed risk");
-            File.WriteAllText(Path.ChangeExtension(exe,".ini"),"fps_limit=240\r\nspeed_lock=0\r\n",new UTF8Encoding(false));GameDiagnostics.Repair(exe,locked,null,new[]{"speed_lock"});
-            var lockValues=GameOptimization.ReadValues(File.ReadAllText(Path.ChangeExtension(exe,".ini")));
-            Check(lockValues["speed_lock"]=="1"&&lockValues["fps_limit"]=="240","The doctor turns the speed lock back on and keeps the player's FPS cap");
+            Check(!GameDiagnostics.Inspect("fps_limit=120\r\nspeed_lock=0\r\n","",locked).Issues.Any(i=>i.Id=="speed_lock_off"||i.Id=="timing"),
+                "Engine 1.48: a number limit with the speed lock off is the player's choice (the game runs at the limit), not a fault");
+            Check(GameDiagnostics.Inspect("fps_limit=120\r\n","",cap).Issues.Any(i=>i.Id=="timing"),
+                "An engine without a speed lock still warns that custom frame timing can change game speed");
             string oomLog="*** Crash (exception 0xc0000005) at host pc=1, access to 2 (game address 30) ***\n  invalid memory access\n  a null pointer plus an offset: a game short of memory does this, memory_gb=6 in its .ini may help\n  memory: heap 3110 MiB, physical 0 MiB, code 51 MiB, 3162 of 3285 MiB used\nFATAL: The game crashed (invalid memory access). See the .log for details.\n";
             var oomCap=new RuntimeCapabilities();oomCap.Keys.UnionWith(cap.Keys);oomCap.Keys.Add("memory_gb");
             var oomHealth=GameDiagnostics.Inspect("memory_gb=0\r\nfps_limit=120\r\n",oomLog,oomCap);

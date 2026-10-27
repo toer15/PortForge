@@ -29,6 +29,7 @@ namespace PortForge
                 if (pc.Tier == PcTier.Entry) { settings["docked"] = "0"; settings["upscaler"] = "1"; }
             }
             if (!cap.Keys.Contains("upscaler")) settings.Remove("upscaler");
+            if (!cap.Keys.Contains("speed_lock")) settings.Remove("speed_lock");
             if (!cap.Keys.Contains("pixel_smoothing")) settings.Remove("pixel_smoothing");
             if (pc.LogicalCpus > 0)
             {
@@ -37,8 +38,8 @@ namespace PortForge
                 if (cap.Keys.Contains("jit_threads")) settings["jit_threads"] = nativeAuto?"0":Math.Max(1, Math.Min(4, (pc.LogicalCpus - 2) / 4)).ToString(CultureInfo.InvariantCulture);
                 if (cap.Keys.Contains("async_shader_translation_threads")) settings["async_shader_translation_threads"] = nativeAuto?"0":Math.Max(1, Math.Min(4, (pc.LogicalCpus - 2) / 4)).ToString(CultureInfo.InvariantCulture);
             }
-            // The engine's speed lock keeps every game at its own speed whatever the FPS limit; the hardware decides quality.
-            if (cap.Keys.Contains("speed_lock")) settings["speed_lock"] = "1";
+            // The FPS limit decides the lock (GraphicsProfile.Values): Game speed keeps the game's own pace, a number or
+            // Maximum is the game's own frame rate, as a PC game's limit is. The hardware decides quality.
             return settings;
         }
 
@@ -89,7 +90,7 @@ namespace PortForge
             }
             report.AppendLine("\r\n" + result.Summary);
             report.AppendLine("Engine 1.4 and newer use frame_guard=1 by default and resolve automatic worker counts on the PC running the game. A copied game can therefore adapt its workers on each launch.");
-            report.AppendLine("Engine 1.6 and newer use speed_lock=1 for the game's pace. Protected engines keep internal image scaling native; entry-level PC matching requests the game's handheld layout. Measurement compares TV and handheld layouts and retains TV when handheld brings no measured benefit. Some games render identically in both modes. FSR scales the finished image and adds GPU work; it does not remove CPU/loading stalls or create frames.");
+            report.AppendLine("Engine 1.48 and newer take the FPS limit as the game's own frame rate: a number caps how fast the game runs, Maximum lets it run as fast as this PC renders it, and Game speed keeps the console's own 30 or 60 with the speed lock. Earlier engines kept every game at its own speed whatever the limit. Protected engines keep internal image scaling native; entry-level PC matching requests the game's handheld layout. Measurement compares TV and handheld layouts and retains TV when handheld brings no measured benefit. Some games render identically in both modes. FSR scales the finished image and adds GPU work; it does not remove CPU/loading stalls.");
             report.AppendLine("Engine 1.7 and newer report measured p99 frame time/1% low and GPU wait details, and reuse shader caches across compatible engine updates. These diagnostics and measurements do not guarantee future scenes will run without stutter.");
             report.AppendLine("Local hardware rules and measured samples; no AI account or hardware upload is needed. FPS, VSync, controllers and experimental shader preferences are preserved. The game selects its Vulkan device; the highest-rated Windows adapter is not proof of the active GPU. Later areas can behave differently; zero lag and universal compatibility are not guaranteed.");
             try { File.WriteAllText(result.ReportPath, report.ToString(), new UTF8Encoding(false)); }
@@ -98,9 +99,9 @@ namespace PortForge
             return result;
         }
 
-        /// <summary>The saved global FPS limit, upscaling and PortForge FSR 3 choice, copied exactly: "game" stays the game's
-        /// speed (it became 60 with FSR 3), Unlimited stays 0 (it was skipped) and FSR 3 off writes frame_generation=0 (a
-        /// matched game kept generating).</summary>
+        /// <summary>The saved global FPS limit, upscaling and PortForge FSR 3 choice, copied exactly: "game" keeps the
+        /// console's pace with the speed lock, a number or Maximum (0) is the game's own frame rate without it, and FSR 3
+        /// off writes frame_generation=0 (a matched game kept generating).</summary>
         public static void ApplyGlobalPreferences(Dictionary<string,string> settings, RuntimeCapabilities cap)
         {
             if (settings == null) return;
@@ -113,6 +114,7 @@ namespace PortForge
                 if (cap == null || cap.Keys.Contains("frame_generation")) settings["frame_generation"] = g.FrameGeneration ? "1" : "0";
             if (cap == null || cap.Keys.Contains("amd_frame_generation")) settings["amd_frame_generation"] = g.AmdFrameGeneration ? "1" : "0";
                 if (cap == null || cap.Keys.Contains("fps_limit")) settings["fps_limit"] = g.Graphics.FpsLimit;
+                if (cap == null || cap.Keys.Contains("speed_lock")) settings["speed_lock"] = GlobalSettings.SpeedLockFor(g.Graphics.FpsLimit);
                 if ((cap == null || cap.Keys.Contains("display_resolution")) && GlobalSettings.IsDisplayResolution(g.DisplayResolution))
                     settings["display_resolution"] = g.DisplayResolution;
                 if (cap == null || cap.Keys.Contains("true_resolution")) settings["true_resolution"] = g.TrueResolution ? "1" : "0";

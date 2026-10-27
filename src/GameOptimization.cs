@@ -25,7 +25,7 @@ namespace PortForge
         {
             int fps;
             if (FpsLimit != "game" && FpsLimit != "0" && (!Int32.TryParse(FpsLimit, NumberStyles.None, CultureInfo.InvariantCulture, out fps) || fps < 10 || fps > 1000))
-                throw new ArgumentException("FPS must be Game speed, Unlimited, or a whole number from 10 to 1000.");
+                throw new ArgumentException("FPS must be Game speed, Maximum, or a whole number from 10 to 1000.");
             if (Resolution < .25m || Resolution > 4m) throw new ArgumentException("Render scale must be between 25% and 400%.");
             if (Anisotropy < 0 || Anisotropy > 16) throw new ArgumentException("Texture filtering must be between 0 and 16.");
             if (Upscaler < 0 || Upscaler > 1) throw new ArgumentException("Choose Linear or AMD FSR 1 upscaling.");
@@ -34,7 +34,7 @@ namespace PortForge
         {
             Validate();
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
-                {"fps_limit", FpsLimit}, {"resolution", Resolution.ToString(CultureInfo.InvariantCulture)},
+                {"fps_limit", FpsLimit}, {"speed_lock", GlobalSettings.SpeedLockFor(FpsLimit)}, {"resolution", Resolution.ToString(CultureInfo.InvariantCulture)},
                 {"anisotropy", Anisotropy.ToString(CultureInfo.InvariantCulture)}, {"upscaler", Upscaler.ToString(CultureInfo.InvariantCulture)}, {"shadows", Shadows ? "1" : "0"},
                 {"pixel_smoothing", PixelSmoothing ? "1" : "0"}, {"vsync", VSync ? "1" : "0"}, {"docked", Docked ? "1" : "0"}, {"fullscreen", Fullscreen ? "1" : "0"} };
         }
@@ -263,6 +263,7 @@ namespace PortForge
             var supported = profile.Values();
             if (capabilities.ProtectsRenderScale) { supported["resolution"] = "1"; supported["render_scale_safety"] = "1"; }
             if (!capabilities.Keys.Contains("upscaler")) supported.Remove("upscaler");
+            if (!capabilities.Keys.Contains("speed_lock")) supported.Remove("speed_lock"); // an older engine has no lock
             if (!capabilities.Keys.Contains("pixel_smoothing")) supported.Remove("pixel_smoothing"); // an older engine still starts the game
             ControllerSettings.AddTo(supported, capabilities, existing); // the Controllers window's choice, for every game
             if(supported.All(item=>existing.ContainsKey(item.Key)&&existing[item.Key]==item.Value))return null;
