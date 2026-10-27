@@ -17722,7 +17722,8 @@ index 00000000..53fe3251
 +enum { LEVELS = 5 };
 +enum { P_LUMA, P_SEARCH, P_MEDIAN, P_INTERP, P_PROP, PASSES };
 +enum { PROP_PASSES = 2 }; /* propagation rounds per level, each followed by the median */
-+/* FG_MAX_MIDS from nx/gpu/vk/vk.h. The renderer asks for one generated picture per real frame */
++/* FG_MAX_MIDS from nx/gpu/vk/vk.h. The renderer asks for one generated picture per real frame, and up to
++   PRESENT_FG_MAX_MIDS (present.c, the same number) for a typed limit above twice the game's pace */
 +typedef struct {
 +    Surf s;
 +    VkImageView rgba8; /* the 32-bit image read and written as R8G8B8A8_UNORM: the passes see its bytes as they are */
@@ -24166,16 +24167,22 @@ index f3ac2e2d..c3c4fe75 100644
 +int vk_display_fps_now(void) { return g_disp_fps; }
 +/* ---- display pacing: the pictures between the game's frames, so Display FPS is what the limit asks
 +   (present_display_target). PortForge FSR 3 off: the game's newest frame, held as a filtered copy, is shown again
-+   until the next one, as many times as the limit needs (30 FPS game, limit 120: each frame 4 times). On: one
-+   generated picture halfway between each two real frames, the generated and the real one each shown for half the
-+   frame's time, repeated toward twice the limit (limit 120: 240, 4 of each). One generated picture a frame, never
-+   more: Engine 1.31/1.32's 3 or 4 a frame put uncertain optical flow on the display most of the time. The game's
-+   pace is never changed (speed lock) */
++   until the next one, as many times as the limit needs (30 FPS game, limit 120: each frame 4 times). On: generated
++   pictures between each two real frames in phase order, so twice the game's frames (limit 120 on a 60 FPS game: 120,
++   four of each). One generated picture a frame stays the default and the only one AMD's interpolation makes; a typed
++   limit above twice the game's pace pays three (the 240 preset on a 60 FPS game), made by PortForge's own phased
++   warps, because Engine 1.31/1.32 showed that three or four a frame put uncertain optical flow on the display most of
++   the time unless the player asked for the rate. The game's pace is never changed (speed lock) */
 +static PMutex g_fg_lock = PMUTEX_INIT;
 +static PCond g_fg_cond;
 +static int g_fg_started, g_fg_active;
 +static u64 g_fg_last_ns, g_fg_period;
-+static double g_fg_owed; /* the part of a picture earlier frames still owe the target: 144 on 30 FPS is 4.8 a frame */
++static double g_fg_owed; /* the part of a picture earlier frames still owe the target: 144 on 30 FPS is 4.8 a frame,
++                             up to PRESENT_FG_MAX_MIDS of them paid at once (240 on 60 FPS: three a frame) */
++/* present.c and this file pace the display to the same number of pictures; FG_MAX_MIDS (vk.h) is the generated ones
++   a frame and PRESENT_FG_MAX_MIDS (options.h) the ceiling they build. Two numbers that drifted apart would make the
++   target unreachable or the pictures unasked for, so this must fail the engine build, not a game */
++_Static_assert(FG_MAX_MIDS == PRESENT_FG_MAX_MIDS, "FG_MAX_MIDS and PRESENT_FG_MAX_MIDS must be the same number");
 +enum { FG_QMAX = 64 };   /* pictures queued after a frame's first: a 1,000 limit doubled on a 30 FPS game */
 +static struct {
 +    Surf* src;
@@ -24311,11 +24318,14 @@ index f3ac2e2d..c3c4fe75 100644
 +    g_fg_q[g_fg_qn].generated = generated;
 +    g_fg_qn++;
 +}
-+/* A shown frame's k pictures at even steps of the frame's pace from base: with a generated picture (mid) the first
-+   half show it and the rest the real frame (cur), else every one shows cur. The first is shown now, the presenting
-+   thread shows the others when due. k = 2 with a generated picture is classic 2x frame generation */
-+static void fg_schedule(u64 base, int k, Surf* mid, Surf* cur, u32 transform, int late) {
-+    Surf* first = mid ? mid : cur;
++/* A shown frame's k pictures at even steps of the frame's pace from base, in phase order: the generated pictures the
++   renderer made (mids[0..nmids-1], half of them made by warping) and then the real frame (cur). The first is shown now,
++   the presenting thread shows the others when due. k = 2 with one generated picture is classic 2x frame generation;
++   a typed limit above twice the game's pace is k = 4 with three of them (the 240 preset on a 60 FPS game) */
++static void fg_schedule(u64 base, int k, Surf** mids, int nmids, Surf* cur, u32 transform, int late) {
++    if (nmids < 0) nmids = 0;
++    if (nmids > k - 1) nmids = k - 1; /* the last picture of the frame is the game's own */
++    Surf* first = nmids > 0 && mids[0] && mids[0]->sw && mids[0]->sh ? mids[0] : cur;
 +    if (late) {
 +        /* a limit between the game's pace and twice it: this frame's generated picture isn't shown, and its real frame
 +           keeps the half-frame delay the others have, so the real frames stay evenly spaced */
@@ -24328,16 +24338,17 @@ index f3ac2e2d..c3c4fe75 100644
 +    }
 +    const u32 whole[4] = {0, 0, first->sw, first->sh};
 +    u64 step = g_fg_period / (u64)k;
-+    int split = mid ? k / 2 : 0, i;
++    int i;
 +    g_show_paced = 1;
 +    if (show(first, whole, first->sw, first->sh, transform, 0) || show(first, whole, first->sw, first->sh, transform, 0))
-+        fg_note_display(mid != NULL);
++        fg_note_display(first != cur);
 +    g_show_paced = 0;
 +    pm_lock(&g_fg_lock);
 +    g_fg_qn = 0;
 +    for (i = 1; i < k; i++) {
-+        Surf* s = i < split ? mid : cur;
-+        fg_queue_push(s, base + step * (u64)i, s->sw, s->sh, transform, i < split);
++        /* this phase's generated picture, else the game's own frame (the renderer made fewer than it was asked for) */
++        Surf* s = i < nmids && mids[i] && mids[i]->sw && mids[i]->sh ? mids[i] : cur;
++        fg_queue_push(s, base + step * (u64)i, s->sw, s->sh, transform, s != cur);
 +    }
 +    pc_signal(&g_fg_cond);
 +    pm_unlock(&g_fg_lock);
@@ -24408,19 +24419,22 @@ index f3ac2e2d..c3c4fe75 100644
 +    /* a pace to divide: no hitch, pause or catch-up burst between the frames */
 +    int steady = g_fg_period >= 1000000ull && g_fg_period <= 250000000ull && interval >= g_fg_period / 2 &&
 +                 interval < g_fg_period * 3 / 2;
-+    /* a real limiter (present_display_target): a generated picture and the real frame, or the real frame alone. Never
-+       a repeat of either. A limit between the game's pace and twice it (90 on 60) is paid by the frame's share of the
-+       target, carried over as a fraction: every second or third frame gets its generated picture, 90 a second */
++    /* A real limiter (present_display_target): this frame pays its share of the target, carried over as a fraction,
++       so the pictures are the ones the limit asks for and never one already shown. A limit between the game's pace and
++       twice it (90 on 60) pays every second or third frame a generated one, 90 a second; twice the game's pace or more
++       pays one a frame (classic 2x), and a typed limit above twice it pays up to PRESENT_FG_MAX_MIDS a frame: the 240
++       preset on a 60 FPS game is three a frame */
 +    int k = 1;
-+    if (steady && fg && side > 0 && target >= 2 * side)
-+        k = 2, g_fg_owed = 0;
-+    else if (steady && fg && target > side) {
++    if (steady && fg && side > 0 && target > side) {
 +        g_fg_owed += (double)(target - side) / (double)side;
-+        if (g_fg_owed >= 1.0) k = 2, g_fg_owed -= 1.0;
-+        if (g_fg_owed > 1.0) g_fg_owed = 0;
++        while (g_fg_owed >= 1.0 && k < PRESENT_FG_MAX_MIDS + 1)
++            k++, g_fg_owed -= 1.0;
++        if (g_fg_owed >= 1.0) g_fg_owed = 0; /* the display's ceiling pays no more, so nothing stays owed */
 +    } else
 +        g_fg_owed = 0;
-+    int mixed = steady && fg && side > 0 && target > side && target < 2 * side;
++    /* pictures to make for this frame even when its share isn't a whole picture yet: the real frame alone then keeps
++       the half-frame delay the others have (fg_schedule's late), so the real frames stay evenly spaced */
++    int mixed = steady && fg && side > 0 && target > side;
 +    u32 dw = 0, dh = 0;
 +    present_dest_size(fw, fh, &dw, &dh);
 +    if (fg) {
@@ -24430,13 +24444,14 @@ index f3ac2e2d..c3c4fe75 100644
 +        int pair = vk_fg_capture(vk_cmd(), src, rect[0], rect[1], rect[2], rect[3]);
 +        if (dump) fg_dump_history();
 +        if (pair && warp && (k >= 2 || mixed)) {
-+            Surf *cur = NULL, *mids[FG_MAX_MIDS];
++            Surf *cur = NULL, *mids[PRESENT_FG_MAX_MIDS];
 +            int i, nmade;
 +            g_show_hidden = 1; /* the game's frame is submitted with its bookkeeping; the pictures below are shown */
 +            show(src, rect, fw, fh, transform, 1);
 +            g_show_hidden = 0;
-+            for (i = 0; i < FG_MAX_MIDS; i++) mids[i] = NULL;
-+            nmade = vk_fg_interpolate_mids(vk_cmd(), dw, dh, &cur, mids, 1);
++            for (i = 0; i < PRESENT_FG_MAX_MIDS; i++) mids[i] = NULL;
++            /* one generated picture for k = 2 (the AMD midpoint), three for the 240 preset's k = 4 */
++            nmade = vk_fg_interpolate_mids(vk_cmd(), dw, dh, &cur, mids, k >= 2 ? k - 1 : 1);
 +            if (!cur || !cur->sw || !cur->sh) {
 +                /* nothing to show but the game's own buffer */
 +                g_show_paced = 1;
@@ -24444,7 +24459,7 @@ index f3ac2e2d..c3c4fe75 100644
 +                g_show_paced = 0;
 +                return;
 +            }
-+            fg_schedule(now, 2, nmade >= 1 && mids[0] && mids[0]->sw && mids[0]->sh ? mids[0] : NULL, cur, transform, k < 2);
++            fg_schedule(now, k >= 2 ? k : 2, mids, nmade, cur, transform, k < 2);
 +            return;
 +        }
 +    }
@@ -24455,7 +24470,7 @@ index f3ac2e2d..c3c4fe75 100644
 +            g_show_hidden = 1;
 +            show(src, rect, fw, fh, transform, 1);
 +            g_show_hidden = 0;
-+            fg_schedule(now, k, NULL, held, transform, 0);
++            fg_schedule(now, k, NULL, 0, held, transform, 0);
 +            return;
 +        }
 +        static int unheld;
@@ -26556,6 +26571,10 @@ index 408db9ed..69aae239 100644
  extern int g_opt_fps;                              /* atomic: the game's threads read it */
 +extern int g_opt_speed_lock;                       /* atomic: speed_lock, 1 = no frame sooner than the game's pace */
 +extern int g_opt_frame_generation;                 /* atomic: frame_generation; on-screen rate is ~2x via FG presents */
++/* Generated pictures one real frame can pay with when the player types an FPS limit above twice the game's pace (the
++   240 preset on a 60 FPS game): the renderer's FG_MAX_MIDS, in nx/gpu/vk/vk.h, which neither this header nor
++   present.c can include (host tests build them without the Vulkan headers). renderer.c asserts the two agree. */
++#define PRESENT_FG_MAX_MIDS 3
  void fps_limit_text(int fps, char* out, size_t n); /* g_opt_fps as fps_limit's value: "game", "0", "30"... */
 +/* Esc/Home or F4: set g_opt_fps above global settings so ini_poll cannot wipe it; kept for the next launch */
 +void options_fps_live(int fps);
@@ -26576,7 +26595,7 @@ index 00000000..0693be93
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.45"
++#define PF_ENGINE_VERSION "1.46"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5a..38b92670 100644
@@ -28699,14 +28718,18 @@ index 2bd6181e..3816da02 100644
 +           __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED);
 +}
 +
-+/* Pictures a second on the display, what Display FPS shows. A real limiter: every picture is a distinct one, the game's
-+   frames (at most the limit) and, with FSR 3 frame generation, one generated picture between each two of them. No frame
-+   is shown twice to make the number bigger (Engine 1.41 and earlier repeated held copies up to the limit, and twice the
-+   limit with FSR 3; those repeats were what the GPU was doing when it was reset in a long Pokemon run). Frame generation
-+   doubles the game's frames up to the limit the player typed (any number from 10 to 1000) and, with vsync, the
-+   display's refresh: a limit between the game's pace and twice it (90 on a 60 FPS game) gets exactly that many,
-+   a generated picture after as many real frames as the limit pays for. 0 while the game's pace isn't known (a
-+   self-timed game without a limit) */
++/* PRESENT_FG_MAX_MIDS (nx/runtime/options.h, the renderer's FG_MAX_MIDS) is the most generated pictures one real frame
++   pays with: 1 + 3 is four times the game's frames, 240 from 60. Pictures a second on the display, what Display FPS shows. A real limiter: every picture is a distinct one, the game's
++   frames (at most the limit) and, with FSR 3 frame generation, generated pictures between them. No frame is shown twice
++   to make the number bigger (Engine 1.41 and earlier repeated held copies up to the limit, and twice the limit with
++   FSR 3; those repeats were what the GPU was doing when it was reset in a long Pokemon run). Frame generation doubles
++   the game's frames up to the limit the player typed (any number from 10 to 1000) and, with vsync, the display's
++   refresh: a limit between the game's pace and twice it (90 on a 60 FPS game) gets exactly that many, a generated
++   picture after as many real frames as the limit pays for. A typed limit above twice the game's pace (144, 165, 200,
++   240) is paid with up to PRESENT_FG_MAX_MIDS generated pictures a frame, so the 240 preset is 240 in a 60 FPS game
++   where the panel allows it (vsync caps it at the refresh). Unlimited and Game speed still show twice the game's
++   frames: they ask for no number above them. 0 while the game's pace isn't known (a self-timed game without a
++   limit) */
 +int present_display_target(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit), hz = __atomic_load_n(&g_display_hz, __ATOMIC_RELAXED), want, cap;
 +    if (side <= 0) return 0;
@@ -28715,6 +28738,9 @@ index 2bd6181e..3816da02 100644
 +    cap = fps_limit > 0 ? fps_limit : 0;
 +    if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && (!cap || hz < cap)) cap = hz;
 +    want = frame_generation ? side * 2 : side;
++    /* the player typed a limit above twice the game's pace: up to three generated pictures a frame pay it, so the
++       screen reaches the number that was typed and not just twice the game's own frames */
++    if (frame_generation && fps_limit > 0 && fps_limit > want) want = side * (PRESENT_FG_MAX_MIDS + 1);
 +    if (cap && want > cap) want = cap > side ? cap : side;
 +    return want;
 +}
@@ -29669,10 +29695,13 @@ index 03330d3d..d02928f5 100644
 +           __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED);
 +}
 +int present_fg_on(void) { return present_fg_chosen(); }
-+/* as present.c without a display: the limit, twice it with frame generation, the game's 60 for game and unlimited */
++/* as present.c without a display: the limit, twice it with frame generation, four times the game's pace when the
++   limit typed is above twice it (the 240 preset on a 60 FPS game), the game's 60 for game and unlimited */
 +int present_display_target(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit), want = fps_limit > 0 ? fps_limit : side;
-+    return frame_generation ? want * 2 : want;
++    if (!frame_generation) return want;
++    if (fps_limit > 0 && fps_limit > 2 * side) return side * 4;
++    return want * 2;
 +}
 +int present_expected_display_fps(int fps_limit, int frame_generation) {
 +    return present_display_target(fps_limit, frame_generation);
@@ -30310,13 +30339,22 @@ index 53c5e45d..bd87f7eb 100644
 +    CHECK(present_display_target(120, 1) == 120, "120 with FG is not the game's 60 doubled");
 +    CHECK(present_display_target(90, 1) == 90, "a typed 90 with FG is not locked to 90");
 +    CHECK(present_display_target(75, 1) == 75 && present_display_target(75, 0) == 60, "a typed 75 is not 75 with FG, 60 without");
-+    CHECK(present_display_target(240, 1) == 120, "240 with FG repeated pictures above the game's 60 doubled");
++    CHECK(present_display_target(121, 1) == 121 && present_display_target(119, 1) == 119,
++          "just above twice the game's pace is not the typed rate");
++    /* a typed limit above twice the game's pace is paid with generated pictures, up to PRESENT_FG_MAX_MIDS a frame:
++       the 240 preset on a 60 FPS game is 240, not the 120 twice its frames used to show */
++    CHECK(present_display_target(144, 1) == 144, "a typed 144 with FG is not 144 on a 60 FPS game");
++    CHECK(present_display_target(165, 1) == 165, "a typed 165 with FG is not 165 on a 60 FPS game");
++    CHECK(present_display_target(200, 1) == 200, "a typed 200 with FG is not 200 on a 60 FPS game");
++    CHECK(present_display_target(240, 1) == 240, "240 with FG is not 240 on a 60 FPS game");
++    CHECK(present_display_target(1000, 1) == 240, "1000 with FG went past four pictures a frame");
 +    CHECK(present_display_target(0, 1) == 120, "unlimited with FG is not the game's 60 doubled");
 +    CHECK(present_display_target(SNX_FPS_GAME, 1) == 120, "game speed with FG is not the game's 60 doubled");
 +    CHECK(present_expected_display_fps(144, 1) == present_display_target(144, 1), "Esc expects another rate");
 +    /* with vsync never more than the display refreshes */
 +    g_display_hz = 144;
 +    CHECK(present_display_target(120, 1) == 120, "a 144 Hz display lost FG at 120");
++    CHECK(present_display_target(240, 1) == 144, "a 144 Hz display was paced above its refresh for 240");
 +    CHECK(present_display_target(240, 0) == 60, "a 144 Hz display was given repeats without FG");
 +    g_display_hz = 60;
 +    CHECK(present_display_target(60, 1) == 60, "a 60 Hz display got generated pictures it can't show");
@@ -30344,8 +30382,9 @@ index 53c5e45d..bd87f7eb 100644
 +          (unsigned long long)(slept_ns - before));
 +    /* a 30 FPS game (Zelda BotW) on a 280 Hz display: every limit the menu offers, FSR 3 off and on */
 +    {
++        /* a 30 FPS game reaches four times its own frames at most: 120, whatever is typed above that */
 +        static const int want[][3] = {{SNX_FPS_GAME, 30, 60}, {0, 30, 60},     {30, 30, 30},   {60, 30, 60},
-+                                      {120, 30, 60},         {144, 30, 60},   {240, 30, 60},   {20, 20, 20}};
++                                      {120, 30, 60},         {144, 30, 120},  {240, 30, 120},  {20, 20, 20}};
 +        for (size_t w = 0; w < sizeof want / sizeof *want; w++) {
 +            CHECK(present_display_target(want[w][0], 0) == want[w][1], "a 30 FPS game, limit %d, FSR 3 off: %d, not %d",
 +                  want[w][0], present_display_target(want[w][0], 0), want[w][1]);

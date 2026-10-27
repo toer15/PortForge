@@ -31,14 +31,14 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Games always run at their own speed. The FPS limit is a real limiter: it caps the pictures that reach the screen and never repeats a frame to reach a number. FSR 3 frame generation adds one AMD-generated picture between each two game frames when the limit leaves room for twice the game's frames. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Games always run at their own speed. The FPS limit is a real limiter: it caps the pictures that reach the screen and never repeats a frame to reach a number. FSR 3 frame generation adds AMD-generated pictures between each two game frames when the limit leaves room for twice the game's frames, and up to three a frame (four times the game's frames, so 240 in a 60 FPS game) when you type a limit above twice them. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             layout.Controls.Add(resolutionNote);
             layout.Controls.Add(trueRes);
             AddText(layout, "Engine 1.42 renders screen-shaped render targets at the selected 16:9 output. It records each game's own output height (many games draw 900 lines in TV mode) during its first run, including the warm-up after an engine install, and scales from that height from the next start. Data-shaped targets stay native. Dynamic-resolution games may differ, so this is not a per-game guarantee of exact internal pixels. Scaling up costs GPU; scaling down loses detail but can reduce GPU work. Turn this off if a game shows artifacts.", 10);
             AddChoice(layout, "Upscaling", upscale);
-            upscaleNote.Text = "AMD FSR 3 frame generation = AMD FSR 1 upscaling plus the frame interpolation AMD publishes in the FidelityFX SDK 1.1.4 (its optical flow and frame interpolation shaders, MIT). Switch games give the PC no motion vectors or depth, so AMD's optical flow finds the motion and depth is flat. FSR 3's temporal upscaler needs those game motion vectors and cannot run on Switch games, so FSR 1 does the upscaling. One generated picture sits between each two real frames (a 30 FPS game shows 60). It never speeds the game up. Turn it on or off in game from Esc.";
+            upscaleNote.Text = "AMD FSR 3 frame generation = AMD FSR 1 upscaling plus the frame interpolation AMD publishes in the FidelityFX SDK 1.1.4 (its optical flow and frame interpolation shaders, MIT). Switch games give the PC no motion vectors or depth, so AMD's optical flow finds the motion and depth is flat. FSR 3's temporal upscaler needs those game motion vectors and cannot run on Switch games, so FSR 1 does the upscaling. One generated picture sits between each two real frames (a 30 FPS game shows 60), and a 240 limit in a 60 FPS game uses three a frame. It never speeds the game up. Turn it on or off in game from Esc.";
             layout.Controls.Add(upscaleNote);
             layout.Controls.Add(amdFg);
             AddChoice(layout, "Rendering mode", mode);
@@ -103,14 +103,17 @@ namespace PortForge
             trueRes.Checked=s.TrueResolution; lowLatency.Checked=s.LowLatency; amdFg.Checked=s.AmdFrameGeneration;
             RefreshNotes();
         }
-        /* pictures a second on screen for a game running at its own pace g (Engine 1.44's present_display_target,
-           ignoring the monitor's refresh), a real limiter: the game's frames at most the limit, and with FSR 3 up to twice
-           them, locked to a typed limit in between (90 on a 60 FPS game) */
+        /* pictures a second on screen for a game running at its own pace g (Engine 1.46's present_display_target,
+           ignoring the monitor's refresh), a real limiter: the game's frames at most the limit, with FSR 3 twice
+           them, and up to four times them when the limit typed is above twice the game's pace (240 on a 60 FPS game,
+           the engine's PRESENT_FG_MAX_MIDS). Game speed and Unlimited ask for no number, so they stay at twice */
         private static int OnScreen(int g, int limit, bool fsr3)
         {
             int shown = limit > 0 && limit < g ? limit : g;
             if (!fsr3) return shown;
-            return limit <= 0 || 2 * shown <= limit ? 2 * shown : Math.Max(limit, shown);
+            int want = 2 * shown;
+            if (limit > 0 && limit > want) want = 4 * shown;
+            return limit <= 0 || want <= limit ? want : Math.Max(limit, shown);
         }
         private void RefreshNotes()
         {
@@ -126,7 +129,7 @@ namespace PortForge
             if (n < 0) n = 0;
             fpsNote.Text = name + (fsr3 ? " with AMD FSR 3 frame generation" : "") + " shows " + OnScreen(30, n, fsr3) +
                 " FPS in a 30 FPS game (like Zelda BotW) and " + OnScreen(60, n, fsr3) + " FPS in a 60 FPS game, never more than your monitor refreshes with VSync on. " +
-                (fsr3 ? "FSR 3 adds AMD-generated pictures between real frames up to the limit you set (twice the game's frames at most). No frame is shown twice. The game keeps its own speed."
+                (fsr3 ? "FSR 3 adds AMD-generated pictures between real frames up to the limit you set: twice the game's frames, and three a frame (four times them) when the limit is above twice them, so 240 on a 60 FPS game is 240 on a 240 Hz or faster monitor. No frame is shown twice. The game keeps its own speed."
                       : "Without frame generation the screen shows the game's own frames, at most the limit. A limit above the game's pace does not repeat frames, and the game keeps its own speed.");
         }
         /* the limit as the settings file keeps it: game, 0 for Unlimited, or the number typed or picked */

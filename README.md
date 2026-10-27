@@ -1,6 +1,8 @@
-# PortForge 0.63 / Engine 1.45
+# PortForge 0.64 / Engine 1.46
 
-**New in 0.63:** the app installs new versions by itself, at start and every hour while it is open, and reopens. Before, it only showed "Update available" on the Check for updates button, so a new engine and its fixes never reached games played from their own folders. Not during a conversion.
+**New in 0.64:** the FPS limit reaches 240. A limit typed above twice the game's pace used to stop at twice its frames (240 in a 60 FPS game showed 120); the engine now pays it with up to three generated pictures a real frame, so 240 in a 60 FPS game is 240 distinct pictures on a 240 Hz or faster monitor with VSync (and 144, 165 and 200 are honored the same way). A 30 FPS game reaches 120, four times its own frames. The frame's share is carried as a fraction, no frame is shown twice, the game keeps its own speed, and Unlimited and Game speed still show twice the game's frames. The pictures above twice the game's pace are PortForge's phased warps, since AMD's FidelityFX interpolation makes the midpoint only: expect the extra quarter-phase pictures to be less exact than 2x. See [VALIDATION-0.64.md](VALIDATION-0.64.md).
+
+**0.63:** the app installs new versions by itself, at start and every hour while it is open, and reopens. Before, it only showed "Update available" on the Check for updates button, so a new engine and its fixes never reached games played from their own folders. Not during a conversion.
 
 **0.62:** the FPS limit is followed again in games the Doctor had put in GPU safe mode after a GPU reset. That mode showed only the game's own frames while the in-game menu still read AMD FSR 3 On, so a 30 FPS game stayed at 30 at limit 120. The app now lifts it when a game gets a new engine (the Doctor sets it again if the GPU resets), turning AMD FSR 3 On in the Home/Esc menu lifts it too, and while it is on the menu says Off (GPU safe mode) and counts only real frames. See [VALIDATION-0.62.md](VALIDATION-0.62.md).
 
