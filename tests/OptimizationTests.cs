@@ -44,9 +44,13 @@ internal static class OptimizationTests
             global.DisplayResolution="720"; global.Graphics.Docked=true;
             Check(global.TrueResolutionActive && global.RenderResolutionNote().Contains("1280x720"),
                 "A 720p TV target scales screen-shaped game images down from the typical 1080p output");
+            /* PortForge 0.67: a fresh file is the automatic profile every game gets without being asked */
             var offPath=Path.Combine(root,"global-defaults.ini"); new GlobalSettings().Save(offPath);
-            Check(!GlobalSettings.Load(offPath).FrameGeneration && File.ReadAllText(offPath).Contains("frame_generation=0"),
-                "Frame generation defaults off and saves an explicit off value");
+            string offText=File.ReadAllText(offPath);
+            Check(GlobalSettings.Load(offPath).FrameGeneration && GlobalSettings.Load(offPath).FrameTimeGraph &&
+                  offText.Contains("fps_limit=240") && offText.Contains("speed_lock=0") && offText.Contains("frame_generation=1") &&
+                  offText.Contains("frametime_graph=1") && offText.Contains("portforge_fsr3=1"),
+                "New settings are the automatic 240 profile: 240 FPS, no speed lock, AMD FSR 3 and the frame-time graph on");
             string globalOriginal=File.ReadAllText(globalPath);
             global.Enabled=false; global.Save(globalPath);
             Check(!GlobalSettings.Load(globalPath).Enabled && File.ReadAllText(globalPath+".bak")==globalOriginal,
@@ -65,6 +69,27 @@ internal static class OptimizationTests
                 "Maximum is saved as no limit on the game, without the speed lock, so the engine runs it flat out");
             global.Graphics.FpsLimit="invalid";
             Fails(()=>global.Save(globalPath),"Invalid global settings cannot overwrite the saved file");
+            /* 0.67: the app raises a game's settings once, through the file every runtime reads at its launch */
+            string automaticPath=Path.Combine(root,"automatic-global-settings.ini");
+            GlobalSettings.PathOverride=automaticPath;
+            Check(GlobalSettings.EnsureAutomatic()!=null&&File.ReadAllText(automaticPath).Contains("fps_limit=240")&&File.ReadAllText(automaticPath).Contains("frametime_graph=1"),
+                "A PC without settings has the 240 profile written for every game");
+            File.WriteAllText(automaticPath, "; keep me\r\nglobal_enabled=1\r\nfps_limit=game\r\nspeed_lock=1\r\nupscale_mode=0\r\nframetime_graph=0\r\ndisplay_resolution=1080\r\n");
+            Check(GlobalSettings.EnsureAutomatic()!=null, "The old Game speed default is raised to the 240 profile once");
+            var raised=GameOptimization.ReadValues(File.ReadAllText(automaticPath));
+            Check(raised["fps_limit"]=="240"&&raised["speed_lock"]=="0"&&raised["upscale_mode"]=="2"&&raised["frame_generation"]=="1"&&
+                  raised["frametime_graph"]=="1"&&raised["display_resolution"]=="1080",
+                "Raising it turns the frame-time graph and FSR 3 on and keeps the player's own display resolution");
+            Check(GlobalSettings.EnsureAutomatic()==null&&GameOptimization.ReadValues(File.ReadAllText(automaticPath))["fps_limit"]=="240",
+                "A second app start changes nothing: the profile is applied once");
+            File.WriteAllText(automaticPath, "global_enabled=1\r\nfps_limit=120\r\nupscale_mode=1\r\nframetime_graph=1\r\n");
+            var chosen=GameOptimization.ReadValues(File.ReadAllText(automaticPath));
+            Check(GlobalSettings.EnsureAutomatic()==null&&chosen["fps_limit"]=="120"&&chosen["upscale_mode"]=="1",
+                "A saved frame limit and FSR 1 choice are never overwritten by the automatic profile");
+            File.WriteAllText(automaticPath, "global_enabled=0\r\nfps_limit=game\r\n");
+            Check(GlobalSettings.EnsureAutomatic()==null&&GameOptimization.ReadValues(File.ReadAllText(automaticPath))["fps_limit"]=="game",
+                "With the settings layer switched off, every game keeps its own settings");
+            GlobalSettings.PathOverride=Path.Combine(root,"runtime-global-settings.ini");
             string exe = Path.Combine(root, "Tuning game.exe"), config = Path.ChangeExtension(exe, ".ini");
             File.Copy(args[0], exe); File.Copy(args[0], Path.Combine(root, "Tuning game_code.dll"));
             var cap = RuntimeCapabilities.Read(exe, CancellationToken.None);

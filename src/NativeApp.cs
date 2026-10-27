@@ -15,6 +15,9 @@ namespace PortForge
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            // PortForge 0.67: every game gets the automatic 240 profile here, before the window shows. The engine
+            // reads this file at each game's launch, so it reaches games nobody opens in PortForge too.
+            try { GlobalSettings.EnsureAutomatic(); } catch (Exception) { }
             Application.Run(new NativeWindow());
         }
     }

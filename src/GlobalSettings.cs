@@ -9,7 +9,14 @@ namespace PortForge
     // Read by every updated runtime, including games started directly from Explorer.
     public sealed class GlobalSettings
     {
-        public bool Enabled = true, HideCursor = true, SaveIndicator = true, FrameTimeGraph, FrameTrace, FrameGeneration;
+        public bool Enabled = true, HideCursor = true, SaveIndicator = true, FrameTimeGraph = true, FrameTrace, FrameGeneration;
+        /// <summary>PortForge 0.67: the fastest rate every game gets without being asked. Engine 1.48 reads a number
+        /// as the game's own frame rate, so this is a game running at up to 240 FPS - its own frames, with AMD FSR 3
+        /// frame generation filling the pictures it cannot make, and the limiter's own maximum. The FPS limit menu in
+        /// game, or this panel, can change it at any time.</summary>
+        public const string AutomaticFpsLimit = "240";
+        /// <summary>What EnsureAutomatic applied, for the Settings tab to show. Null when it changed nothing.</summary>
+        public static string LastAutomaticNotice;
         /// <summary>auto, 720, 1080, 1440, or 2160: the window and swapchain height.</summary>
         public string DisplayResolution = "auto";
         /// <summary>Engine 1.41: screen-shaped render targets are scaled toward the selected resolution relative to
@@ -17,8 +24,9 @@ namespace PortForge
         public bool TrueResolution = true;
         /// <summary>Engine 1.41: three swapchain images with VSync instead of five, the game ahead of ordinary programs.</summary>
         public bool LowLatency = true;
-        /// <summary>0 Linear, 1 FSR 1, 2 FSR 3 frame generation (FSR 1 + AMD FidelityFX SDK frame interpolation).</summary>
-        public int UpscaleMode;
+        /// <summary>0 Linear, 1 FSR 1, 2 FSR 3 frame generation (FSR 1 + AMD FidelityFX SDK frame interpolation).
+        /// 2 by default since 0.67: a game that cannot render 240 frames itself still gets 240 pictures with it.</summary>
+        public int UpscaleMode = 2;
         /// <summary>Engine 1.38+: generated pictures come from AMD FidelityFX SDK 1.1.4's optical flow and frame
         /// interpolation (amd_frame_generation=1). Off falls back to PortForge's earlier motion search.</summary>
         public bool AmdFrameGeneration = true;
@@ -66,6 +74,41 @@ namespace PortForge
             if (!File.Exists(FilePath)) return null;
             var settings = Load(FilePath);
             return settings.Enabled ? settings : null;
+        }
+
+        /// <summary>Every updated runtime reads this file at its launch, even a game started from Explorer, so it is
+        /// the one place that reaches a game nobody has opened in PortForge. Called once at app start: a new install
+        /// gets the automatic 240 profile (240 FPS, AMD FSR 3, the in-game frame-time graph), and a file still holding
+        /// the old Game speed default is upgraded once. A file holding the player's own choice - another frame limit,
+        /// FSR 1, or the whole layer switched off - is never changed. Returns what was applied, or null.</summary>
+        public static string EnsureAutomatic()
+        {
+            LastAutomaticNotice = null;
+            string path = FilePath;
+            bool fresh = !File.Exists(path);
+            GlobalSettings s;
+            try
+            {
+                if (fresh) s = new GlobalSettings();
+                else
+                {
+                    s = Load(path);
+                    if (!s.Enabled) return null; // the layer is off: every game keeps its own settings
+                    bool changed = false;
+                    // Only the settings still at their old defaults are raised; a saved choice stays.
+                    if (s.Graphics.FpsLimit == "game") { s.Graphics.FpsLimit = AutomaticFpsLimit; changed = true; }
+                    if (s.UpscaleMode == 0) { s.UpscaleMode = 2; s.ApplyUpscaleMode(); changed = true; }
+                    if (!s.FrameTimeGraph) { s.FrameTimeGraph = true; changed = true; }
+                    if (!changed) return null;
+                }
+                s.Save(path);
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+            catch (ArgumentException) { return null; } // a file holding an invalid value is left for its owner
+            return LastAutomaticNotice = (fresh ? "Every game now runs at the fastest rate this PC can render, up to 240 FPS, with AMD FSR 3 and the in-game frame-time graph on."
+                                                     : "The settings for every game were raised to the fastest rate this PC can render, up to 240 FPS, with AMD FSR 3 and the in-game frame-time graph on.") +
+                " A game's own Esc menu changes its limit for that session; this panel changes it for every game.";
         }
 
         public void ApplyUpscaleMode()

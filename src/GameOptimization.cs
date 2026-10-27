@@ -13,7 +13,10 @@ namespace PortForge
 {
     public sealed class GraphicsProfile
     {
-        public string FpsLimit = "game";
+        // PortForge 0.67: 240 is the fastest the limiter goes, and it is what every game gets without being asked
+        // (a number is the game's own frame rate, Engine 1.48, so this is the game running at up to 240 FPS).
+        // Game speed remains the console-pace choice; a player's own number or Maximum is kept.
+        public string FpsLimit = GlobalSettings.AutomaticFpsLimit;
         public decimal Resolution = 1;
         public int Anisotropy = 0;
         public int Upscaler = 1;

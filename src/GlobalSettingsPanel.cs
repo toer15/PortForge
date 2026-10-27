@@ -17,7 +17,7 @@ namespace PortForge
         private readonly ComboBox resolution = Choice("Resolution", "Auto (game chooses)", "720p", "1080p", "1440p", "4K (2160p)"),
             upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "AMD FSR 3 frame generation (FSR 1 + FidelityFX frame interpolation)"),
             mode = Choice("Rendering mode", "TV - game chooses its layout", "Handheld - lighter rendering where supported"),
-            fps = Choice("Frame limit", "Game speed (recommended)", "30", "60", "120", "144", "240", "Maximum (this PC's speed)");
+            fps = Choice("Frame limit", "Game speed (console pace)", "30", "60", "120", "144", "240", "Maximum (this PC's speed)");
         private readonly Label status = new Label { AutoSize = true, ForeColor = Color.FromArgb(105,226,183), AccessibleName = "Global settings status", Text = "READY - Settings apply on the next game launch." };
         private readonly Label fpsNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 8), AccessibleName = "Frame limit note" };
         private readonly Label upscaleNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 12) };
@@ -31,7 +31,7 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. The FPS limit is the game's own frame rate: a number caps how fast the game runs (as a PC game's FPS cap does), Maximum lets the game run as fast as this PC can render it, and Game speed keeps the console's own 30 or 60 and lets AMD FSR 3 frame generation smooth it instead. No frame is ever repeated to reach a number. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Since 0.67 every game is set to the fastest rate this PC can render, up to 240 FPS (240, AMD FSR 3 and the in-game frame-time graph), with no per-game setup - change the frame limit below, or turn these settings off, to choose something else. The FPS limit is the game's own frame rate: a number caps how fast the game runs (as a PC game's FPS cap does) and AMD FSR 3 fills the pictures the game cannot make, Maximum lets the game run as fast as this PC can render it with nothing capping it, and Game speed keeps the console's own 30 or 60 and lets AMD FSR 3 frame generation smooth it instead. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             layout.Controls.Add(resolutionNote);
@@ -77,6 +77,8 @@ namespace PortForge
             reset.Click += delegate { ShowSettings(new GlobalSettings()); status.Text="READY - Defaults selected. Save to apply."; };
             try { ShowSettings(GlobalSettings.Load(GlobalSettings.FilePath)); }
             catch(Exception e) { ShowSettings(new GlobalSettings()); status.Text="ERROR - Could not load settings: " + e.Message; }
+            if (!String.IsNullOrEmpty(GlobalSettings.LastAutomaticNotice) && status.Text.StartsWith("READY"))
+                status.Text = "READY - " + GlobalSettings.LastAutomaticNotice;
         }
         private void ReadInto(GlobalSettings s)
         {
@@ -128,6 +130,7 @@ namespace PortForge
                           : "The screen shows every frame the game makes.");
             else
                 fpsNote.Text = "A limit of " + n + " is the game's own frame rate, as a PC game's FPS cap is: it runs at up to " + n + " FPS (or its console 30 or 60 if that is lower), and its physics, timers and music follow its frames, so a game made for 30 runs faster than the console whenever the limit is above 30. Esc shows the rate it reaches. " +
+                    (n == 240 ? "This is what PortForge applies to every game automatically. " : "") +
                     (fsr3 ? "If the game cannot reach the limit, AMD FSR 3 fills the gap with pictures generated between real frames, up to the limit and never above your monitor's refresh. No frame is shown twice."
                           : "The screen shows the frames the game itself makes.");
         }

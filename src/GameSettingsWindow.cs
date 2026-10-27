@@ -14,11 +14,11 @@ namespace PortForge
         protected override CreateParams CreateParams { get { return SmoothPaint.Composited(base.CreateParams); } }
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183), Muted = Color.FromArgb(173, 185, 203);
         private readonly TextBox game = new TextBox { AccessibleName = "Windows game executable", Dock = DockStyle.Fill };
-        private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (recommended)", "Custom limit", "Maximum"), filtering = Filtering();
+        private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (console pace)", "Custom limit", "Maximum"), filtering = Filtering();
         private readonly ComboBox upscaler = Choice("Upscaler", "Linear", "AMD FSR 1 (automatic)");
         private readonly ComboBox pixelSmoothing = Choice("Pixel smoothing", "Off", "On - smooth jagged edges");
         private readonly Label upscaleActivity = Label("FSR: no game session checked yet.", 9, Muted);
-        private readonly NumericUpDown fps = Number("Custom FPS limit", 10, 1000, 120, 10), scale = Number("Render scale percent", 25, 400, 100, 25);
+        private readonly NumericUpDown fps = Number("Custom FPS limit", 10, 1000, 240, 10), scale = Number("Render scale percent", 25, 400, 100, 25);
         private readonly CheckBox vsync = Toggle("VSync (reduce tearing)", true), shadows = Toggle("Draw shadows", true), docked = Toggle("TV mode (off = handheld)", true), fullscreen = Toggle("Start fullscreen", false);
         private readonly Label badge = Label("READY", 9, Mint), status = Label("Choose a Windows game", 16, Color.White), message = Label("Browse to a generated game .exe, then load its settings.", 10, Muted);
         private readonly TextBox details = new TextBox { AccessibleName = "Tuning results", Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
@@ -122,14 +122,14 @@ namespace PortForge
             options.Controls.Add(presets); var pcLine = Label("Checking this PC...", 9, Muted); pcLine.MaximumSize = new Size(700, 0); options.Controls.Add(pcLine); Shown += async delegate { var pc = await Task.Run(() => HardwareProfile.Detect()); pcLine.Text = "Your PC: " + pc.TierName + " (" + pc.Summary + "). " + pc.Why + " " + pc.Estimate + " Match my PC applies the settings this class of PC can afford; Auto tune measures the real game."; };
             var fpsRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoSize = true, Margin = new Padding(0) };
             fpsMode.Width = 235; fps.Width = 95; fpsRow.Controls.AddRange(new Control[] { fpsMode, fps });
-            AddOption("FPS limit", fpsRow, delegate { fpsMode.SelectedIndex = 0; fps.Value = 120; });
+            AddOption("FPS limit", fpsRow, delegate { fpsMode.SelectedIndex = 1; fps.Value = 240; });
             fpsMode.SelectedIndexChanged += delegate { fps.Visible=fps.Enabled = fpsMode.SelectedIndex == 1; Changed(); };
             fps.ValueChanged+=delegate{Changed();};
             var framePresets=new FlowLayoutPanel {Dock=DockStyle.Top,AutoSize=true};
             foreach(int value in new[]{30,60,120,144,165,240})
             {int cap=value;var button=Button(value+" FPS",false);button.AutoSize=true;button.Height=30;button.Click+=delegate{fpsMode.SelectedIndex=1;fps.Value=cap;vsync.Checked=false;Changed();};framePresets.Controls.Add(button);}
             options.Controls.Add(framePresets);options.Controls.Add(limiter);
-            AddHint("Click an FPS button to set a custom cap and turn VSync off. Play game saves and verifies these settings automatically. Game speed uses the game's own timing; the hidden custom number is not active in that mode.");
+            AddHint("Click an FPS button to set a custom cap and turn VSync off. Play game saves and verifies these settings automatically. PortForge applies the 240 profile - 240 FPS, AMD FSR 3, the in-game frame-time graph - to every game without being asked (main Settings tab); this window changes one game. Game speed uses the game's own timing; the hidden custom number is not active in that mode.");
             AddHint("Engine 1.48 or newer: the FPS limit is the game's own frame rate, as a PC game's cap is, so a 30 FPS game at 120 runs four times its console speed (its physics, timers and music follow its frames) and Maximum runs it as fast as this PC can render it. Game speed keeps the console's own 30 or 60 with the speed lock and lets AMD FSR 3 frame generation smooth it instead. VSync caps the pictures at your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
             AddOption("Upscaler", upscaler, delegate { upscaler.SelectedIndex = 1; });

@@ -41,6 +41,15 @@ internal static class NativeInterfaceTests
     {
         try
         {
+            /* 0.67: app start raises every game's settings once, through the file each runtime reads at its launch */
+            string globalRoot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "interface-global-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(globalRoot);
+            GlobalSettings.PathOverride = Path.Combine(globalRoot, "global-settings.ini");
+            string automaticNotice = GlobalSettings.EnsureAutomatic();
+            string automaticText = File.ReadAllText(GlobalSettings.FilePath);
+            Check(automaticNotice != null && automaticNotice.Contains("240") && automaticText.Contains("fps_limit=240") && automaticText.Contains("speed_lock=0") &&
+                  automaticText.Contains("frametime_graph=1"),
+                "App start writes the automatic 240 profile for every game: 240 FPS, no speed lock, the frame-time graph on");
             PortForge.NativeWindow.StartDoctorOnShow = false;
             using (var form = new PortForge.NativeWindow())
             {
@@ -63,6 +72,11 @@ internal static class NativeInterfaceTests
                 var frameLimit = settingsPanelControls.OfType<ComboBox>().Single(c => c.AccessibleName == "Frame limit");
                 var upscaling = settingsPanelControls.OfType<ComboBox>().Single(c => c.AccessibleName == "Upscaling");
                 int wasUpscaling = upscaling.SelectedIndex, wasLimit = frameLimit.SelectedIndex;
+                Check(frameLimit.SelectedIndex == 5 && upscaling.SelectedIndex == 2 &&
+                      settingsPanelControls.OfType<CheckBox>().Single(c => c.Text.Contains("frame-time graph")).Checked,
+                    "The Settings tab opens on the automatic profile: 240 FPS, AMD FSR 3 and the in-game frame-time graph");
+                Check(settingsPanelControls.OfType<Label>().Single(l => l.AccessibleName == "Global settings status").Text.Contains("240"),
+                    "The Settings tab tells the player the 240 profile was applied to every game");
                 Func<string> limitNote = () => settingsPanelControls.OfType<Label>().Single(l => l.AccessibleName == "Frame limit note").Text;
                 Check(frameLimit.Items.Cast<object>().Select(o => o.ToString()).Last() == "Maximum (this PC's speed)",
                     "The top of the list is Maximum: the game's own fastest rate, not a display trick");
@@ -149,7 +163,7 @@ internal static class NativeInterfaceTests
                 var fps = settingsControls.OfType<NumericUpDown>().Single(b => b.AccessibleName == "Custom FPS limit");
                 var scale = settingsControls.OfType<NumericUpDown>().Single(b => b.AccessibleName == "Render scale percent");
                 var filter = settingsControls.OfType<ComboBox>().Single(b => b.AccessibleName == "Texture filtering");
-                Check(fpsMode.SelectedIndex == 0 && !fps.Enabled && fps.Minimum == 10 && fps.Maximum == 1000, "FPS control starts at game timing and exposes the supported custom range");
+                Check(fpsMode.SelectedIndex == 1 && fps.Enabled && fps.Value == 240 && fps.Minimum == 10 && fps.Maximum == 1000, "The game tools start on the automatic 240 profile and expose the supported custom range");
                 fpsMode.SelectedIndex = 1; fps.Value = 240; settingsButton("Performance").PerformClick();
                 Check(fps.Enabled && fps.Value == 240 && scale.Value == 75, "Performance preset lowers render work and preserves the custom frame cap");
                 var protectionBinding = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -163,7 +177,7 @@ internal static class NativeInterfaceTests
                     "Balanced restores TV quality without unlocking unsafe intermediate scaling");
                 typeof(GameSettingsWindow).GetField("capabilities",protectionBinding).SetValue(settingsForm,null);
                 settingsButton("Clear FPS limit").PerformClick(); settingsButton("Clear Render scale (%)").PerformClick();
-                Check(fpsMode.SelectedIndex == 0 && !fps.Enabled && scale.Value == 100, "Clear restores safe defaults for frame timing and resolution");
+                Check(fpsMode.SelectedIndex == 1 && fps.Enabled && fps.Value == 240 && scale.Value == 100, "Clear restores the automatic 240 profile and the default resolution");
                 filter.SelectedIndex = 7;
                 settingsButton("Clear Texture detail at angles").PerformClick();
                 Check(filter.SelectedIndex == 0 && !settingsControls.Any(c=>c.AccessibleName=="Test target FPS"), "Texture filtering resets independently and there is no misleading second FPS target");
