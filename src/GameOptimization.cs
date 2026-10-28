@@ -13,10 +13,10 @@ namespace PortForge
 {
     public sealed class GraphicsProfile
     {
-        // PortForge 0.67: 240 is the most the limiter shows, and it is what every game gets without being asked
-        // (Engine 1.49: the limit is the pictures a second on screen, never the game's speed, so this is up to 240
-        // pictures - the game's own frames plus AMD FSR 3's). Game speed remains the console-pace choice; a
-        // player's own number or Maximum is kept.
+        // PortForge 0.67: 240 is the number asked for and it is what every game gets without being asked (Engine
+        // 1.49: the limit is never the game's speed; Engine 1.51 doubles it under AMD FSR 3, so a 240 Hz display
+        // shows 480 and a 280 Hz one 560 - the game's own frames plus AMD FSR 3's, repeated where it cannot
+        // generate). Game speed remains the console-pace choice; a player's own number or Maximum is kept.
         public string FpsLimit = GlobalSettings.AutomaticFpsLimit;
         public decimal Resolution = 1;
         public int Anisotropy = 0;

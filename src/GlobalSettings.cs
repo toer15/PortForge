@@ -106,8 +106,8 @@ namespace PortForge
             catch (IOException) { return null; }
             catch (UnauthorizedAccessException) { return null; }
             catch (ArgumentException) { return null; } // a file holding an invalid value is left for its owner
-            return LastAutomaticNotice = (fresh ? "Every game now shows up to 240 pictures a second, with AMD FSR 3 and the in-game frame-time graph on - each game at its own speed."
-                                                     : "The settings for every game were raised to up to 240 pictures a second, with AMD FSR 3 and the in-game frame-time graph on - each game at its own speed.") +
+            return LastAutomaticNotice = (fresh ? "Every game now has 240 pictures a second asked for, doubled by AMD FSR 3 where the display keeps up, and the in-game frame-time graph on - each game at its own speed."
+                                                     : "The settings for every game were raised to 240 pictures a second asked for, doubled by AMD FSR 3 where the display keeps up, and the in-game frame-time graph on - each game at its own speed.") +
                 " A game's own Esc menu changes its limit for that session; this panel changes it for every game.";
         }
 
@@ -162,7 +162,7 @@ namespace PortForge
                 return "Game speed keeps the console's own timing: 30 FPS in a 30 FPS game, 60 in a 60 FPS game. " +
                     (FrameGeneration ? "AMD FSR 3 frame generation plays those frames twice (60 and 120 pictures a second)." : "The limit and frame generation change nothing.");
             if (Graphics.FpsLimit == "0")
-                return "Maximum shows the most the pipeline can make: up to 240 pictures a second, four times the game's own frames with AMD FSR 3 (240 in a 60 FPS game, 120 in a 30 FPS game), never more than your refresh with VSync. The game itself keeps its own speed and timing. Esc shows the rate it reaches.";
+                return "Maximum shows the most the pipeline can make: your monitor's refresh doubled by AMD FSR 3 (480 on a 240 Hz screen, 120 on a 60 Hz one), four times the game's own frames at most. The game itself keeps its own speed and timing. Esc shows the rate it reaches.";
             int fps;
             if (!Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps < 10) return "";
             return "Limit " + fps + " is how many pictures a second the screen shows: the game's own frames, and with AMD FSR 3 up to " + fps +

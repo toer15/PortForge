@@ -78,20 +78,20 @@ internal static class NativeInterfaceTests
                 Check(settingsPanelControls.OfType<Label>().Single(l => l.AccessibleName == "Global settings status").Text.Contains("240"),
                     "The Settings tab tells the player the 240 profile was applied to every game");
                 Func<string> limitNote = () => settingsPanelControls.OfType<Label>().Single(l => l.AccessibleName == "Frame limit note").Text;
-                Check(frameLimit.Items.Cast<object>().Select(o => o.ToString()).Last() == "Maximum (240 pictures)",
-                    "The top of the list is Maximum: the most the pipeline can make, 240 pictures a second");
+                Check(frameLimit.Items.Cast<object>().Select(o => o.ToString()).Last() == "Maximum (your refresh)",
+                    "The top of the list is Maximum: the monitor's own refresh, doubled by AMD FSR 3");
                 upscaling.SelectedIndex = 2; /* AMD FSR 3 frame generation */
                 frameLimit.SelectedIndex = 6; /* Maximum */
-                Check(limitNote().StartsWith("Maximum shows the most the pipeline can make") && limitNote().Contains("The game itself keeps its own speed"),
+                Check(limitNote().StartsWith("Maximum asks for your monitor's refresh") && limitNote().Contains("The game itself keeps its own speed"),
                     "Maximum tells the player the screen gets the most pictures while the game keeps its own speed");
                 frameLimit.SelectedIndex = 0; /* Game speed */
                 Check(limitNote().StartsWith("Game speed keeps the game's own console timing") && limitNote().Contains("plays those frames twice"),
                     "Game speed keeps the console's 30 or 60 and lets FSR 3 play those frames twice");
                 frameLimit.SelectedIndex = 5; /* 240 */
-                Check(limitNote().StartsWith("A limit of 240 is how many pictures a second the screen shows") && limitNote().Contains("No game runs faster than its console"),
+                Check(limitNote().StartsWith("A limit of 240 is the number PortForge asks the screen for") && limitNote().Contains("No game runs faster than its console"),
                     "A typed limit is pictures a second, not the game's speed: Engine 1.49 keeps every game at its own pace");
                 frameLimit.SelectedIndex = 1; /* 30 */
-                Check(limitNote().StartsWith("A limit of 30 is how many pictures a second the screen shows") && limitNote().Contains("No game runs faster than its console"),
+                Check(limitNote().StartsWith("A limit of 30 is the number PortForge asks the screen for") && limitNote().Contains("No game runs faster than its console"),
                     "A limit below the console pace shows fewer pictures and leaves the game's speed alone");
                 frameLimit.SelectedIndex = wasLimit; upscaling.SelectedIndex = wasUpscaling;
                 Check(controls.OfType<Button>().Any(b => b.Text == "Downloads"), "Downloads are directly accessible from the main screen");

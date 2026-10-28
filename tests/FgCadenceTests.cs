@@ -6,11 +6,13 @@ using System.IO;
 /// changes a game's speed. present_period returns the game's own swap interval at every limit and in every mode -
 /// Game speed, a number, Maximum - and ignores the speed lock, so a leftover speed_lock=0 cannot speed a game up;
 /// a game that times itself (interval 0) is paced only by a numeric limit, Maximum leaving it to its own timers.
-/// What a limit governs is the pictures: the game's own frames, doubled by FSR 3 frame generation, with a typed
-/// limit above twice the game's pace and Maximum paying up to PRESENT_FG_MAX_MIDS generated pictures a frame - four
-/// times the game's own frames, so 240 on a 60 FPS game is 240 - capped by the limit typed, and without FSR 3 the
-/// game's own frames, since a picture the game never drew cannot be shown. Pacing waits on the microsecond clock
-/// (plat_wait_until). The behaviour itself is checked by the engine's runtime_present suite.
+/// What a limit governs is the pictures (Engine 1.51): the number typed is the pictures a second on screen, whatever
+/// the limit, and FSR 3 frame generation doubles it - 120 typed is 240 with it on and 120 with it off. The pictures
+/// above the game's own frames are generated where AMD's interpolation can make them (up to PRESENT_FG_MAX_MIDS a
+/// frame) and repeats of the game's frame for the rest, so 240 from a 30 FPS game is 8 a frame with the game still at
+/// its console pace. Game speed is the console's pace, doubled by FSR 3; Maximum is the panel. VSync caps it at the
+/// refresh. Pacing waits on the microsecond clock (plat_wait_until). The behaviour itself is checked by the engine's
+/// runtime_present suite.
 /// </summary>
 internal static class FgCadenceTests
 {
@@ -42,12 +44,15 @@ internal static class FgCadenceTests
         Check(text.Contains("if (fps == SNX_FPS_GAME || !fps) return 0;"),
             where + ": a self-timed game at Maximum (0) is left to its own timers");
         Check(!text.Contains("FSR Off locks pace"), where + ": no FSR-off pace at the limit (it sped games up)");
-        Check(text.Contains("want = frame_generation ? side * 2 : side;"), where + ": real limiter: the game's frames, doubled by FSR 3 frame generation");
-        Check(text.Contains("if (frame_generation && (fps_limit == 0 || fps_limit > want))") &&
-              text.Contains("want = side * (PRESENT_FG_MAX_MIDS + 1);"),
-            where + ": a typed limit above twice the game's pace, and Maximum, are paid with generated pictures - while the game keeps its own pace - up to the ceiling");
-        Check(text.Contains("if (cap && want > cap) want = cap > side ? cap : side;") && !text.Contains("if (frame_generation) want *= 2;"),
-            where + ": the typed limit caps distinct pictures and never repeats a frame to reach it");
+        Check(text.Contains("want = frame_generation ? base * 2 : base;"), where + ": the limiter's number is the pictures a second on screen, doubled by FSR 3 frame generation (Engine 1.51)");
+        Check(text.Contains("base = fps_limit;") && text.Contains("base = hz > 0 ? hz : side;")
+              && text.Contains("base = side;"),
+            where + ": a typed number is the rate asked for, Game speed the console's pace, Maximum the panel");
+        Check(text.Contains("if (want > 1000) want = 1000;") &&
+              text.Contains("if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && want > hz) want = hz;"),
+            where + ": the limiter's ceiling holds, and VSync caps the pictures at the display's refresh");
+        Check(text.Contains("repeats of the game's frame") && !text.Contains("No frame is shown twice"),
+            where + ": pictures above what generation can make are repeats of the game's frame, never a faster game");
         Check(!text.Contains("PRESENT_FG_MAX_PICTURES") && !text.Contains("present_fg_slots(int"),
             where + ": the ceiling is four pictures a real frame (three generated), not the old 3x to 10x generation");
         Check(text.Contains("made = present_game_fps_now();") && text.Contains("if (made > 0) return fps_limit > 0 && fps_limit < made ? fps_limit : made;"),
@@ -76,21 +81,20 @@ internal static class FgCadenceTests
             Check(p.Contains("vk_fg_interpolate_mids(vk_cmd(), dw, dh, &cur, mids, k >= 2 ? k - 1 : 1)"),
                 "patch: one generated picture for 2x, three when a typed limit asks for more");
             Check(p.Contains("g_fg_owed += (double)(target - side) / (double)side;") &&
-                  p.Contains("while (g_fg_owed >= 1.0 && k < PRESENT_FG_MAX_MIDS + 1)"),
-                "patch: the frame's share of the typed limit is carried as a fraction, never a repeat");
+                  p.Contains("while (g_fg_owed >= 1.0 && k < FG_QMAX + 1)"),
+                "patch: the frame's share of the limit is carried as a fraction, up to the picture queue's ceiling");
             Check(p.Contains("#define PRESENT_FG_MAX_MIDS 3") && p.Contains("_Static_assert(FG_MAX_MIDS == PRESENT_FG_MAX_MIDS,"),
                 "patch: the pacing ceiling is the renderer's own FG_MAX_MIDS, checked when the engine builds");
-            Check(p.Contains("CHECK(present_display_target(240, 1) == 240") && p.Contains("CHECK(present_display_target(144, 1) == 144") &&
-                  p.Contains("CHECK(present_display_target(0, 1) == 240") && p.Contains("CHECK(present_display_target(0, 1) == 144"),
-                "patch: the engine's own tests hold 240 and 144 to the rate typed, and Unlimited to the most the pipeline can make");
+            Check(p.Contains("CHECK(present_display_target(240, 1) == 480") && p.Contains("CHECK(present_display_target(144, 1) == 288") &&
+                  p.Contains("CHECK(present_display_target(0, 1) == 120") && p.Contains("CHECK(present_display_target(0, 1) == 144"),
+                "patch: the engine's own tests hold a typed number to twice itself with FSR 3, and Maximum to the panel");
             /* the engine's own suite, not the built source: these rows are in tests/runtime_present.c */
             Check(p.Contains("CHECK(present_period(120, 1, 0) == refresh") &&
                   p.Contains("CHECK(present_period(0, 2, 0) == 2 * refresh") &&
-                  p.Contains("CHECK(present_display_target(240, 0) == 60") &&
-                  p.Contains("CHECK(present_display_target(144, 1) == 144") &&
-                  p.Contains("CHECK(present_display_target(0, 1) == 240") &&
+                  p.Contains("CHECK(present_display_target(120, 0) == 120") &&
+                  p.Contains("CHECK(present_display_target(120, 1) == 240") &&
                   p.Contains("int g_opt_speed_lock = 0; /* the settings row and Esc only: pacing ignores it (Engine 1.49) */"),
-                "patch: the engine's own tests hold every limit to the game's own pace, and the pictures to the limit typed");
+                "patch: the engine's own tests hold every limit to the game's own pace, and the pictures to the limiter's number");
             Check(p.Contains("FG_PROP"), "patch: frame generation propagates motion vectors");
             Check(p.Contains("snprintf(word, sizeof word, \"Maximum\")") && p.Contains("\"Maximum\"") &&
                   !p.Contains("if (fps == 0) snprintf(word, sizeof word, \"Unlimited\")"),

@@ -23694,7 +23694,7 @@ index 00000000..a781c01e
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2d..eaf71d20 100644
+index f3ac2e2d..d1490ab9 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -6,8 +6,9 @@
@@ -24151,7 +24151,7 @@ index f3ac2e2d..eaf71d20 100644
      }
      if (recreate && !g_lost && !g_vk.sc_lost) { /* not when this frame's create found the surface lost */
          vk_finish();
-@@ -544,6 +788,328 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
+@@ -544,6 +788,329 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
          g_vk.sc_lost = 0;
          g_lost = 1;
      }
@@ -24419,22 +24419,23 @@ index f3ac2e2d..eaf71d20 100644
 +    /* a pace to divide: no hitch, pause or catch-up burst between the frames */
 +    int steady = g_fg_period >= 1000000ull && g_fg_period <= 250000000ull && interval >= g_fg_period / 2 &&
 +                 interval < g_fg_period * 3 / 2;
-+    /* A real limiter (present_display_target): this frame pays its share of the target, carried over as a fraction,
-+       so the pictures are the ones the limit asks for and never one already shown. A limit between the game's pace and
-+       twice it (90 on 60) pays every second or third frame a generated one, 90 a second; twice the game's pace or more
-+       pays one a frame (classic 2x), and a typed limit above twice it pays up to PRESENT_FG_MAX_MIDS a frame: the 240
-+       preset on a 60 FPS game is three a frame */
++    /* A real limiter (present_display_target): this frame pays its share of the target, carried over as a fraction, so
++       the screen gets the number the limit asks for. With FSR 3 the pictures above the game's own frames are generated
++       where AMD's interpolation can make them (up to PRESENT_FG_MAX_MIDS a real frame) and repeats of the game's frame
++       for the rest (fg_schedule fills the phases it has no generated picture for with the frame itself), and with FSR 3
++       off every one of them is a repeat: 240 from a 30 FPS game is 8 a frame, 120 from 30 without FSR 3 is 4, and 90
++       from 60 alternates 1 and 2 as the fraction carries. None of it changes how often the game steps */
 +    int k = 1;
-+    if (steady && fg && side > 0 && target > side) {
++    if (steady && side > 0 && target > side) {
 +        g_fg_owed += (double)(target - side) / (double)side;
-+        while (g_fg_owed >= 1.0 && k < PRESENT_FG_MAX_MIDS + 1)
++        while (g_fg_owed >= 1.0 && k < FG_QMAX + 1)
 +            k++, g_fg_owed -= 1.0;
-+        if (g_fg_owed >= 1.0) g_fg_owed = 0; /* the display's ceiling pays no more, so nothing stays owed */
++        if (g_fg_owed >= 1.0) g_fg_owed = 0; /* the queue's ceiling pays no more, so nothing stays owed */
 +    } else
 +        g_fg_owed = 0;
 +    /* pictures to make for this frame even when its share isn't a whole picture yet: the real frame alone then keeps
 +       the half-frame delay the others have (fg_schedule's late), so the real frames stay evenly spaced */
-+    int mixed = steady && fg && side > 0 && target > side;
++    int mixed = steady && side > 0 && target > side;
 +    u32 dw = 0, dh = 0;
 +    present_dest_size(fw, fh, &dw, &dh);
 +    if (fg) {
@@ -24480,7 +24481,7 @@ index f3ac2e2d..eaf71d20 100644
  }
  
  /* the game queued a buffer for display: show it, letterboxed to the window. A frame that can't be shown (minimized,
-@@ -583,7 +1149,11 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
+@@ -583,7 +1150,11 @@ static void vkr_present_buffer(u64 cpu_addr, u32 w, u32 h, u32 pitch, u32 layout
          g_last_w = (u32)((u64)src->sw * x1 / src->w) - g_last_x;
          g_last_h = (u32)((u64)src->sh * y1 / src->h) - g_last_y;
      }
@@ -24493,7 +24494,7 @@ index f3ac2e2d..eaf71d20 100644
      __atomic_store_n(&g_shown_ns, plat_ns(), __ATOMIC_RELAXED);
      vk_unlock();
  }
-@@ -600,7 +1170,10 @@ static void vkr_refresh(void) {
+@@ -600,7 +1171,10 @@ static void vkr_refresh(void) {
      if (!vk_trylock()) return;
      last = now;
      vk_render_end();
@@ -24505,7 +24506,7 @@ index f3ac2e2d..eaf71d20 100644
      vk_unlock();
  }
  
-@@ -737,5 +1310,9 @@ const Renderer vk_renderer = {
+@@ -737,5 +1311,9 @@ const Renderer vk_renderer = {
      .refresh = vkr_refresh,
      .save = vk_pipeline_save,
      .release_window = vk_window_release,
@@ -25107,7 +25108,7 @@ index 6096f99a..1d994538 100644
                                       .dstOffsets = {{0, 0, 0}, {(i32)t->w, (i32)t->h, 1}}};
                      vk_barrier(cb, mid, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_NONE, 0,
 diff --git a/src/nx/gpu/vk/ui.c b/src/nx/gpu/vk/ui.c
-index e32e8bdf..9b9bbe78 100644
+index e32e8bdf..9e55d96a 100644
 --- a/src/nx/gpu/vk/ui.c
 +++ b/src/nx/gpu/vk/ui.c
 @@ -7,8 +7,11 @@
@@ -25148,20 +25149,20 @@ index e32e8bdf..9b9bbe78 100644
      overlay_draw(&list, sw, sh);
 +    overlay_toasts_draw(&list, sw, sh);
 +    if (g_settings.save_indicator) {
-+        /* The game's save data and how old it is, in the picture's top right corner: "Saved 4 min ago" while nothing
-+           is being written, "Saving..." and a red "Save failed", from the same activity the notice used, and from
-+           the save files' own times before the game writes anything this run (fs.c's save_seed) */
-+        char status[48];
-+        const char* message = pf_save_status(plat_ns(), status, sizeof status);
-+        int scale = sh >= 1440 ? 3 : sh >= 720 ? 2 : 1;
-+        int width = ((int)strlen(message) * 8 + 16) * scale;
-+        int height = 28 * scale, x = safe[0] + safe[2] - width - 12 * scale, y = safe[1] + 12 * scale;
-+        save_notice = 1;
-+        if (x < safe[0]) x = safe[0];
-+        if (y + height > safe[1] + safe[3]) y = safe[1];
-+        ui_fill(&list, (float)x, (float)y, (float)width, (float)height,
-+                !strcmp(message, "Save failed") ? 0xE6202020u : 0xB0101010u);
-+        ui_text(&list, x + 8 * scale, y + 6 * scale, scale, message, 0xFFFFFFFFu);
++        /* the game's save data being written, and for five seconds after it lands, in the picture's top right corner:
++           "Saving...", "Saved just now", or a red "Save failed"; then the corner is the game's again */
++        const char* message = pf_save_message(plat_ns());
++        if (message) {
++            int scale = sh >= 1440 ? 3 : sh >= 720 ? 2 : 1;
++            int width = ((int)strlen(message) * 8 + 16) * scale;
++            int height = 28 * scale, x = safe[0] + safe[2] - width - 12 * scale, y = safe[1] + 12 * scale;
++            save_notice = 1;
++            if (x < safe[0]) x = safe[0];
++            if (y + height > safe[1] + safe[3]) y = safe[1];
++            ui_fill(&list, (float)x, (float)y, (float)width, (float)height,
++                    !strcmp(message, "Save write failed") ? 0xE6202020u : 0xB0101010u);
++            ui_text(&list, x + 8 * scale, y + 6 * scale, scale, message, 0xFFFFFFFFu);
++        }
 +    }
      ui_unlock();
      n = list.n;
@@ -25713,46 +25714,10 @@ index db13c2d5..86e39a5e 100644
  VkFrontFace vk_render_front_face(const u32* r);
  void vk_render_draw_texture(GpuChannel* ch);
 diff --git a/src/nx/hle/filesystem/fs.c b/src/nx/hle/filesystem/fs.c
-index 354a1fce..d5ed818c 100644
+index 354a1fce..72d60bf4 100644
 --- a/src/nx/hle/filesystem/fs.c
 +++ b/src/nx/hle/filesystem/fs.c
-@@ -18,6 +18,7 @@
- #include "nx/runtime/platform/backend.h"
- #include "nx/runtime/platform/log.h"
- #include "nx/runtime/platform/plat.h"
-+#include "nx/runtime/platform/save_activity.h"
- #include "common/utilities/common.h"
- #include "nx/runtime/driver/container.h"
- #include "common/utilities/game_ini.h"
-@@ -382,6 +383,27 @@ static void overlays(void) {
-    data folder keeps */
- static int dump_has_exefs(const char* path) { return g_hle.fs.dfs && !strncmp(path, "exefs/", 6); }
- 
-+/* The save data's own clock: the newest write under save/system, save/device and save/user*, so the menu can say how
-+   old the game's save is before it has written anything this run. Callers hold tree.lock */
-+static void newest_save_write(const FsNode* node, uint64_t* newest) {
-+    const FsNode* child;
-+    uint64_t at;
-+    if (!node->is_dir) {
-+        if (fs_tree_mtime(&g_hle.fs.tree, node, &at) == FS_TREE_OK && at > *newest) *newest = at;
-+        return;
-+    }
-+    for (child = node->children; child; child = child->next) newest_save_write(child, newest);
-+}
-+static void save_seed(void) {
-+    FsNode *save = NULL, *kind;
-+    uint64_t newest = 0;
-+    if (!fs_tree_lookup(&g_hle.fs.tree, NULL, "save", &save) && save)
-+        for (kind = save->children; kind; kind = kind->next)
-+            if (!strcmp(kind->name, "system") || !strcmp(kind->name, "device") || !strncmp(kind->name, "user", 4))
-+                newest_save_write(kind, &newest);
-+    if (newest) pf_save_seeded(newest);
-+}
-+
- void fs_init(void) {
-     static const char* const apart[] = {"mods", NULL}; /* mods_open's */
-     FsTreeResult r = fs_tree_init_skipping(&g_hle.fs.tree, g_datadir, apart);
-@@ -391,9 +413,9 @@ void fs_init(void) {
+@@ -391,9 +391,9 @@ void fs_init(void) {
      memcpy(g_datadir, g_hle.fs.tree.base, n);
      if (n && g_datadir[n - 1] != '/' && g_datadir[n - 1] != '\\') g_datadir[n++] = '/';
      g_datadir[n] = 0;
@@ -25765,7 +25730,7 @@ index 354a1fce..d5ed818c 100644
      unsigned shared = 0, failed = 0;
      pm_lock(&g_hle.fs.tree.lock);
      /* the console empties the application's temporary storage when the application is launched, and a game finds it
-@@ -409,11 +431,13 @@ void fs_init(void) {
+@@ -409,11 +409,12 @@ void fs_init(void) {
          FsNode* node;
          if (g_hle.fs.dump.patch.found) break; /* an update's, read over the game's dump: the game's files unread */
          if (fs_tree_lookup(&g_hle.fs.tree, NULL, shared_paths[i], &node)) continue;
@@ -25773,14 +25738,13 @@ index 354a1fce..d5ed818c 100644
 +        r = fs_tree_share(&g_hle.fs.tree, node, 1024, &shared, &failed);
          if (r != FS_TREE_OK) fatal("Could not map %s%s (error %d)", g_datadir, shared_paths[i], r);
      }
-+    save_seed(); /* the save already on disk, for the corner before the game writes this run */
      pm_unlock(&g_hle.fs.tree.lock);
      LOG("fs: %u RomFS/ExeFS files mapped for the whole run\n", shared);
 +    if (shared + failed == 1024) LOG("fs: startup mapping budget reached; other files are read on demand\n");
      if (failed) WARN("fs: %u RomFS/ExeFS files could not be mapped, they are read on demand\n", failed);
  }
  
-@@ -957,7 +981,22 @@ static FILE* rf_open(FsNode* node) {
+@@ -957,7 +958,22 @@ static FILE* rf_open(FsNode* node) {
      return f;
  }
  /* size bytes of the file at offset rel into dst: 0, or -1 with the part that couldn't be read zeroed */
@@ -25803,10 +25767,11 @@ index 354a1fce..d5ed818c 100644
      FsNode* node = rf->node;
      i64 got = (i64)size;
      if (!node) return image_read(rf->base + rel, dst, size, 0); /* the game's image's, under the mods' */
-@@ -1183,6 +1222,14 @@ static int nn_fssrv_sf_IFile_Read(SvcObj* self, nn_fs_ReadOption option, i64 off
+@@ -1183,6 +1199,15 @@ static int nn_fssrv_sf_IFile_Read(SvcObj* self, nn_fs_ReadOption option, i64 off
      *bytes_read = (i64)n;
      R_SUCCEED();
  }
++#include "nx/runtime/platform/save_activity.h"
 +/* Called under tree.lock: classify by nodes, so an SD-card path merely containing "save" cannot trigger the HUD. */
 +static int save_node(const FsNode* node) {
 +    const FsNode* kind = NULL;
@@ -25818,7 +25783,7 @@ index 354a1fce..d5ed818c 100644
  static int nn_fssrv_sf_IFile_Write(SvcObj* self, nn_fs_WriteOption option, i64 offset, IpcBuf buffer, i64 size) {
      FileData* f = self->data;
      u64 off = (u64)offset, sz = (u64)size, a = buffer.addr;
-@@ -1195,9 +1242,13 @@ static int nn_fssrv_sf_IFile_Write(SvcObj* self, nn_fs_WriteOption option, i64 o
+@@ -1195,9 +1220,13 @@ static int nn_fssrv_sf_IFile_Write(SvcObj* self, nn_fs_WriteOption option, i64 o
      if (off + sz > f->node->size && !(f->mode & 4)) R_THROW(FS_NO_APPEND);
      R_UNLESS(!file_seek(f->f, off), FS_OUT_OF_RANGE);
      own_acquire(a, sz); /* write() can't wait on memory the GPU holds: it lands first */
@@ -26637,7 +26602,7 @@ index 408db9ed..f5c8b10e 100644
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
 new file mode 100644
-index 00000000..05f98361
+index 00000000..6260b5b1
 --- /dev/null
 +++ b/src/nx/runtime/pf_engine_version.h
 @@ -0,0 +1,6 @@
@@ -26645,7 +26610,7 @@ index 00000000..05f98361
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.50"
++#define PF_ENGINE_VERSION "1.51"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5a..38b92670 100644
@@ -27276,7 +27241,7 @@ index 0821ef7c..c440b934 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2a..a49dacef 100644
+index 441a8c2a..c5010997 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
 @@ -2,9 +2,16 @@
@@ -27696,7 +27661,7 @@ index 441a8c2a..a49dacef 100644
 +    static const char* const hints[] = {"Esc / right-click / Home: return to game.", "Esc / Back: the menu.",
                                          "Tap one to show or hide it."};
 -    int r, n = items();
-+    static char fps_line[OVERLAY_COLS_MAX + 1], head[OVERLAY_COLS_MAX + 1], save_line[48];
++    static char fps_line[OVERLAY_COLS_MAX + 1], head[OVERLAY_COLS_MAX + 1];
 +    int r, n = items(), live, fps, fg, side, target;
 +    char limit_word[32];
      memset(d, 0, sizeof *d);
@@ -27710,7 +27675,7 @@ index 441a8c2a..a49dacef 100644
 +        head[at] = 0;
 +    }
 +    d->title = head;
-+    d->status = pf_save_status(plat_ns(), save_line, sizeof save_line); /* the game's save data, and its age */
++    d->status = pf_save_message(plat_ns()); /* Saving... / Saved just now for five seconds / the failure, else NULL */
      d->user = 1;
 -    d->para[0].text = page == PAGE_PADS ? pads_hint(pads, size) : hints[page];
 +    d->poster = page == PAGE_MAIN;
@@ -28415,103 +28380,63 @@ index ebfd9c67..dc8cc1fd 100644
      SetThreadPriority(h, THREAD_PRIORITY_HIGHEST);
 diff --git a/src/nx/runtime/platform/save_activity.c b/src/nx/runtime/platform/save_activity.c
 new file mode 100644
-index 00000000..bb769245
+index 00000000..4bc5eda7
 --- /dev/null
 +++ b/src/nx/runtime/platform/save_activity.c
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,34 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#include "nx/runtime/platform/save_activity.h"
 +#include <stddef.h>
-+#include <stdio.h>
-+#include <time.h>
 +static unsigned active;
-+static int pending, pending_error;
-+static uint64_t recent_until, error_until;
-+/* When the game's save data last changed, UTC Unix seconds: a write this run, or what was on disk when it was
-+   indexed. 0 for none, which the corner reads as "No save yet" */
-+static unsigned long last_unix;
-+static unsigned long unix_now(void) {
-+    time_t t = time(NULL);
-+    return t > 0 ? (unsigned long)t : 0;
-+}
++static int pending_error;
++static uint64_t error_until;
++/* when the game's save data was last written and flushed, 0 before the first: its notice is shown for five seconds */
++static uint64_t saved_at;
++#define SAVE_NOTICE_NS 5000000000ull
 +void pf_save_begin(void) { __atomic_add_fetch(&active, 1, __ATOMIC_ACQ_REL); }
 +void pf_save_end(uint64_t now, int success) {
 +    /* Filesystem calls serialize on tree.lock. Error remains visible across subsequent successful chunks. */
-+    __atomic_store_n(&recent_until, now + 1200000000ull, __ATOMIC_RELEASE);
 +    if (!success) {
 +        __atomic_store_n(&error_until, now + 6000000000ull, __ATOMIC_RELEASE);
 +        __atomic_store_n(&pending_error, 1, __ATOMIC_RELEASE);
-+    } else {
-+        unsigned long at = unix_now();
-+        if (at) __atomic_store_n(&last_unix, at, __ATOMIC_RELEASE);
-+    }
-+    __atomic_store_n(&pending, 1, __ATOMIC_RELEASE);
++    } else
++        __atomic_store_n(&saved_at, now, __ATOMIC_RELEASE);
 +    __atomic_sub_fetch(&active, 1, __ATOMIC_ACQ_REL);
 +}
 +const char* pf_save_message(uint64_t now) {
++    uint64_t at;
 +    if (__atomic_load_n(&pending_error, __ATOMIC_ACQUIRE) || now < __atomic_load_n(&error_until, __ATOMIC_ACQUIRE)) return "Save write failed";
-+    if (__atomic_load_n(&pending, __ATOMIC_ACQUIRE) || __atomic_load_n(&active, __ATOMIC_ACQUIRE) || now < __atomic_load_n(&recent_until, __ATOMIC_ACQUIRE))
-+        return "Saving...";
++    if (__atomic_load_n(&active, __ATOMIC_ACQUIRE)) return "Saving...";
++    /* five seconds, then nothing at all: a corner that said when the game last saved for the whole session said it
++       for ever, and after that the game's own save screen is the place to look */
++    at = __atomic_load_n(&saved_at, __ATOMIC_ACQUIRE);
++    if (at && now >= at && now - at < SAVE_NOTICE_NS) return "Saved just now";
 +    return NULL;
 +}
-+void pf_save_seeded(uint64_t unix_ms) {
-+    unsigned long at = (unsigned long)(unix_ms / 1000u);
-+    if (at) __atomic_store_n(&last_unix, at, __ATOMIC_RELEASE);
-+}
-+const char* pf_save_status(uint64_t now, char* buf, size_t size) {
-+    unsigned long at, now_unix;
-+    long age;
-+    if (!buf || !size) return "";
-+    if (__atomic_load_n(&pending_error, __ATOMIC_ACQUIRE) || now < __atomic_load_n(&error_until, __ATOMIC_ACQUIRE))
-+        snprintf(buf, size, "Save failed");
-+    else if (__atomic_load_n(&pending, __ATOMIC_ACQUIRE) || __atomic_load_n(&active, __ATOMIC_ACQUIRE) ||
-+             now < __atomic_load_n(&recent_until, __ATOMIC_ACQUIRE))
-+        snprintf(buf, size, "Saving...");
-+    else if (!(at = __atomic_load_n(&last_unix, __ATOMIC_ACQUIRE)) || !(now_unix = unix_now()))
-+        snprintf(buf, size, "No save yet");
-+    else {
-+        /* a save older than the clock (a file copied in with a future time) reads as just now, never negative */
-+        age = now_unix > at ? (long)(now_unix - at) : 0;
-+        if (age < 60)
-+            snprintf(buf, size, "Saved just now");
-+        else if (age < 3600)
-+            snprintf(buf, size, "Saved %ld min ago", age / 60);
-+        else if (age < 172800)
-+            snprintf(buf, size, "Saved %ld h ago", age / 3600);
-+        else
-+            snprintf(buf, size, "Saved %ld days ago", age / 86400);
-+    }
-+    return buf;
-+}
 +void pf_save_presented(uint64_t now) {
-+    if (__atomic_exchange_n(&pending, 0, __ATOMIC_ACQ_REL))
-+        __atomic_store_n(&recent_until, now + 1200000000ull, __ATOMIC_RELEASE);
++    /* the frame shows the failure: it stays red for its six seconds, and the next one starts a fresh notice */
 +    if (__atomic_exchange_n(&pending_error, 0, __ATOMIC_ACQ_REL))
 +        __atomic_store_n(&error_until, now + 6000000000ull, __ATOMIC_RELEASE);
 +}
 diff --git a/src/nx/runtime/platform/save_activity.h b/src/nx/runtime/platform/save_activity.h
 new file mode 100644
-index 00000000..53ef9e4c
+index 00000000..226c9b02
 --- /dev/null
 +++ b/src/nx/runtime/platform/save_activity.h
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,17 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#ifndef PF_SAVE_ACTIVITY_H
 +#define PF_SAVE_ACTIVITY_H
-+#include <stddef.h>
 +#include <stdint.h>
 +/* File activity, never a claim that the game created a checkpoint. Times are monotonic nanoseconds. */
 +void pf_save_begin(void);
 +void pf_save_end(uint64_t now, int success);
++/* What the corner and the menu's head band say now, or NULL when they say nothing: "Saving..." while a write is in
++   flight (and for a moment after one, so a short write during a loading pause is still seen), "Save write failed" for
++   six seconds after one fails, and "Saved just now" for five seconds after the last one succeeded. Then it goes. */
 +const char* pf_save_message(uint64_t now);
 +/* A frame has drawn the notice: keep short writes visible even if loading blocked presentation. */
 +void pf_save_presented(uint64_t now);
-+/* The newest write under the game's save data found when the filesystem was indexed (UTC Unix milliseconds, 0 for
-+   none): the corner reads the save the game already made before it writes anything this run */
-+void pf_save_seeded(uint64_t unix_ms);
-+/* The age of the game's save data, as the corner and the menu show it: "Saved 4 min ago", "Saving...", "Save
-+   failed" or "No save yet". Writes into buf (48 bytes is enough) and returns it */
-+const char* pf_save_status(uint64_t now, char* buf, size_t size);
 +static inline int pf_hide_cursor(int enabled, int fullscreen, int focused, int menu, int system_key) {
 +    return enabled && fullscreen && focused && !menu && !system_key;
 +}
@@ -28771,7 +28696,7 @@ index 0ccd9f1e..86423a46 100644
  const u32* ui_atlas(int* w, int* h, u32* version);
  void ui_atlas_done(void);
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181e..70567691 100644
+index 2bd6181e..4a4e70ef 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
 @@ -9,6 +9,7 @@
@@ -28782,7 +28707,7 @@ index 2bd6181e..70567691 100644
  #include "nx/runtime/platform/plat.h"
  
  int g_frames;
-@@ -31,19 +32,223 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,19 +32,222 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -28809,13 +28734,14 @@ index 2bd6181e..70567691 100644
 +
 +/* Guest wait between vi dequeues: the game's own pace, whatever the FPS limit asks (Engine 1.49). A game that asked
 +   for a swap interval always waits that interval: fps_limit and frame generation change which pictures reach the
-+   display (present_show_due, the generated ones), never how often the game steps. A shorter wait runs a game that
-+   counts its frames faster (a 30 FPS game at 120 ran four times too fast, characters fell through floors), a longer
-+   one in slow motion. Engine 1.48 had the limit be the game's own frame rate with the speed lock off, so a 30 FPS
-+   game at 240 ran eight times its console speed; that is gone, and every game is back at its own speed whatever the
-+   limit asks, automatically. A game that asks for interval 0 times itself: a numeric limit is its only pace, and
-+   Maximum (fps_limit=0, the FPS limit menu's top entry) leaves it to its own timers. Game speed (SNX_FPS_GAME) and
-+   the lock are both the console's pace; `lock` stays for the settings row and Esc, and pacing ignores it. */
++   display (present_show_due, the generated and repeated ones), never how often the game steps. A shorter wait runs a
++   game that counts its frames faster (a 30 FPS game at 120 ran four times too fast, characters fell through floors),
++   a longer one in slow motion. Engine 1.48 had the limit be the game's own frame rate with the speed lock off, so a
++   30 FPS game at 240 ran eight times its console speed; that is gone, and every game is back at its own speed
++   whatever the limit asks, automatically. A game that asks for interval 0 times itself: a numeric limit is its only
++   pace, and Maximum (fps_limit=0, the FPS limit menu's top entry) leaves it to its own timers. Game speed
++   (SNX_FPS_GAME) and the lock are both the console's pace; `lock` stays for the settings row and Esc, and pacing
++   ignores it. */
 +u64 present_period(int fps, u32 interval, int lock) {
 +    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
 +    (void)lock;
@@ -28908,32 +28834,30 @@ index 2bd6181e..70567691 100644
 +           __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED);
 +}
 +
-+/* PRESENT_FG_MAX_MIDS (nx/runtime/options.h, the renderer's FG_MAX_MIDS) is the most generated pictures one real frame
-+   pays with: 1 + 3 is four times the game's frames, 240 from 60. Pictures a second on the display, what Display FPS shows. A real limiter: every picture is a distinct one, the game's
-+   frames (at most the limit) and, with FSR 3 frame generation, generated pictures between them. No frame is shown twice
-+   to make the number bigger (Engine 1.41 and earlier repeated held copies up to the limit, and twice the limit with
-+   FSR 3; those repeats were what the GPU was doing when it was reset in a long Pokemon run). Frame generation doubles
-+   the game's frames up to the limit the player typed (any number from 10 to 1000) and, with vsync, the display's
-+   refresh: a limit between the game's pace and twice it (90 on a 60 FPS game) gets exactly that many, a generated
-+   picture after as many real frames as the limit pays for. A typed limit above twice the game's pace (144, 165, 200,
-+   240) is paid with up to PRESENT_FG_MAX_MIDS generated pictures a frame, so the 240 preset is 240 in a 60 FPS game
-+   where the panel allows it (vsync caps it at the refresh). All of that is the game's own pace: every limit, Game
-+   speed and Maximum included, keeps the console's pace and the pipeline makes the extra pictures (Engine 1.49; the
-+   limit never runs the game faster). Game speed is the game's own pace, doubled by FSR 3. 0 while the game's pace
-+   isn't known (a self-timed game without a limit) */
++/* Pictures a second on the display, what Display FPS shows. The number the player picked is the pictures the limiter
++   asks the screen for, and PortForge FSR 3 frame generation doubles it - the way the app's FPS limit reads on a PC
++   game with a 2x frame-generation mode: 120 typed is 240 on screen with FSR 3 on, and 120 with it off. Game speed
++   (SNX_FPS_GAME) stays the console's own pace, doubled by FSR 3; Maximum (0) is the panel's refresh, doubled by FSR 3
++   too, or the game's own frames while the refresh isn't known. The game keeps its own speed whatever the number
++   (Engine 1.49): the pictures above its own frames are generated where AMD's interpolation can make them (up to
++   PRESENT_FG_MAX_MIDS a real frame, four times the game's frames) and repeats of the game's frame for the rest, so
++   240 from a 30 FPS game is 8 pictures a frame - one real, three generated, four repeats - and never a faster game.
++   VSync caps it at the display's refresh. 0 while the game's pace isn't known (a self-timed game with no limit) */
 +int present_display_target(int fps_limit, int frame_generation) {
-+    int side = present_game_side_fps(fps_limit), hz = __atomic_load_n(&g_display_hz, __ATOMIC_RELAXED), want, cap;
++    int side = present_game_side_fps(fps_limit), hz = __atomic_load_n(&g_display_hz, __ATOMIC_RELAXED), base, want;
 +    if (side <= 0) return 0;
 +    /* paced_display=0: only the game's own frames reach the display, whatever the limit above them */
 +    if (!__atomic_load_n(&g_settings.paced_display, __ATOMIC_RELAXED)) return side;
-+    cap = fps_limit > 0 ? fps_limit : 0;
-+    if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && (!cap || hz < cap)) cap = hz;
-+    want = frame_generation ? side * 2 : side;
-+    /* a limit above twice the game's pace, or Maximum (0), is paid with up to three generated pictures a frame -
-+       four times the game's own, 240 from a 60 FPS game and 120 from a 30 FPS game - while the game keeps its own
-+       console pace and the pipeline is what makes the extra pictures */
-+    if (frame_generation && (fps_limit == 0 || fps_limit > want)) want = side * (PRESENT_FG_MAX_MIDS + 1);
-+    if (cap && want > cap) want = cap > side ? cap : side;
++    if (fps_limit == SNX_FPS_GAME) /* the console's own pace: what the game makes, doubled by FSR 3 */
++        base = side;
++    else if (fps_limit > 0) /* the limiter's number, as typed */
++        base = fps_limit;
++    else /* Maximum: the panel, or the game's own frames while its refresh isn't known */
++        base = hz > 0 ? hz : side;
++    want = frame_generation ? base * 2 : base;
++    if (want > 1000) want = 1000; /* the limiter's own ceiling, doubled at most: 1000 typeable is 1000 */
++    if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && want > hz) want = hz;
++    if (want < side) want = side; /* a limit under the game's own frames shows only the ones the limit lets on */
 +    return want;
 +}
 +
@@ -29011,7 +28935,7 @@ index 2bd6181e..70567691 100644
 +    if (next > now) plat_wait_until(next);
  }
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac55..c93250a4 100644
+index be57ac55..7c675dc2 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
 @@ -80,13 +80,150 @@ setting Game mods off
@@ -29035,7 +28959,7 @@ index be57ac55..c93250a4 100644
 +    int 0 1
 +    default 1
 +    startup
-+    help Show the game's save data and how old it is in the picture's top right corner (Saved 4 min ago, Saving..., Save failed): the files the game itself wrote. This reports the game's own save; it does not create a save point or save state.
++    help Show Saving... while the game writes save data and Saved just now for five seconds after it lands, in the picture's top right corner and in the Escape menu; a failed write stays red for six seconds. It reports the game's own files; it does not create a save point or save state.
 +setting AMD frame generation
 +    key amd_frame_generation
 +    int 0 1
@@ -30378,7 +30302,7 @@ index 00000000..e6859b79
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45d..88814df8 100644
+index 53c5e45d..a09da1d7 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,8 @@
@@ -30494,7 +30418,7 @@ index 53c5e45d..88814df8 100644
  static void pacing(void) {
      const u64 refresh = 1000000000u / 60;
      u64 before;
-@@ -84,12 +176,198 @@ static void pacing(void) {
+@@ -84,12 +176,200 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
@@ -30573,47 +30497,48 @@ index 53c5e45d..88814df8 100644
 +    CHECK(present_period(120, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 120");
 +    CHECK(present_period(240, 2, 1) == 2 * refresh, "frame generation sped a 30 FPS game up to 240");
 +    /* pacing() left the last swap interval at 1, so the game pace is already 60 Hz */
-+    /* A real limiter: Display FPS is distinct pictures, the game's frames (never above the limit) and, with FSR 3 frame
-+       generation, one generated picture between each two of them while the limit and the display leave room for
-+       twice the game's frames. No frame is repeated to reach a number. With the lock off the display gets the game's
-+       own frames - the limit is the game's own rate - so frame generation doubles them at most */
++    /* The limiter's number is the pictures a second on screen, doubled by FSR 3 frame generation: 120 typed is 240
++       with it on and 120 with it off (Engine 1.51). The game keeps its own speed; the pictures above its own frames
++       are generated where AMD's interpolation can make them and repeats of the game's frame for the rest. Game speed
++       stays the console's pace, doubled by FSR 3, and Maximum is the panel - or the game's own frames while its
++       refresh isn't known */
 +    g_settings.vsync = 1;
 +    CHECK(present_display_target(30, 0) == 30, "30 without FG is not 30 on screen");
 +    CHECK(present_display_target(60, 0) == 60, "60 without FG is not 60 on screen");
-+    CHECK(present_display_target(120, 0) == 60, "120 without FG repeated the game's 60 frames");
-+    CHECK(present_display_target(240, 0) == 60, "240 without FG repeated the game's 60 frames");
-+    CHECK(present_display_target(0, 0) == 60, "unlimited without FG is not the game's 60");
++    CHECK(present_display_target(120, 0) == 120, "120 without FG is not 120 on screen");
++    CHECK(present_display_target(240, 0) == 240, "240 without FG is not 240 on screen");
++    CHECK(present_display_target(0, 0) == 60, "Maximum without FG and without a refresh known is not the game's 60");
 +    CHECK(present_display_target(SNX_FPS_GAME, 0) == 60, "game speed without FG is not the game's 60");
-+    CHECK(present_display_target(30, 1) == 30, "a 30 limit with FG went over 30");
-+    CHECK(present_display_target(60, 1) == 60, "a 60 limit with FG went over 60");
-+    CHECK(present_display_target(120, 1) == 120, "120 with FG is not the game's 60 doubled");
-+    CHECK(present_display_target(90, 1) == 90, "a typed 90 with FG is not locked to 90");
-+    CHECK(present_display_target(75, 1) == 75 && present_display_target(75, 0) == 60, "a typed 75 is not 75 with FG, 60 without");
-+    CHECK(present_display_target(121, 1) == 121 && present_display_target(119, 1) == 119,
-+          "just above twice the game's pace is not the typed rate");
-+    /* a typed limit above twice the game's pace is paid with generated pictures, up to PRESENT_FG_MAX_MIDS a frame:
-+       the 240 preset on a 60 FPS game is 240, not the 120 twice its frames used to show */
-+    CHECK(present_display_target(144, 1) == 144, "a typed 144 with FG is not 144 on a 60 FPS game");
-+    CHECK(present_display_target(165, 1) == 165, "a typed 165 with FG is not 165 on a 60 FPS game");
-+    CHECK(present_display_target(200, 1) == 200, "a typed 200 with FG is not 200 on a 60 FPS game");
-+    CHECK(present_display_target(240, 1) == 240, "240 with FG is not 240 on a 60 FPS game");
-+    CHECK(present_display_target(1000, 1) == 240, "1000 with FG went past four pictures a frame");
-+    CHECK(present_display_target(0, 1) == 240, "unlimited with FG is not the most the pipeline can make (four a frame)");
++    CHECK(present_display_target(30, 1) == 60, "a 30 limit with FG is not 60 on screen");
++    CHECK(present_display_target(60, 1) == 120, "a 60 limit with FG is not 120 on screen");
++    CHECK(present_display_target(120, 1) == 240, "120 with FG is not 240 on screen");
++    CHECK(present_display_target(90, 1) == 180, "a typed 90 with FG is not 180 on screen");
++    CHECK(present_display_target(75, 1) == 150 && present_display_target(75, 0) == 75, "a typed 75 is not 150 with FG, 75 without");
++    CHECK(present_display_target(121, 1) == 242 && present_display_target(119, 1) == 238,
++          "a typed number with FG is not twice itself");
++    CHECK(present_display_target(144, 1) == 288, "a typed 144 with FG is not 288 on a 60 FPS game");
++    CHECK(present_display_target(165, 1) == 330, "a typed 165 with FG is not 330 on a 60 FPS game");
++    CHECK(present_display_target(200, 1) == 400, "a typed 200 with FG is not 400 on a 60 FPS game");
++    CHECK(present_display_target(240, 1) == 480, "240 with FG is not 480 on a 60 FPS game");
++    CHECK(present_display_target(1000, 0) == 1000 && present_display_target(1000, 1) == 1000,
++          "1000 went past the limiter's own ceiling");
++    CHECK(present_display_target(0, 1) == 120, "Maximum with FG and no refresh known is not the game's 60 doubled");
 +    CHECK(present_display_target(SNX_FPS_GAME, 1) == 120, "game speed with FG is not the game's 60 doubled");
-+    CHECK(present_expected_display_fps(144, 1) == present_display_target(144, 1), "Esc expects another rate");
++    CHECK(present_expected_display_fps(120, 1) == present_display_target(120, 1), "Esc expects another rate");
 +    /* with vsync never more than the display refreshes */
 +    g_display_hz = 144;
-+    CHECK(present_display_target(120, 1) == 120, "a 144 Hz display lost FG at 120");
++    CHECK(present_display_target(120, 1) == 144, "a 144 Hz display was paced above its refresh for 120 with FG");
++    CHECK(present_display_target(60, 1) == 120, "a 144 Hz display lost 120 with FG at 60");
 +    CHECK(present_display_target(240, 1) == 144, "a 144 Hz display was paced above its refresh for 240");
-+    CHECK(present_display_target(0, 1) == 144, "a 144 Hz display was paced above its refresh for unlimited");
-+    CHECK(present_display_target(240, 0) == 60, "a 144 Hz display was given repeats without FG");
++    CHECK(present_display_target(0, 1) == 144, "a 144 Hz display was paced above its refresh for Maximum");
++    CHECK(present_display_target(240, 0) == 144, "a 144 Hz display was paced above its refresh for 240 without FG");
 +    g_display_hz = 60;
-+    CHECK(present_display_target(60, 1) == 60, "a 60 Hz display got generated pictures it can't show");
-+    CHECK(present_display_target(0, 1) == 60, "a 60 Hz display got generated pictures it can't show, unlimited");
++    CHECK(present_display_target(60, 1) == 60, "a 60 Hz display got pictures it can't show");
++    CHECK(present_display_target(0, 1) == 60, "a 60 Hz display got pictures it can't show, Maximum");
 +    g_settings.vsync = 0;
-+    CHECK(present_display_target(120, 0) == 60, "vsync off repeated frames without FG");
-+    CHECK(present_display_target(120, 1) == 120, "vsync off still capped FG at the display's 60");
-+    CHECK(present_display_target(0, 1) == 240, "vsync off capped unlimited at the display's 60");
++    CHECK(present_display_target(120, 0) == 120, "vsync off lost the typed 120 without FG");
++    CHECK(present_display_target(120, 1) == 240, "vsync off still capped FG at the display's 60");
++    CHECK(present_display_target(0, 1) == 120, "vsync off capped Maximum at the display's 60");
 +    g_settings.vsync = 1;
 +    g_display_hz = 280;
 +    g_opt_fps = 120;
@@ -30632,11 +30557,12 @@ index 53c5e45d..88814df8 100644
 +    present_pace(2);
 +    CHECK(slept_ns - before == 2 * refresh, "FG + 60 FPS on a 30 FPS game waited %llu ns, not one game frame",
 +          (unsigned long long)(slept_ns - before));
-+    /* a 30 FPS game (Zelda BotW) on a 280 Hz display: every limit the menu offers, FSR 3 off and on */
++    /* a 30 FPS game (Zelda BotW) on a 280 Hz display: every limit the menu offers, FSR 3 off and on. The limiter's
++       number is the rate asked for (doubled by FSR 3) and the rest of the pictures repeat the game's frame, so the
++       game still steps 30 times a second */
 +    {
-+        /* a 30 FPS game reaches four times its own frames at most: 120, whatever is typed above that */
-+        static const int want[][3] = {{SNX_FPS_GAME, 30, 60}, {0, 30, 120},    {30, 30, 30},   {60, 30, 60},
-+                                      {120, 30, 120},        {144, 30, 120},  {240, 30, 120},  {20, 20, 20}};
++        static const int want[][3] = {{SNX_FPS_GAME, 30, 60}, {0, 280, 280},   {30, 30, 60},   {60, 60, 120},
++                                      {120, 120, 240},       {144, 144, 280}, {240, 240, 280}, {20, 20, 40}};
 +        for (size_t w = 0; w < sizeof want / sizeof *want; w++) {
 +            CHECK(present_display_target(want[w][0], 0) == want[w][1], "a 30 FPS game, limit %d, FSR 3 off: %d, not %d",
 +                  want[w][0], present_display_target(want[w][0], 0), want[w][1]);
@@ -30648,7 +30574,7 @@ index 53c5e45d..88814df8 100644
 +    present_pace(1);
 +    g_opt_frame_generation = 0;
 +    CHECK(present_period(120, 1, 1) == refresh, "without FG a higher cap sped the game up");
-+    CHECK(present_expected_display_fps(120, 0) == 60, "without FG the display repeated the game's frames");
++    CHECK(present_expected_display_fps(120, 0) == 120, "without FG the display did not reach the limit typed");
 +    CHECK(present_expected_display_fps(30, 0) == 30, "without FG a lower cap is the display rate, not 60");
 +    g_opt_fps = 120;
 +    now_ns += 100 * refresh;
@@ -30695,7 +30621,7 @@ index 53c5e45d..88814df8 100644
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -97,7 +375,9 @@ int main(void) {
+@@ -97,7 +377,9 @@ int main(void) {
      i32 crop[4] = {0, 0, 0, 0};
      clock_start();
      ticks();
@@ -30707,67 +30633,48 @@ index 53c5e45d..88814df8 100644
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
 diff --git a/tests/save_activity.c b/tests/save_activity.c
 new file mode 100644
-index 00000000..c49bb6f2
+index 00000000..3cf654af
 --- /dev/null
 +++ b/tests/save_activity.c
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,40 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#include "nx/runtime/platform/save_activity.h"
 +#include <assert.h>
 +#include <stdio.h>
 +#include <string.h>
-+#include <time.h>
-+/* the save's age reads the wall clock, as the corner does: the seeds are relative to it */
-+static uint64_t now_ms(void) { return (uint64_t)time(NULL) * 1000u; }
-+static const char* at(uint64_t seeded, uint64_t now) {
-+    static char buf[48];
-+    pf_save_seeded(seeded);
-+    return pf_save_status(now, buf, sizeof buf);
-+}
 +int main(void) {
-+    char buf[48];
-+    /* the corner's line: the game's save data and its age, before and after this run's writes */
-+    assert(!strcmp(pf_save_status(0, buf, sizeof buf), "No save yet"));
-+    assert(!strcmp(at(now_ms(), 0), "Saved just now"));
-+    assert(!strcmp(at(now_ms() + 60000u, 0), "Saved just now")); /* a file from a clock ahead of this one */
-+    assert(!strcmp(at(now_ms() - 60000u, 0), "Saved 1 min ago"));
-+    assert(!strcmp(at(now_ms() - 300000u, 0), "Saved 5 min ago"));
-+    assert(!strcmp(at(now_ms() - 10800000u, 0), "Saved 3 h ago"));
-+    assert(!strcmp(at(now_ms() - 259200000u, 0), "Saved 3 days ago"));
-+    pf_save_begin();
-+    assert(!strcmp(pf_save_status(0, buf, sizeof buf), "Saving..."));
-+    pf_save_end(0, 0);
-+    assert(!strcmp(pf_save_status(0, buf, sizeof buf), "Save failed"));
-+    assert(!strcmp(pf_save_status(5000000000ull, buf, sizeof buf), "Save failed"));
-+    pf_save_presented(0);
-+    pf_save_seeded(now_ms());
-+    assert(!strcmp(pf_save_status(7000000000ull, buf, sizeof buf), "Saved just now")); /* 6 s after the failure */
-+    assert(!pf_save_message(7000000000ull));
++    /* nothing to say before the first write */
++    assert(!pf_save_message(0));
 +    pf_save_begin();
 +    assert(!strcmp(pf_save_message(9000000000ull), "Saving..."));
 +    pf_save_end(9000000000ull, 1);
-+    pf_save_presented(9000000000ull);
-+    assert(pf_save_message(10000000000ull));
-+    assert(!pf_save_message(11000000000ull));
-+    pf_save_begin(); pf_save_end(12000000000ull, 0);
-+    pf_save_presented(12000000000ull);
-+    assert(!strcmp(pf_save_message(13000000000ull), "Save write failed"));
-+    assert(!strcmp(pf_save_status(13000000000ull, buf, sizeof buf), "Save failed"));
-+    pf_save_begin(); pf_save_end(14000000000ull, 1);
-+    pf_save_presented(14000000000ull);
-+    assert(!strcmp(pf_save_message(15000000000ull), "Save write failed"));
-+    assert(!pf_save_message(19000000000ull));
-+    assert(!strcmp(pf_save_status(19000000000ull, buf, sizeof buf), "Saved just now"));
-+    pf_save_begin(); pf_save_end(20000000000ull, 1);
-+    assert(pf_save_message(30000000000ull)); /* a ten-second loading pause cannot swallow the notice */
-+    pf_save_presented(30000000000ull);
-+    assert(pf_save_message(31000000000ull));
-+    assert(!pf_save_message(32000000000ull));
++    /* the success is shown for five seconds from the write */
++    assert(!strcmp(pf_save_message(9000000001ull), "Saved just now"));
++    pf_save_presented(9000000001ull);
++    assert(!strcmp(pf_save_message(11000000001ull), "Saved just now"));
++    assert(!strcmp(pf_save_message(13999999999ull), "Saved just now"));
++    assert(!pf_save_message(14000000000ull)); /* five seconds, then the corner is the game's again */
++    assert(!pf_save_message(60000000000ull));
++    /* a failure is red for six seconds */
++    pf_save_begin(); pf_save_end(20000000000ull, 0);
++    assert(!strcmp(pf_save_message(20000000000ull), "Save write failed"));
++    pf_save_presented(20000000000ull);
++    assert(!strcmp(pf_save_message(25900000000ull), "Save write failed"));
++    /* the next save is shown as one: its own five seconds, not the failure's window */
++    pf_save_begin(); pf_save_end(26000000000ull, 1);
++    pf_save_presented(26000000000ull);
++    assert(!strcmp(pf_save_message(27500000000ull), "Saved just now"));
++    assert(!pf_save_message(31000000000ull));
++    /* a long blocked frame: the save was four seconds before the frame that can show it */
++    pf_save_begin(); pf_save_end(46000000000ull, 1);
++    assert(!strcmp(pf_save_message(50000000000ull), "Saved just now"));
++    pf_save_presented(50000000000ull);
++    assert(!pf_save_message(51000000000ull));
 +    for (int bits = 0; bits < 32; ++bits) {
 +        int hide = pf_hide_cursor(bits & 1, bits & 2, bits & 4, bits & 8, bits & 16);
 +        assert(hide == (bits == 7));
 +    }
-+    puts("save_activity: save age, no-save, expiry, write failure, fullscreen/menu/focus/system-key policy passed");
++    puts("save_activity: five-second save notice, expiry, write failure, fullscreen/menu/focus/system-key policy passed");
 +    return 0;
 +}
 diff --git a/tests/tex_upload_rows.c b/tests/tex_upload_rows.c

@@ -8,7 +8,7 @@ namespace PortForge
     public sealed class GlobalSettingsPanel : UserControl
     {
         private readonly CheckBox enabled = Check("Apply these settings to every game", true), fullscreen = Check("Start fullscreen", false),
-            cursor = Check("Hide cursor during fullscreen play", true), indicator = Check("Show save activity and the save's age", true),
+            cursor = Check("Hide cursor during fullscreen play", true), indicator = Check("Show save activity", true),
             vsync = Check("VSync", true), smoothing = Check("Smooth jagged edges", false),
             graph = Check("Show frame-time graph in game (F7 toggles it)", false), trace = Check("Record frame-time trace (to find hitches)", false),
             trueRes = Check("Match screen-shaped render targets to the selected resolution (experimental)", true),
@@ -17,7 +17,7 @@ namespace PortForge
         private readonly ComboBox resolution = Choice("Resolution", "Auto (game chooses)", "720p", "1080p", "1440p", "4K (2160p)"),
             upscale = Choice("Upscaling", "Linear", "AMD FSR 1", "AMD FSR 3 frame generation (FSR 1 + FidelityFX frame interpolation)"),
             mode = Choice("Rendering mode", "TV - game chooses its layout", "Handheld - lighter rendering where supported"),
-            fps = Choice("Frame limit", "Game speed (console pace)", "30", "60", "120", "144", "240", "Maximum (240 pictures)");
+            fps = Choice("Frame limit", "Game speed (console pace)", "30", "60", "120", "144", "240", "Maximum (your refresh)");
         private readonly Label status = new Label { AutoSize = true, ForeColor = Color.FromArgb(105,226,183), AccessibleName = "Global settings status", Text = "READY - Settings apply on the next game launch." };
         private readonly Label fpsNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 8), AccessibleName = "Frame limit note" };
         private readonly Label upscaleNote = new Label { AutoSize = true, MaximumSize = new Size(820, 0), Font = new Font("Segoe UI", 9), Margin = new Padding(0, 0, 0, 12) };
@@ -31,14 +31,14 @@ namespace PortForge
             scroll.Controls.Add(layout); Controls.Add(scroll);
             AddText(layout, "Settings for every game", 20);
             layout.Controls.Add(status);
-            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Since 0.67 every game is set to the most it can show, up to 240 pictures a second (240, AMD FSR 3 and the in-game frame-time graph), with no per-game setup - change the frame limit below, or turn these settings off, to choose something else. No FPS limit changes a game's speed: the limit is the pictures a second the screen gets - a number caps them (AMD FSR 3 fills the ones the game cannot make), Maximum asks for the most the pipeline can make, and Game speed keeps the console's own 30 or 60, doubled by AMD FSR 3. Every game keeps its own physics, timers and music at every limit. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
+            AddText(layout, "Save once. Every game using Engine 1.34 or newer reads these settings when it opens, even with PortForge closed. Restart a running game to apply changes. Since 0.67 every game is set to the highest it can show (240 pictures a second asked for, AMD FSR 3 doubling them where the display keeps up, and the in-game frame-time graph), with no per-game setup - change the frame limit below, or turn these settings off, to choose something else. No FPS limit changes a game's speed: the limit is the number PortForge asks the screen for, AMD FSR 3 doubles it (120 typed is 240 with it on), Maximum asks for your monitor's refresh doubled by FSR 3, and Game speed keeps the console's own 30 or 60, doubled by AMD FSR 3. Every game keeps its own physics, timers and music at every limit. In game, Esc shows the Engine version, the live Display FPS, its target and the Limit.", 10);
             layout.Controls.Add(enabled);
             AddChoice(layout, "Resolution", resolution);
             layout.Controls.Add(resolutionNote);
             layout.Controls.Add(trueRes);
             AddText(layout, "Engine 1.42 renders screen-shaped render targets at the selected 16:9 output. It records each game's own output height (many games draw 900 lines in TV mode) during its first run, including the warm-up after an engine install, and scales from that height from the next start. Data-shaped targets stay native. Dynamic-resolution games may differ, so this is not a per-game guarantee of exact internal pixels. Scaling up costs GPU; scaling down loses detail but can reduce GPU work. Turn this off if a game shows artifacts.", 10);
             AddChoice(layout, "Upscaling", upscale);
-            upscaleNote.Text = "AMD FSR 3 frame generation = AMD FSR 1 upscaling plus the frame interpolation AMD publishes in the FidelityFX SDK 1.1.4 (its optical flow and frame interpolation shaders, MIT). Switch games give the PC no motion vectors or depth, so AMD's optical flow finds the motion and depth is flat. FSR 3's temporal upscaler needs those game motion vectors and cannot run on Switch games, so FSR 1 does the upscaling. One generated picture sits between each two real frames (a 30 FPS game shows 60), and up to three a frame where the limit leaves room for them. The game itself keeps its own speed at every limit, so its world runs exactly as it does on the console; the limit only decides how many pictures a second the screen gets. Turn it on or off in game from Esc.";
+            upscaleNote.Text = "AMD FSR 3 frame generation = AMD FSR 1 upscaling plus the frame interpolation AMD publishes in the FidelityFX SDK 1.1.4 (its optical flow and frame interpolation shaders, MIT). Switch games give the PC no motion vectors or depth, so AMD's optical flow finds the motion and depth is flat. FSR 3's temporal upscaler needs those game motion vectors and cannot run on Switch games, so FSR 1 does the upscaling. One generated picture sits between each two real frames (a 30 FPS game shows 60), and up to three a frame where the limit leaves room for them; pictures beyond those repeat the game's frame. The game itself keeps its own speed at every limit, so its world runs exactly as it does on the console; the limit decides how many pictures a second the screen gets, and FSR 3 doubles it. Turn it on or off in game from Esc.";
             layout.Controls.Add(upscaleNote);
             layout.Controls.Add(amdFg);
             AddChoice(layout, "Rendering mode", mode);
@@ -47,7 +47,7 @@ namespace PortForge
             layout.Controls.Add(fpsNote);
             foreach (var check in new[] {vsync,lowLatency,smoothing,fullscreen,cursor,indicator,graph,trace}) layout.Controls.Add(check);
             AddText(layout, "Low latency reduces the VSync image queue when supported and gives the game a higher Windows scheduling priority. It can reduce queue delay, but frame generation and GPU load can still add latency.", 10);
-            AddText(layout, "The cursor returns in the Escape menu and when another window or the Windows menu has focus. Save activity follows the game's writes and shows how old they are (Saved 4 min ago) in the picture's top right corner and in the Escape menu; it does not create a save point.", 10);
+            AddText(layout, "The cursor returns in the Escape menu and when another window or the Windows menu has focus. Save activity follows the game's writes: Saving... while one is in flight and Saved just now for five seconds after it lands, in the picture's top right corner and in the Escape menu, then it goes. It does not create a save point.", 10);
             AddText(layout, "Save-anywhere is not supported: games only save through their own save menus and autosaves, and no menu button can make a game write a save it isn't at a save point for.", 10);
             var actions = new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Bottom,Padding=new Padding(24,8,24,12)};
             var save = new ReadableButton {Text="Save for all games",AutoSize=true,Height=36,AccessibleName="Save global settings"};
@@ -105,12 +105,13 @@ namespace PortForge
             trueRes.Checked=s.TrueResolution; lowLatency.Checked=s.LowLatency; amdFg.Checked=s.AmdFrameGeneration;
             RefreshNotes();
         }
-        /* What each choice does, in the engine's own rules (Engine 1.49). Game speed (SNX_FPS_GAME) is the console's
+        /* What each choice does, in the engine's own rules (Engine 1.51). Game speed (SNX_FPS_GAME) is the console's
            pace and the screen gets its frames, doubled by frame generation. A number is how many pictures a second
-           the screen shows, with FSR 3 filling pictures up to it - four times the game's own frames at most.
-           Maximum (0) is the most the pipeline can make. The game itself is never paced by the limit: present_period
-           returns its own swap interval whatever the settings say. The monitor's refresh caps the pictures under
-           VSync. */
+           the limiter asks the screen for, and AMD FSR 3 doubles it: 120 typed is 240 with FSR 3 on and 120 with it
+           off, reached by repeating the game's frames where generation cannot make them. Maximum (0) is the panel's
+           own refresh, also doubled by FSR 3 - so a 280 Hz panel asks for 560.
+           The game itself is never paced by the limit: present_period returns its own swap interval whatever the
+           settings say. The monitor's refresh caps the pictures under VSync. */
         private void RefreshNotes()
         {
             var preview = new GlobalSettings { DisplayResolution = ResolutionKey(resolution.SelectedIndex), TrueResolution = trueRes.Checked };
@@ -123,17 +124,18 @@ namespace PortForge
             if (limit != "game" && limit != "0" && (n < 10 || n > 1000)) { fpsNote.Text = "Type a whole number from 10 to 1000, or pick Game speed or Maximum."; return; }
             if (limit == "game")
                 fpsNote.Text = "Game speed keeps the game's own console timing: a 30 FPS game (like Zelda BotW) stays at 30 and a 60 FPS game at 60, with its physics, timers and music untouched. " +
-                    (fsr3 ? "AMD FSR 3 frame generation plays those frames twice, so the screen gets 60 pictures a second in a 30 FPS game and 120 in a 60 FPS game, never more than your monitor refreshes with VSync on. No frame is shown twice."
-                          : "The screen shows the game's own frames.");
+                    (fsr3 ? "AMD FSR 3 frame generation plays those frames twice, so the screen gets 60 pictures a second in a 30 FPS game and 120 in a 60 FPS game, never more than your monitor refreshes with VSync on."
+                          : "The screen shows the game's own frames, one per frame the game makes.");
             else if (limit == "0")
-                fpsNote.Text = "Maximum shows the most the pipeline can make: up to 240 pictures a second, four times the game's own frames with AMD FSR 3 (240 in a 60 FPS game, 120 in a 30 FPS game), never more than your monitor's refresh with VSync on. The game itself keeps its own speed, physics, timers and music. Esc shows the rate it reaches; pick a number to cap it. " +
-                    (fsr3 ? "AMD FSR 3 generates the pictures the game cannot make."
-                          : "With AMD FSR 3 off the screen shows the game's own frames.");
+                fpsNote.Text = "Maximum asks for your monitor's refresh, doubled by AMD FSR 3, and never more than it can show with VSync on. The game itself keeps its own speed, physics, timers and music. Esc shows the rate it reaches; pick a number to cap it. " +
+                    (fsr3 ? "AMD FSR 3 generates the pictures the game cannot make, and the rest repeat its frames."
+                          : "With AMD FSR 3 off the pictures above the game's own frames are its frames shown again.");
             else
-                fpsNote.Text = "A limit of " + n + " is how many pictures a second the screen shows: the game's own frames, and with AMD FSR 3 up to " + n + " distinct pictures, so 90 on a 60 FPS game is 90 and 240 is four pictures a real frame. No game runs faster than its console: its physics, timers and music stay as they are at every limit. Esc shows the rate it reaches. " +
+                fpsNote.Text = "A limit of " + n + " is the number PortForge asks the screen for" + (fsr3 ? ", and AMD FSR 3 doubles it: " + n + " typed is " + (n * 2) + " pictures a second with it on" : " and " + n + " with AMD FSR 3 off") +
+                    ". No game runs faster than its console: its physics, timers and music stay as they are at every limit. Esc shows the rate it reaches. " +
                     (n == 240 ? "This is what PortForge applies to every game automatically. " : "") +
-                    (fsr3 ? "If the game cannot reach the limit, AMD FSR 3 fills the gap with pictures generated between real frames, up to the limit and never above your monitor's refresh. No frame is shown twice."
-                          : "With AMD FSR 3 off the screen shows the frames the game itself makes.");
+                    (fsr3 ? "Pictures the game cannot make are generated by AMD FSR 3 where it can, up to three a real frame, and the rest repeat the game's frame; VSync caps them at your monitor's refresh."
+                          : "With AMD FSR 3 off the pictures above the game's own frames are its frames shown again, so the limit is still reached.");
         }
         /* the limit as the settings file keeps it: game, 0 for Maximum (no cap on the game), or the number typed or picked */
         private string FpsKey()

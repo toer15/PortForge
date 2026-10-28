@@ -90,7 +90,7 @@ namespace PortForge
             }
             report.AppendLine("\r\n" + result.Summary);
             report.AppendLine("Engine 1.4 and newer use frame_guard=1 by default and resolve automatic worker counts on the PC running the game. A copied game can therefore adapt its workers on each launch.");
-            report.AppendLine("Engine 1.49 keeps every game at its own speed, automatically, whatever the FPS limit: the limit is the pictures a second the screen gets (up to 240 with AMD FSR 3, four times the game's own frames), a lower number shows fewer of them, Maximum asks for the most the pipeline can make, and Game speed is the console's own 30 or 60. An engine older than 1.49 made a number the game's own frame rate. Protected engines keep internal image scaling native; entry-level PC matching requests the game's handheld layout. Measurement compares TV and handheld layouts and retains TV when handheld brings no measured benefit. Some games render identically in both modes. FSR scales the finished image and adds GPU work; it does not remove CPU/loading stalls.");
+            report.AppendLine("Engine 1.51 keeps every game at its own speed, automatically, whatever the FPS limit: the limit is the number PortForge asks the screen for and AMD FSR 3 doubles it (120 typed is 240 with it on), the pictures the game cannot make are generated where AMD's interpolation can and repeated from its frames for the rest, a lower number shows fewer of them, Maximum asks for the monitor's refresh doubled by FSR 3, and Game speed is the console's own 30 or 60. An engine older than 1.51 treated the number differently. Protected engines keep internal image scaling native; entry-level PC matching requests the game's handheld layout. Measurement compares TV and handheld layouts and retains TV when handheld brings no measured benefit. Some games render identically in both modes. FSR scales the finished image and adds GPU work; it does not remove CPU/loading stalls.");
             report.AppendLine("Engine 1.7 and newer report measured p99 frame time/1% low and GPU wait details, and reuse shader caches across compatible engine updates. These diagnostics and measurements do not guarantee future scenes will run without stutter.");
             report.AppendLine("Local hardware rules and measured samples; no AI account or hardware upload is needed. FPS, VSync, controllers and experimental shader preferences are preserved. The game selects its Vulkan device; the highest-rated Windows adapter is not proof of the active GPU. Later areas can behave differently; zero lag and universal compatibility are not guaranteed.");
             try { File.WriteAllText(result.ReportPath, report.ToString(), new UTF8Encoding(false)); }
@@ -100,8 +100,9 @@ namespace PortForge
         }
 
         /// <summary>The saved global FPS limit, upscaling and PortForge FSR 3 choice, copied exactly: a number or
-        /// Maximum (0) is the pictures a second on screen, "game" the console's own pace, and the game keeps its own
-        /// speed in every case (Engine 1.49). FSR 3 off writes frame_generation=0 (a matched game kept generating).</summary>
+        /// Maximum (0) is the monitor's refresh doubled by FSR 3, "game" the console's own pace, and the game keeps
+        /// its own speed in every case (Engine 1.51). FSR 3 off writes frame_generation=0 (a matched game kept
+        /// generating).</summary>
         public static void ApplyGlobalPreferences(Dictionary<string,string> settings, RuntimeCapabilities cap)
         {
             if (settings == null) return;
