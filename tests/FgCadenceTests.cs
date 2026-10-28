@@ -96,12 +96,18 @@ internal static class FgCadenceTests
                   !p.Contains("if (fps == 0) snprintf(word, sizeof word, \"Unlimited\")"),
                 "patch: the limit menu's top entry is Maximum, matching the app's settings");
         }
-        /* the engine source, when it was set up on this PC (engine/src is not part of the repository) */
+        /* the engine source, when it was set up on this PC or by CI (engine/src is not part of the repository). The
+           pacing wait lives in the platform layer, so plat.h and the Windows implementation are read with it. */
         string src = Path.Combine(root, "engine", "src", "src", "nx", "runtime", "present.c");
         string mainh = Path.Combine(root, "engine", "src", "src", "nx", "runtime", "main.h");
         if (File.Exists(src) && File.Exists(mainh))
         {
             string t = File.ReadAllText(src) + File.ReadAllText(mainh);
+            foreach (string platform in new[] { Path.Combine("platform", "plat.h"), Path.Combine("platform", "plat_win32.c") })
+            {
+                string file = Path.Combine(root, "engine", "src", "src", "nx", "runtime", platform);
+                if (File.Exists(file)) t += File.ReadAllText(file);
+            }
             if (!t.Contains("present_display_target"))
                 Console.WriteLine("WARN: engine\\src is older than the patch: apply engine\\portforge-engine.patch to ScarletNX " +
                     "(engine\\BASE) before building the engine");
