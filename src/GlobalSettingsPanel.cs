@@ -8,7 +8,7 @@ namespace PortForge
     public sealed class GlobalSettingsPanel : UserControl
     {
         private readonly CheckBox enabled = Check("Apply these settings to every game", true), fullscreen = Check("Start fullscreen", false),
-            cursor = Check("Hide cursor during fullscreen play", true), indicator = Check("Show save activity", true),
+            cursor = Check("Hide cursor during fullscreen play", true), indicator = Check("Show save activity and the save's age", true),
             vsync = Check("VSync", true), smoothing = Check("Smooth jagged edges", false),
             graph = Check("Show frame-time graph in game (F7 toggles it)", false), trace = Check("Record frame-time trace (to find hitches)", false),
             trueRes = Check("Match screen-shaped render targets to the selected resolution (experimental)", true),
@@ -47,8 +47,8 @@ namespace PortForge
             layout.Controls.Add(fpsNote);
             foreach (var check in new[] {vsync,lowLatency,smoothing,fullscreen,cursor,indicator,graph,trace}) layout.Controls.Add(check);
             AddText(layout, "Low latency reduces the VSync image queue when supported and gives the game a higher Windows scheduling priority. It can reduce queue delay, but frame generation and GPU load can still add latency.", 10);
-            AddText(layout, "The cursor returns in the Escape menu and when another window or the Windows menu has focus. Save activity follows the game's writes; it does not create a save point.", 10);
-            AddText(layout, "Save-anywhere is not supported: games only save through their own save menus and autosaves.", 10);
+            AddText(layout, "The cursor returns in the Escape menu and when another window or the Windows menu has focus. Save activity follows the game's writes and shows how old they are (Saved 4 min ago) in the picture's top right corner and in the Escape menu; it does not create a save point.", 10);
+            AddText(layout, "Save-anywhere is not supported: games only save through their own save menus and autosaves, and no menu button can make a game write a save it isn't at a save point for.", 10);
             var actions = new FlowLayoutPanel {AutoSize=true,Dock=DockStyle.Bottom,Padding=new Padding(24,8,24,12)};
             var save = new ReadableButton {Text="Save for all games",AutoSize=true,Height=36,AccessibleName="Save global settings"};
             var reset = new ReadableButton {Text="Reset",AutoSize=true,Height=36};

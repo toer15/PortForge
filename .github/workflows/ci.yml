@@ -146,8 +146,8 @@ jobs:
           set -euo pipefail
           cd engine/src
           {
-            cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file snx-test-nx-jit-region snx-test-render-scale --parallel "$(getconf _NPROCESSORS_ONLN)"
-            ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file|nx_jit_region|render_scale)$' --output-on-failure
+            cmake --build build/default --target snx-test-runtime-present snx-test-frame-policy snx-test-pipeline-file snx-test-nx-jit-region snx-test-render-scale snx-test-save-activity --parallel "$(getconf _NPROCESSORS_ONLN)"
+            ctest --test-dir build/default -R '^(runtime_present|frame_policy|pipeline_file|nx_jit_region|render_scale|save_activity)$' --output-on-failure
           } 2>&1 | tee "$(cygpath -u "$GITHUB_WORKSPACE")/ci-tests.log"
 
       - name: Package the Engine

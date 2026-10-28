@@ -17704,7 +17704,7 @@ index 00000000..db3275d6
 +FFX_PASSES(FFX_SPV_DECLARE)
 diff --git a/src/nx/gpu/vk/fg.c b/src/nx/gpu/vk/fg.c
 new file mode 100644
-index 00000000..53fe3251
+index 00000000..d9ce7e23
 --- /dev/null
 +++ b/src/nx/gpu/vk/fg.c
 @@ -0,0 +1,587 @@
@@ -23694,7 +23694,7 @@ index 00000000..a781c01e
 +}
 +#endif
 diff --git a/src/nx/gpu/vk/renderer.c b/src/nx/gpu/vk/renderer.c
-index f3ac2e2d..c3c4fe75 100644
+index f3ac2e2d..eaf71d20 100644
 --- a/src/nx/gpu/vk/renderer.c
 +++ b/src/nx/gpu/vk/renderer.c
 @@ -6,8 +6,9 @@
@@ -25107,7 +25107,7 @@ index 6096f99a..1d994538 100644
                                       .dstOffsets = {{0, 0, 0}, {(i32)t->w, (i32)t->h, 1}}};
                      vk_barrier(cb, mid, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_NONE, 0,
 diff --git a/src/nx/gpu/vk/ui.c b/src/nx/gpu/vk/ui.c
-index e32e8bdf..748f68bf 100644
+index e32e8bdf..9b9bbe78 100644
 --- a/src/nx/gpu/vk/ui.c
 +++ b/src/nx/gpu/vk/ui.c
 @@ -7,8 +7,11 @@
@@ -25131,7 +25131,7 @@ index e32e8bdf..748f68bf 100644
      VkImageView view;
      Vertex* v;
      VkBuffer buf;
-@@ -266,11 +269,34 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
+@@ -266,11 +269,37 @@ void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]) {
      ui_lock();
      atlas_upload(cb);
      vpad_draw(&list, safe);
@@ -25148,17 +25148,20 @@ index e32e8bdf..748f68bf 100644
      overlay_draw(&list, sw, sh);
 +    overlay_toasts_draw(&list, sw, sh);
 +    if (g_settings.save_indicator) {
-+        const char* message = pf_save_message(plat_ns());
-+        if (message) {
-+            save_notice = 1;
-+            int scale = sh >= 1440 ? 3 : sh >= 720 ? 2 : 1;
-+            int width = ((int)strlen(message) * 8 + 16) * scale;
-+            int height = 28 * scale, x = safe[0] + safe[2] - width - 12, y = safe[1] + safe[3] - height - 12;
-+            if (x < 0) x = 0;
-+            if (y < 0) y = 0;
-+            ui_fill(&list, x, y, width, height, 0xE6202020u);
-+            ui_text(&list, x + 8 * scale, y + 6 * scale, scale, message, 0xFFFFFFFFu);
-+        }
++        /* The game's save data and how old it is, in the picture's top right corner: "Saved 4 min ago" while nothing
++           is being written, "Saving..." and a red "Save failed", from the same activity the notice used, and from
++           the save files' own times before the game writes anything this run (fs.c's save_seed) */
++        char status[48];
++        const char* message = pf_save_status(plat_ns(), status, sizeof status);
++        int scale = sh >= 1440 ? 3 : sh >= 720 ? 2 : 1;
++        int width = ((int)strlen(message) * 8 + 16) * scale;
++        int height = 28 * scale, x = safe[0] + safe[2] - width - 12 * scale, y = safe[1] + 12 * scale;
++        save_notice = 1;
++        if (x < safe[0]) x = safe[0];
++        if (y + height > safe[1] + safe[3]) y = safe[1];
++        ui_fill(&list, (float)x, (float)y, (float)width, (float)height,
++                !strcmp(message, "Save failed") ? 0xE6202020u : 0xB0101010u);
++        ui_text(&list, x + 8 * scale, y + 6 * scale, scale, message, 0xFFFFFFFFu);
 +    }
      ui_unlock();
      n = list.n;
@@ -25710,10 +25713,46 @@ index db13c2d5..86e39a5e 100644
  VkFrontFace vk_render_front_face(const u32* r);
  void vk_render_draw_texture(GpuChannel* ch);
 diff --git a/src/nx/hle/filesystem/fs.c b/src/nx/hle/filesystem/fs.c
-index 354a1fce..72d60bf4 100644
+index 354a1fce..d5ed818c 100644
 --- a/src/nx/hle/filesystem/fs.c
 +++ b/src/nx/hle/filesystem/fs.c
-@@ -391,9 +391,9 @@ void fs_init(void) {
+@@ -18,6 +18,7 @@
+ #include "nx/runtime/platform/backend.h"
+ #include "nx/runtime/platform/log.h"
+ #include "nx/runtime/platform/plat.h"
++#include "nx/runtime/platform/save_activity.h"
+ #include "common/utilities/common.h"
+ #include "nx/runtime/driver/container.h"
+ #include "common/utilities/game_ini.h"
+@@ -382,6 +383,27 @@ static void overlays(void) {
+    data folder keeps */
+ static int dump_has_exefs(const char* path) { return g_hle.fs.dfs && !strncmp(path, "exefs/", 6); }
+ 
++/* The save data's own clock: the newest write under save/system, save/device and save/user*, so the menu can say how
++   old the game's save is before it has written anything this run. Callers hold tree.lock */
++static void newest_save_write(const FsNode* node, uint64_t* newest) {
++    const FsNode* child;
++    uint64_t at;
++    if (!node->is_dir) {
++        if (fs_tree_mtime(&g_hle.fs.tree, node, &at) == FS_TREE_OK && at > *newest) *newest = at;
++        return;
++    }
++    for (child = node->children; child; child = child->next) newest_save_write(child, newest);
++}
++static void save_seed(void) {
++    FsNode *save = NULL, *kind;
++    uint64_t newest = 0;
++    if (!fs_tree_lookup(&g_hle.fs.tree, NULL, "save", &save) && save)
++        for (kind = save->children; kind; kind = kind->next)
++            if (!strcmp(kind->name, "system") || !strcmp(kind->name, "device") || !strncmp(kind->name, "user", 4))
++                newest_save_write(kind, &newest);
++    if (newest) pf_save_seeded(newest);
++}
++
+ void fs_init(void) {
+     static const char* const apart[] = {"mods", NULL}; /* mods_open's */
+     FsTreeResult r = fs_tree_init_skipping(&g_hle.fs.tree, g_datadir, apart);
+@@ -391,9 +413,9 @@ void fs_init(void) {
      memcpy(g_datadir, g_hle.fs.tree.base, n);
      if (n && g_datadir[n - 1] != '/' && g_datadir[n - 1] != '\\') g_datadir[n++] = '/';
      g_datadir[n] = 0;
@@ -25726,7 +25765,7 @@ index 354a1fce..72d60bf4 100644
      unsigned shared = 0, failed = 0;
      pm_lock(&g_hle.fs.tree.lock);
      /* the console empties the application's temporary storage when the application is launched, and a game finds it
-@@ -409,11 +409,12 @@ void fs_init(void) {
+@@ -409,11 +431,13 @@ void fs_init(void) {
          FsNode* node;
          if (g_hle.fs.dump.patch.found) break; /* an update's, read over the game's dump: the game's files unread */
          if (fs_tree_lookup(&g_hle.fs.tree, NULL, shared_paths[i], &node)) continue;
@@ -25734,13 +25773,14 @@ index 354a1fce..72d60bf4 100644
 +        r = fs_tree_share(&g_hle.fs.tree, node, 1024, &shared, &failed);
          if (r != FS_TREE_OK) fatal("Could not map %s%s (error %d)", g_datadir, shared_paths[i], r);
      }
++    save_seed(); /* the save already on disk, for the corner before the game writes this run */
      pm_unlock(&g_hle.fs.tree.lock);
      LOG("fs: %u RomFS/ExeFS files mapped for the whole run\n", shared);
 +    if (shared + failed == 1024) LOG("fs: startup mapping budget reached; other files are read on demand\n");
      if (failed) WARN("fs: %u RomFS/ExeFS files could not be mapped, they are read on demand\n", failed);
  }
  
-@@ -957,7 +958,22 @@ static FILE* rf_open(FsNode* node) {
+@@ -957,7 +981,22 @@ static FILE* rf_open(FsNode* node) {
      return f;
  }
  /* size bytes of the file at offset rel into dst: 0, or -1 with the part that couldn't be read zeroed */
@@ -25763,11 +25803,10 @@ index 354a1fce..72d60bf4 100644
      FsNode* node = rf->node;
      i64 got = (i64)size;
      if (!node) return image_read(rf->base + rel, dst, size, 0); /* the game's image's, under the mods' */
-@@ -1183,6 +1199,15 @@ static int nn_fssrv_sf_IFile_Read(SvcObj* self, nn_fs_ReadOption option, i64 off
+@@ -1183,6 +1222,14 @@ static int nn_fssrv_sf_IFile_Read(SvcObj* self, nn_fs_ReadOption option, i64 off
      *bytes_read = (i64)n;
      R_SUCCEED();
  }
-+#include "nx/runtime/platform/save_activity.h"
 +/* Called under tree.lock: classify by nodes, so an SD-card path merely containing "save" cannot trigger the HUD. */
 +static int save_node(const FsNode* node) {
 +    const FsNode* kind = NULL;
@@ -25779,7 +25818,7 @@ index 354a1fce..72d60bf4 100644
  static int nn_fssrv_sf_IFile_Write(SvcObj* self, nn_fs_WriteOption option, i64 offset, IpcBuf buffer, i64 size) {
      FileData* f = self->data;
      u64 off = (u64)offset, sz = (u64)size, a = buffer.addr;
-@@ -1195,9 +1220,13 @@ static int nn_fssrv_sf_IFile_Write(SvcObj* self, nn_fs_WriteOption option, i64 o
+@@ -1195,9 +1242,13 @@ static int nn_fssrv_sf_IFile_Write(SvcObj* self, nn_fs_WriteOption option, i64 o
      if (off + sz > f->node->size && !(f->mode & 4)) R_THROW(FS_NO_APPEND);
      R_UNLESS(!file_seek(f->f, off), FS_OUT_OF_RANGE);
      own_acquire(a, sz); /* write() can't wait on memory the GPU holds: it lands first */
@@ -26281,7 +26320,7 @@ index 6a667e6e..646659e7 100644
      {
          char version[16];
 diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
-index addf0820..48526094 100644
+index addf0820..82e3995e 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
 @@ -38,5 +38,33 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
@@ -26572,7 +26611,7 @@ index a0ef76b8..758e1107 100644
      g_started = 1;
  }
 diff --git a/src/nx/runtime/options.h b/src/nx/runtime/options.h
-index 408db9ed..69aae239 100644
+index 408db9ed..f5c8b10e 100644
 --- a/src/nx/runtime/options.h
 +++ b/src/nx/runtime/options.h
 @@ -34,7 +34,20 @@ void ini_poll(int final);
@@ -26598,7 +26637,7 @@ index 408db9ed..69aae239 100644
  enum { SNX_OPT_LDN_LAN, SNX_OPT_LDN_ROOM, SNX_OPT_LDN_OFF };
 diff --git a/src/nx/runtime/pf_engine_version.h b/src/nx/runtime/pf_engine_version.h
 new file mode 100644
-index 00000000..0693be93
+index 00000000..05f98361
 --- /dev/null
 +++ b/src/nx/runtime/pf_engine_version.h
 @@ -0,0 +1,6 @@
@@ -26606,7 +26645,7 @@ index 00000000..0693be93
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.49"
++#define PF_ENGINE_VERSION "1.50"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5a..38b92670 100644
@@ -26744,7 +26783,7 @@ index ac4acd5a..38b92670 100644
 +    return 0;
 +}
 diff --git a/src/nx/runtime/platform/backend/sdl3.c b/src/nx/runtime/platform/backend/sdl3.c
-index 87dfdc63..5973bf4c 100644
+index 87dfdc63..0a7dd480 100644
 --- a/src/nx/runtime/platform/backend/sdl3.c
 +++ b/src/nx/runtime/platform/backend/sdl3.c
 @@ -13,6 +13,7 @@
@@ -27237,11 +27276,14 @@ index 0821ef7c..c440b934 100644
     button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
  typedef struct {
 diff --git a/src/nx/runtime/platform/overlay.c b/src/nx/runtime/platform/overlay.c
-index 441a8c2a..c15a9a10 100644
+index 441a8c2a..a49dacef 100644
 --- a/src/nx/runtime/platform/overlay.c
 +++ b/src/nx/runtime/platform/overlay.c
-@@ -4,7 +4,13 @@
+@@ -2,9 +2,16 @@
+    Copyright 2026 the ScarletNX contributors */
+ #include "nx/runtime/platform/overlay.h"
  #include "nx/runtime/platform/backend.h"
++#include "nx/runtime/platform/save_activity.h"
  #include "nx/runtime/platform/fatal_screen.h"
  #include "nx/runtime/platform/gamepad.h"
 +#include "nx/runtime/platform/plat.h"
@@ -27254,7 +27296,7 @@ index 441a8c2a..c15a9a10 100644
  #include "gui_theme_colors.h"
  #include "common/utilities/pad_screen.h"
  #include "common/utilities/users.h"
-@@ -13,8 +19,9 @@
+@@ -13,8 +20,9 @@
  #include <string.h>
  
  enum { FIRST = 3, VISIBLE = OVERLAY_ROWS - FIRST - 1 }; /* the items' first row, and how many show at once */
@@ -27266,7 +27308,7 @@ index 441a8c2a..c15a9a10 100644
  enum { P_PLAYER, P_SWAP, P_DEADZONE, P_RUMBLE, P_BACKGROUND, P_MAP, P_BACK, P_COUNT }; /* the gamepads' page's */
  /* the controls page's items */
  enum {
-@@ -55,18 +62,24 @@ static const char* const PADS[P_COUNT] = {SNX_GAMEPAD_PLAYERS,
+@@ -55,18 +63,24 @@ static const char* const PADS[P_COUNT] = {SNX_GAMEPAD_PLAYERS,
                                            "Back"};
  static int shown, page, focus, top; /* top: the first item showing */
  static int pad_player;              /* the player the gamepads' page shows: 0 every player's, 1 to SNX_GAMEPADS */
@@ -27296,7 +27338,7 @@ index 441a8c2a..c15a9a10 100644
                                     : SNX_VPAD_COUNT + 2;
  }
  static void page_open(int p) {
-@@ -110,9 +123,51 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
+@@ -110,9 +124,51 @@ static void label(int i, char* text, size_t size, char* value, size_t vsize) {
          return;
      }
      if (page == PAGE_MAIN) {
@@ -27350,7 +27392,7 @@ index 441a8c2a..c15a9a10 100644
          return;
      }
      if (page == PAGE_BUTTONS) {
-@@ -207,14 +262,14 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
+@@ -207,14 +263,14 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
      h = (float)sh - 2 * ch;
      map_pad();
      ui_fill(l, x, y, w, h, LIGHT); /* the whole picture */
@@ -27367,7 +27409,7 @@ index 441a8c2a..c15a9a10 100644
          user_draw(l, x + cw * (float)(strlen(title) + 2), x + w - cw, y, s);
      }
      snx_pad_screen_lay(&map, x, y + ch, w, h - ch, cw, ch, &map_drawing);
-@@ -235,6 +290,23 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
+@@ -235,6 +291,23 @@ static void map_draw(SnxUiList* l, int sw, int sh) {
      }
  }
  /* the item i done, or its value stepped (step -1 or 1; 0 for a select, which steps up) */
@@ -27391,7 +27433,7 @@ index 441a8c2a..c15a9a10 100644
  static int act(int i, int step) {
      const IniOpt* o = setting(i);
      if (o) {
-@@ -259,9 +331,45 @@ static int act(int i, int step) {
+@@ -259,9 +332,45 @@ static int act(int i, int step) {
          return OVERLAY_NONE;
      }
      if (page == PAGE_MAIN) {
@@ -27438,7 +27480,7 @@ index 441a8c2a..c15a9a10 100644
          return OVERLAY_NONE;
      }
      if (step) return OVERLAY_NONE;
-@@ -285,12 +393,24 @@ static int act(int i, int step) {
+@@ -285,12 +394,24 @@ static int act(int i, int step) {
  }
  
  int overlay_shown(void) { return __atomic_load_n(&shown, __ATOMIC_ACQUIRE); }
@@ -27465,17 +27507,18 @@ index 441a8c2a..c15a9a10 100644
  static int display_percent = 100; /* set on the event thread, read by the renderer's */
  void overlay_set_display_scale(float scale) {
      __atomic_store_n(&display_percent, scale > 0.0f ? (int)(scale * 100.0f) : 100, __ATOMIC_RELAXED);
-@@ -324,7 +444,8 @@ typedef struct {
+@@ -324,7 +445,9 @@ typedef struct {
  } DialogPara;
  typedef struct {
      const char* title;
 -    int user; /* the user playing at the head's right, by their nickname: the menu's pages */
++    const char* status; /* the game's save data at the head's right, before the user's chip: the menu's pages */
 +    int user;   /* the user playing at the head's right, by their nickname: the menu's pages */
 +    int poster; /* the game's key art as a card left of the panel and behind it all: the menu's first page */
      DialogPara para[DIALOG_PARAS];
      int paras;
      const char* label[VISIBLE];   /* the items showing, from top on */
-@@ -350,11 +471,11 @@ static void user_draw(SnxUiList* l, float left, float right, float y, int s) {
+@@ -350,11 +473,11 @@ static void user_draw(SnxUiList* l, float left, float right, float y, int s) {
      }
      if (x < left) return;
      ui_picture(l, right - 2 * edge - side, y + 2 * edge, side);
@@ -27492,7 +27535,16 @@ index 441a8c2a..c15a9a10 100644
  }
  /* the rows paragraphs wrap into: each thread that lays a dialog out has its own */
  typedef char DialogRows[DIALOG_PARAS][DIALOG_LINES][FATAL_ROW];
-@@ -389,6 +510,11 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+@@ -363,7 +486,7 @@ typedef char DialogRows[DIALOG_PARAS][DIALOG_LINES][FATAL_ROW];
+ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRows rows_of, DialogDrawn* out) {
+     char line[OVERLAY_COLS_MAX + 4];
+     int px, py, s, cols, n[DIALOG_PARAS], k, i, total, room, row, last;
+-    float cw, ch, x, y, w;
++    float cw, ch, x, y, w, right;
+     memset(out, 0, sizeof *out);
+     overlay_place(sw, sh, &px, &py, &s);
+     cols = overlay_cols(sw, s);
+@@ -389,6 +512,11 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
      }
      x = (float)((sw - cols * 8 * s) / 2);
      y = (float)((sh - total * (int)ch) / 2);
@@ -27504,7 +27556,7 @@ index 441a8c2a..c15a9a10 100644
      out->box.x = x;
      out->box.y = y;
      out->box.w = w;
-@@ -396,9 +522,24 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+@@ -396,10 +524,34 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
      out->cols = cols;
      out->scale = s;
      if (l) {
@@ -27526,12 +27578,23 @@ index 441a8c2a..c15a9a10 100644
          ui_fill(l, x, y, w, ch * (float)total, LIGHT);
 -        ui_fill(l, x, y, w, ch, INK);
 -        ui_text(l, x + cw, y, s, d->title, LIGHT);
+-        if (d->user) user_draw(l, x + cw * (float)(strlen(d->title) + 2), x + w - cw, y, s);
 +        ui_fill(l, x, y, w, ch, ACCENT);
 +        ui_text(l, x + cw, y, s, d->title, ON_ACCENT);
-         if (d->user) user_draw(l, x + cw * (float)(strlen(d->title) + 2), x + w - cw, y, s);
++        /* the save's age in the corner of the band, the user's chip moved along when both fit */
++        right = x + w - cw;
++        if (d->status && *d->status) {
++            float tw = (float)strlen(d->status) * cw;
++            if (right - tw > x + cw * (float)(strlen(d->title) + 1)) {
++                ui_text(l, right - tw, y, s, d->status, ON_ACCENT);
++                right -= tw + cw;
++            }
++        }
++        if (d->user) user_draw(l, x + cw * (float)(strlen(d->title) + 2), right, y, s);
      }
      row = 1;
-@@ -429,11 +570,15 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
+     for (k = 0, last = -1; k < d->paras; ++k) {
+@@ -429,11 +581,15 @@ static void dialog_draw(SnxUiList* l, int sw, int sh, const Dialog* d, DialogRow
          at->w = w;
          at->h = ch;
          if (!l) continue;
@@ -27550,7 +27613,7 @@ index 441a8c2a..c15a9a10 100644
      }
      /* more above or under: the font's arrows at the edge */
      if (l && d->shown && d->top) ui_text(l, x + cw * (float)(cols - 1), out->item[0].y, s, "\x18", SOFT);
-@@ -461,7 +606,10 @@ void overlay_scroll(int rows) {
+@@ -461,7 +617,10 @@ void overlay_scroll(int rows) {
  void overlay_side(int step) {
      if (page == PAGE_MAP)
          map_key(step < 0 ? SNX_PAD_KEY_LEFT : SNX_PAD_KEY_RIGHT);
@@ -27562,7 +27625,7 @@ index 441a8c2a..c15a9a10 100644
          act(focus, step);
  }
  int overlay_pad(u64 button) {
-@@ -476,29 +624,43 @@ int overlay_pad(u64 button) {
+@@ -476,29 +635,43 @@ int overlay_pad(u64 button) {
          case 1ull << 18: overlay_side(1); break;
          case 1ull << 15: /* down */
          case 1ull << 19: overlay_move(1); break;
@@ -27613,7 +27676,7 @@ index 441a8c2a..c15a9a10 100644
      for (bit = 0; bit < 20 && did == OVERLAY_NONE; ++bit)
          if (pressed >> bit & 1) did = overlay_pad(1ull << bit);
      return did;
-@@ -512,7 +674,7 @@ int overlay_back(void) {
+@@ -512,7 +685,7 @@ int overlay_back(void) {
          focus = C_BUTTONS;
      } else {
          page_open(PAGE_MAIN);
@@ -27622,7 +27685,7 @@ index 441a8c2a..c15a9a10 100644
      }
      keep_in_view();
      return OVERLAY_NONE;
-@@ -521,17 +683,53 @@ static const char* pads_hint(char* out, size_t size);
+@@ -521,17 +694,54 @@ static const char* pads_hint(char* out, size_t size);
  /* the page showing as a dialog: its title, its hint, the items in view, their texts in text and value */
  static void menu_dialog(Dialog* d, char (*text)[OVERLAY_COLS_MAX + 1], char (*value)[OVERLAY_COLS_MAX + 1], char* pads,
                          size_t size) {
@@ -27633,7 +27696,7 @@ index 441a8c2a..c15a9a10 100644
 +    static const char* const hints[] = {"Esc / right-click / Home: return to game.", "Esc / Back: the menu.",
                                          "Tap one to show or hide it."};
 -    int r, n = items();
-+    static char fps_line[OVERLAY_COLS_MAX + 1], head[OVERLAY_COLS_MAX + 1];
++    static char fps_line[OVERLAY_COLS_MAX + 1], head[OVERLAY_COLS_MAX + 1], save_line[48];
 +    int r, n = items(), live, fps, fg, side, target;
 +    char limit_word[32];
      memset(d, 0, sizeof *d);
@@ -27647,6 +27710,7 @@ index 441a8c2a..c15a9a10 100644
 +        head[at] = 0;
 +    }
 +    d->title = head;
++    d->status = pf_save_status(plat_ns(), save_line, sizeof save_line); /* the game's save data, and its age */
      d->user = 1;
 -    d->para[0].text = page == PAGE_PADS ? pads_hint(pads, size) : hints[page];
 +    d->poster = page == PAGE_MAIN;
@@ -27682,7 +27746,7 @@ index 441a8c2a..c15a9a10 100644
      d->items = n;
      d->top = top;
      d->focus = focus;
-@@ -557,6 +755,7 @@ int overlay_tap(float x, float y, int sw, int sh) {
+@@ -557,6 +767,7 @@ int overlay_tap(float x, float y, int sw, int sh) {
      focus = d.top + r;
      col = (int)((x - at.box.x) / (8.0f * (float)at.scale));
      /* a value's arrows: the left half of its last ten columns steps it down */
@@ -27690,7 +27754,7 @@ index 441a8c2a..c15a9a10 100644
      if (arrows(setting(focus))) return act(focus, col < at.cols - 5 ? -1 : 1);
      return act(focus, 0);
  }
-@@ -588,11 +787,16 @@ static const char* pads_hint(char* out, size_t size) {
+@@ -588,11 +799,16 @@ static const char* pads_hint(char* out, size_t size) {
          snprintf(out, size, "%s", gamepad_name(0));
      return out;
  }
@@ -27707,7 +27771,7 @@ index 441a8c2a..c15a9a10 100644
      if (!shown) return;
      if (page == PAGE_MAP) {
          map_draw(l, sw, sh);
-@@ -625,3 +829,188 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e) {
+@@ -625,3 +841,188 @@ void overlay_error_draw(SnxUiList* l, int sw, int sh, SnxOverlayError* e) {
      e->link = at.link;
      for (i = 0; i < SNX_OVERLAY_ERROR_ITEMS; ++i) e->items[i] = at.item[i];
  }
@@ -27942,7 +28006,7 @@ index 8e29f7be..479b4fff 100644
 +
  #endif
 diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
-index d3e4e350..2bbb65df 100644
+index d3e4e350..a698b5c5 100644
 --- a/src/nx/runtime/platform/plat.h
 +++ b/src/nx/runtime/platform/plat.h
 @@ -40,8 +40,21 @@ typedef void (*PThreadFn)(void* arg);
@@ -27985,7 +28049,7 @@ index d3e4e350..2bbb65df 100644
  
  #endif
 diff --git a/src/nx/runtime/platform/plat_posix.c b/src/nx/runtime/platform/plat_posix.c
-index cd639e42..3d28e595 100644
+index cd639e42..11d5fa43 100644
 --- a/src/nx/runtime/platform/plat_posix.c
 +++ b/src/nx/runtime/platform/plat_posix.c
 @@ -38,8 +38,12 @@
@@ -28047,7 +28111,7 @@ index cd639e42..3d28e595 100644
  #if defined(__linux__)
      madvise(p, (size_t)size, MADV_DONTNEED);
 diff --git a/src/nx/runtime/platform/plat_win32.c b/src/nx/runtime/platform/plat_win32.c
-index 1f9eebca..de853841 100644
+index 1f9eebca..0fd65a4e 100644
 --- a/src/nx/runtime/platform/plat_win32.c
 +++ b/src/nx/runtime/platform/plat_win32.c
 @@ -9,6 +9,7 @@
@@ -28351,16 +28415,25 @@ index ebfd9c67..dc8cc1fd 100644
      SetThreadPriority(h, THREAD_PRIORITY_HIGHEST);
 diff --git a/src/nx/runtime/platform/save_activity.c b/src/nx/runtime/platform/save_activity.c
 new file mode 100644
-index 00000000..f09695eb
+index 00000000..bb769245
 --- /dev/null
 +++ b/src/nx/runtime/platform/save_activity.c
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,70 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#include "nx/runtime/platform/save_activity.h"
 +#include <stddef.h>
++#include <stdio.h>
++#include <time.h>
 +static unsigned active;
 +static int pending, pending_error;
 +static uint64_t recent_until, error_until;
++/* When the game's save data last changed, UTC Unix seconds: a write this run, or what was on disk when it was
++   indexed. 0 for none, which the corner reads as "No save yet" */
++static unsigned long last_unix;
++static unsigned long unix_now(void) {
++    time_t t = time(NULL);
++    return t > 0 ? (unsigned long)t : 0;
++}
 +void pf_save_begin(void) { __atomic_add_fetch(&active, 1, __ATOMIC_ACQ_REL); }
 +void pf_save_end(uint64_t now, int success) {
 +    /* Filesystem calls serialize on tree.lock. Error remains visible across subsequent successful chunks. */
@@ -28368,6 +28441,9 @@ index 00000000..f09695eb
 +    if (!success) {
 +        __atomic_store_n(&error_until, now + 6000000000ull, __ATOMIC_RELEASE);
 +        __atomic_store_n(&pending_error, 1, __ATOMIC_RELEASE);
++    } else {
++        unsigned long at = unix_now();
++        if (at) __atomic_store_n(&last_unix, at, __ATOMIC_RELEASE);
 +    }
 +    __atomic_store_n(&pending, 1, __ATOMIC_RELEASE);
 +    __atomic_sub_fetch(&active, 1, __ATOMIC_ACQ_REL);
@@ -28378,6 +28454,35 @@ index 00000000..f09695eb
 +        return "Saving...";
 +    return NULL;
 +}
++void pf_save_seeded(uint64_t unix_ms) {
++    unsigned long at = (unsigned long)(unix_ms / 1000u);
++    if (at) __atomic_store_n(&last_unix, at, __ATOMIC_RELEASE);
++}
++const char* pf_save_status(uint64_t now, char* buf, size_t size) {
++    unsigned long at, now_unix;
++    long age;
++    if (!buf || !size) return "";
++    if (__atomic_load_n(&pending_error, __ATOMIC_ACQUIRE) || now < __atomic_load_n(&error_until, __ATOMIC_ACQUIRE))
++        snprintf(buf, size, "Save failed");
++    else if (__atomic_load_n(&pending, __ATOMIC_ACQUIRE) || __atomic_load_n(&active, __ATOMIC_ACQUIRE) ||
++             now < __atomic_load_n(&recent_until, __ATOMIC_ACQUIRE))
++        snprintf(buf, size, "Saving...");
++    else if (!(at = __atomic_load_n(&last_unix, __ATOMIC_ACQUIRE)) || !(now_unix = unix_now()))
++        snprintf(buf, size, "No save yet");
++    else {
++        /* a save older than the clock (a file copied in with a future time) reads as just now, never negative */
++        age = now_unix > at ? (long)(now_unix - at) : 0;
++        if (age < 60)
++            snprintf(buf, size, "Saved just now");
++        else if (age < 3600)
++            snprintf(buf, size, "Saved %ld min ago", age / 60);
++        else if (age < 172800)
++            snprintf(buf, size, "Saved %ld h ago", age / 3600);
++        else
++            snprintf(buf, size, "Saved %ld days ago", age / 86400);
++    }
++    return buf;
++}
 +void pf_save_presented(uint64_t now) {
 +    if (__atomic_exchange_n(&pending, 0, __ATOMIC_ACQ_REL))
 +        __atomic_store_n(&recent_until, now + 1200000000ull, __ATOMIC_RELEASE);
@@ -28386,13 +28491,14 @@ index 00000000..f09695eb
 +}
 diff --git a/src/nx/runtime/platform/save_activity.h b/src/nx/runtime/platform/save_activity.h
 new file mode 100644
-index 00000000..2d0dad9d
+index 00000000..53ef9e4c
 --- /dev/null
 +++ b/src/nx/runtime/platform/save_activity.h
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,21 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#ifndef PF_SAVE_ACTIVITY_H
 +#define PF_SAVE_ACTIVITY_H
++#include <stddef.h>
 +#include <stdint.h>
 +/* File activity, never a claim that the game created a checkpoint. Times are monotonic nanoseconds. */
 +void pf_save_begin(void);
@@ -28400,6 +28506,12 @@ index 00000000..2d0dad9d
 +const char* pf_save_message(uint64_t now);
 +/* A frame has drawn the notice: keep short writes visible even if loading blocked presentation. */
 +void pf_save_presented(uint64_t now);
++/* The newest write under the game's save data found when the filesystem was indexed (UTC Unix milliseconds, 0 for
++   none): the corner reads the save the game already made before it writes anything this run */
++void pf_save_seeded(uint64_t unix_ms);
++/* The age of the game's save data, as the corner and the menu show it: "Saved 4 min ago", "Saving...", "Save
++   failed" or "No save yet". Writes into buf (48 bytes is enough) and returns it */
++const char* pf_save_status(uint64_t now, char* buf, size_t size);
 +static inline int pf_hide_cursor(int enabled, int fullscreen, int focused, int menu, int system_key) {
 +    return enabled && fullscreen && focused && !menu && !system_key;
 +}
@@ -28659,7 +28771,7 @@ index 0ccd9f1e..86423a46 100644
  const u32* ui_atlas(int* w, int* h, u32* version);
  void ui_atlas_done(void);
 diff --git a/src/nx/runtime/present.c b/src/nx/runtime/present.c
-index 2bd6181e..3816da02 100644
+index 2bd6181e..70567691 100644
 --- a/src/nx/runtime/present.c
 +++ b/src/nx/runtime/present.c
 @@ -9,6 +9,7 @@
@@ -28899,7 +29011,7 @@ index 2bd6181e..3816da02 100644
 +    if (next > now) plat_wait_until(next);
  }
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
-index be57ac55..8d8212c6 100644
+index be57ac55..c93250a4 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
 @@ -80,13 +80,150 @@ setting Game mods off
@@ -28923,7 +29035,7 @@ index be57ac55..8d8212c6 100644
 +    int 0 1
 +    default 1
 +    startup
-+    help Show Saving... while the game writes save data. This does not create a save point or save state.
++    help Show the game's save data and how old it is in the picture's top right corner (Saved 4 min ago, Saving..., Save failed): the files the game itself wrote. This reports the game's own save; it does not create a save point or save state.
 +setting AMD frame generation
 +    key amd_frame_generation
 +    int 0 1
@@ -29054,7 +29166,8 @@ index be57ac55..8d8212c6 100644
  setting Fullscreen
      key fullscreen
      int 0 1
-@@ -166,7 +303,21 @@ setting FPS limit
+@@ -165,8 +302,22 @@ setting FPS limit
+     text 16
      default game
      set options_fps_set
 -    help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
@@ -29144,7 +29257,7 @@ index be57ac55..8d8212c6 100644
      key jit_threads
      int 0 8
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 64bdd9b3..8900efb0 100644
+index 64bdd9b3..228e3f13 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -64,7 +64,11 @@ endif()
@@ -29194,7 +29307,14 @@ index 64bdd9b3..8900efb0 100644
  add_executable(snx-test-ipc-message ipc_message.c)
  snx_test_target(snx-test-ipc-message 23)
  add_test(NAME ipc_message COMMAND snx-test-ipc-message)
-@@ -671,6 +686,15 @@ target_link_libraries(snx-test-overlay PRIVATE scarletnx-common snx_splash m)
+@@ -665,12 +680,22 @@ add_test(NAME llvm_dependency COMMAND "${CMAKE_COMMAND}"
+ add_executable(snx-test-overlay overlay.c "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/overlay.c"
+     "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/fatal_screen.c"
+     "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/vpad.c" "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/ui.c"
++    "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/save_activity.c"
+     "${PROJECT_SOURCE_DIR}/src/nx/runtime/ini.c")
+ snx_test_target(snx-test-overlay 11)
+ target_link_libraries(snx-test-overlay PRIVATE scarletnx-common snx_splash m)
  include("${PROJECT_SOURCE_DIR}/cmake/gui_themes.cmake")
  target_include_directories(snx-test-overlay PRIVATE "${CMAKE_BINARY_DIR}/generated")
  add_test(NAME overlay COMMAND snx-test-overlay)
@@ -29210,7 +29330,7 @@ index 64bdd9b3..8900efb0 100644
  
  add_executable(snx-test-vpad vpad.c "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/vpad.c"
      "${PROJECT_SOURCE_DIR}/src/nx/runtime/platform/ui.c" "${PROJECT_SOURCE_DIR}/src/nx/runtime/ini.c")
-@@ -1321,7 +1345,7 @@ add_test(NAME draw_texture COMMAND snx-test-draw-texture)
+@@ -1321,7 +1346,7 @@ add_test(NAME draw_texture COMMAND snx-test-draw-texture)
  
  # gpu.c's queue over the real puller, 3D engine and macros: a channel waiting on a semaphore, a syncpoint, a fence or
  # inside a macro lets the others run, and goes on where it stopped (its platform stand-ins are pthreads)
@@ -29743,7 +29863,7 @@ index 6d73ee2e..fb103016 100644
  static void put(u64 address, u32 word) { memcpy(memory + address, &word, sizeof word); }
  static size_t synthetic_images(void) {
 diff --git a/tests/overlay.c b/tests/overlay.c
-index 03330d3d..d02928f5 100644
+index 03330d3d..94408551 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
 @@ -10,11 +10,56 @@
@@ -30258,7 +30378,7 @@ index 00000000..e6859b79
 +    return 0;
 +}
 diff --git a/tests/runtime_present.c b/tests/runtime_present.c
-index 53c5e45d..bd87f7eb 100644
+index 53c5e45d..88814df8 100644
 --- a/tests/runtime_present.c
 +++ b/tests/runtime_present.c
 @@ -10,6 +10,8 @@
@@ -30587,17 +30707,42 @@ index 53c5e45d..bd87f7eb 100644
      vi_show_buffer(8, 0, 1, 1, 4, 1, 0, 1, crop, 0);
 diff --git a/tests/save_activity.c b/tests/save_activity.c
 new file mode 100644
-index 00000000..5f9ff48c
+index 00000000..c49bb6f2
 --- /dev/null
 +++ b/tests/save_activity.c
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,59 @@
 +/* SPDX-License-Identifier: GPL-3.0-or-later */
 +#include "nx/runtime/platform/save_activity.h"
 +#include <assert.h>
 +#include <stdio.h>
 +#include <string.h>
++#include <time.h>
++/* the save's age reads the wall clock, as the corner does: the seeds are relative to it */
++static uint64_t now_ms(void) { return (uint64_t)time(NULL) * 1000u; }
++static const char* at(uint64_t seeded, uint64_t now) {
++    static char buf[48];
++    pf_save_seeded(seeded);
++    return pf_save_status(now, buf, sizeof buf);
++}
 +int main(void) {
-+    assert(!pf_save_message(0));
++    char buf[48];
++    /* the corner's line: the game's save data and its age, before and after this run's writes */
++    assert(!strcmp(pf_save_status(0, buf, sizeof buf), "No save yet"));
++    assert(!strcmp(at(now_ms(), 0), "Saved just now"));
++    assert(!strcmp(at(now_ms() + 60000u, 0), "Saved just now")); /* a file from a clock ahead of this one */
++    assert(!strcmp(at(now_ms() - 60000u, 0), "Saved 1 min ago"));
++    assert(!strcmp(at(now_ms() - 300000u, 0), "Saved 5 min ago"));
++    assert(!strcmp(at(now_ms() - 10800000u, 0), "Saved 3 h ago"));
++    assert(!strcmp(at(now_ms() - 259200000u, 0), "Saved 3 days ago"));
++    pf_save_begin();
++    assert(!strcmp(pf_save_status(0, buf, sizeof buf), "Saving..."));
++    pf_save_end(0, 0);
++    assert(!strcmp(pf_save_status(0, buf, sizeof buf), "Save failed"));
++    assert(!strcmp(pf_save_status(5000000000ull, buf, sizeof buf), "Save failed"));
++    pf_save_presented(0);
++    pf_save_seeded(now_ms());
++    assert(!strcmp(pf_save_status(7000000000ull, buf, sizeof buf), "Saved just now")); /* 6 s after the failure */
++    assert(!pf_save_message(7000000000ull));
 +    pf_save_begin();
 +    assert(!strcmp(pf_save_message(9000000000ull), "Saving..."));
 +    pf_save_end(9000000000ull, 1);
@@ -30607,10 +30752,12 @@ index 00000000..5f9ff48c
 +    pf_save_begin(); pf_save_end(12000000000ull, 0);
 +    pf_save_presented(12000000000ull);
 +    assert(!strcmp(pf_save_message(13000000000ull), "Save write failed"));
++    assert(!strcmp(pf_save_status(13000000000ull, buf, sizeof buf), "Save failed"));
 +    pf_save_begin(); pf_save_end(14000000000ull, 1);
 +    pf_save_presented(14000000000ull);
 +    assert(!strcmp(pf_save_message(15000000000ull), "Save write failed"));
 +    assert(!pf_save_message(19000000000ull));
++    assert(!strcmp(pf_save_status(19000000000ull, buf, sizeof buf), "Saved just now"));
 +    pf_save_begin(); pf_save_end(20000000000ull, 1);
 +    assert(pf_save_message(30000000000ull)); /* a ten-second loading pause cannot swallow the notice */
 +    pf_save_presented(30000000000ull);
@@ -30620,7 +30767,7 @@ index 00000000..5f9ff48c
 +        int hide = pf_hide_cursor(bits & 1, bits & 2, bits & 4, bits & 8, bits & 16);
 +        assert(hide == (bits == 7));
 +    }
-+    puts("save_activity: expiry, write failure, fullscreen/menu/focus/system-key policy passed");
++    puts("save_activity: save age, no-save, expiry, write failure, fullscreen/menu/focus/system-key policy passed");
 +    return 0;
 +}
 diff --git a/tests/tex_upload_rows.c b/tests/tex_upload_rows.c
