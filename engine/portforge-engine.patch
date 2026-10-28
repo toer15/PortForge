@@ -24294,10 +24294,10 @@ index f3ac2e2d..c3c4fe75 100644
 +            /* a condition wait is whole milliseconds rounded up: woken short of the due time, the rest below */
 +            pc_wait(&g_fg_cond, &g_fg_lock, (i64)(due - now - 1500000ull));
 +        else if (now < due) {
-+            /* the last stretch on the high-resolution timer, so the generated picture lands half a frame after the
-+               real one, not up to two milliseconds late */
++            /* the last stretch on the schedule's own clock, so the generated picture lands at its own phase of the
++               frame rather than on the timer's grid (plat_wait_until) */
 +            pm_unlock(&g_fg_lock);
-+            plat_sleep_ns((i64)(due - now));
++            plat_wait_until(due);
 +            pm_lock(&g_fg_lock);
 +        } else {
 +            pm_unlock(&g_fg_lock);
@@ -26284,30 +26284,32 @@ diff --git a/src/nx/runtime/main.h b/src/nx/runtime/main.h
 index addf0820..48526094 100644
 --- a/src/nx/runtime/main.h
 +++ b/src/nx/runtime/main.h
-@@ -38,5 +38,31 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -38,5 +38,33 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
  /* the wait before vi hands the game a buffer for its next frame, as fps_limit says: with fps_limit=game until the
     frame before has been on the display for interval refreshes (its swap interval) */
  void present_pace(u32 interval);
-+/* the wait between the display's frames for fps_limit fps, the game's swap interval and the speed lock; 0 = none */
++/* the wait between the display's frames for fps_limit fps and the game's swap interval; 0 = none. The game's own
++   interval always wins (Engine 1.49: no limit and no lock ever paces the game), an interval of 0 with a numeric
++   limit is that limit, and an interval of 0 at Maximum is left to the game's own timers */
 +u64 present_period(int fps, u32 interval, int lock);
-+/* the GPU thread, for each of the game's frames: 0 when the speed lock keeps a frame of a game paced faster than a
-+   lower fps_limit off the display (it is still drawn and submitted), else 1 */
++/* the GPU thread, for each of the game's frames: 0 when a lower fps_limit keeps the frame off the display (it is
++   still drawn and submitted), else 1. The game's own pace is not a toggle any more (Engine 1.49), so a leftover
++   speed_lock=0 cannot disable the limiter */
 +int present_show_due(void);
-+/* the game's own frames/sec the display gets: with the speed lock on, its console pace (or a lower limit) since the
-+   guest still steps at its swap interval; with the lock off, its limit - or what it really made, measured, for
-+   Maximum. 0 while unknown */
++/* the game's own frames/sec the display gets: its console pace (or a lower limit), whatever the limit or the settings
++   file say, since the guest always steps at its swap interval. A game that times itself has no interval-derived
++   pace: what it really made stands in, measured. 0 while unknown */
 +int present_game_side_fps(int fps_limit);
-+/* the game's measured own frames/sec, -1 until half a second has been seen under the current limit and lock: the
-+   limit off world's real rate, and only its Esc figure while it is current */
++/* the game's measured own frames/sec, -1 until half a second has been seen under the current fps_limit: a
++   self-timed game's real rate, and only its Esc figure while it is current */
 +int present_game_fps_now(void);
 +/* PortForge FSR 3 (frame generation) on, from the .ini or Esc */
 +int present_fg_on(void);
 +int present_fg_chosen(void);
-+/* pictures a second the display gets: fps_limit with frame generation off, twice it on, and - while the speed lock
-+   keeps the game at its console pace - up to four times the game's own frames for a typed limit above twice them or
-+   Unlimited (0); at most the display's refresh with vsync. With the lock off the game runs at the limit itself
-+   (Maximum = no limit at all), so frame generation doubles at most. "game" is the game's own pace doubled; 0 while
-+   the game's pace is unknown */
++/* pictures a second the display gets: the game's own frames with frame generation off, twice them on, and up to four
++   times them for a typed limit above twice the game's pace or for Unlimited/Maximum (0) - while the game itself keeps
++   its console pace and the pipeline makes the extra pictures; at most the display's refresh with vsync, and never
++   more than the limit that was typed. "game" is the game's own pace doubled; 0 while the game's pace is unknown */
 +int present_display_target(int fps_limit, int frame_generation);
 +int present_expected_display_fps(int fps_limit, int frame_generation);
 +/* atomic: the refresh in Hz of the display the window is on, 0 when not known (headless) */
@@ -26577,7 +26579,7 @@ index 408db9ed..69aae239 100644
  /* fps_limit: 0 = no limit, SNX_FPS_GAME = the game's own pace (its swap interval), else frames a second (10 to 1000) */
  #define SNX_FPS_GAME (-1)
  extern int g_opt_fps;                              /* atomic: the game's threads read it */
-+extern int g_opt_speed_lock;                       /* atomic: speed_lock, 1 = no frame sooner than the game's pace */
++extern int g_opt_speed_lock;                       /* atomic: speed_lock, kept for the app's row; pacing ignores it */
 +extern int g_opt_frame_generation;                 /* atomic: frame_generation; on-screen rate is ~2x via FG presents */
 +/* Generated pictures one real frame can pay with when the player types an FPS limit above twice the game's pace (the
 +   240 preset on a 60 FPS game) or picks Maximum: the renderer's FG_MAX_MIDS, in nx/gpu/vk/vk.h, which neither this
@@ -26604,7 +26606,7 @@ index 00000000..0693be93
 +#ifndef PF_ENGINE_VERSION_H
 +#define PF_ENGINE_VERSION_H
 +/* Baked into Esc so a game still running an older scarletnx.exe is obvious. Keep in sync with engine/VERSION. */
-+#define PF_ENGINE_VERSION "1.48"
++#define PF_ENGINE_VERSION "1.49"
 +#endif
 diff --git a/src/nx/runtime/platform/backend/gamepad.c b/src/nx/runtime/platform/backend/gamepad.c
 index ac4acd5a..38b92670 100644
@@ -26814,7 +26816,7 @@ index 87dfdc63..5973bf4c 100644
  #ifdef __ANDROID__
      static const char* const how = "Share log sends the game's log, which has what ran last.";
  #else
-@@ -698,22 +721,27 @@ static void hotkey(SDL_Keycode k) {
+@@ -698,22 +721,26 @@ static void hotkey(SDL_Keycode k) {
          case SDLK_F3: g_shot_req = 1; break;
          case SDLK_F4: {
              /* off and back to the limit the player set (fps_limit=120 stays 120), or to the game's pace when it
@@ -26844,12 +26846,11 @@ index 87dfdc63..5973bf4c 100644
                  LOG("FPS limit: %d\n", g_opt_fps);
              else
 -                LOG("FPS limit: off\n");
-+                LOG(g_opt_speed_lock ? "FPS limit: off, the speed lock keeps the game's own speed\n"
-+                                     : "FPS limit: off\n");
++                LOG("FPS limit: off, the game keeps its own speed\n");
              break;
          }
          case SDLK_F5: kernel_dump_threads(); break;
-@@ -727,20 +755,37 @@ static void hotkey(SDL_Keycode k) {
+@@ -727,20 +754,37 @@ static void hotkey(SDL_Keycode k) {
                  LOG("showcase: off\n");
              break;
          }
@@ -26891,7 +26892,7 @@ index 87dfdc63..5973bf4c 100644
      vpad_release();
      keys_held = 0;
      /* a finger or button down before this (Home on the on-screen controls opened it) lifts without a tap */
-@@ -748,25 +793,46 @@ static void menu_open(int open) {
+@@ -748,25 +792,46 @@ static void menu_open(int open) {
  }
  static void overlay_do(int action) {
      if (action == OVERLAY_EXIT) g_quit = 1;
@@ -26946,7 +26947,7 @@ index 87dfdc63..5973bf4c 100644
          return 1;
      }
      if (!overlay_shown()) return 0;
-@@ -780,7 +846,6 @@ static int menu_event(const SDL_Event* e) {
+@@ -780,7 +845,6 @@ static int menu_event(const SDL_Event* e) {
              case SDLK_SPACE:
                  if (!e->key.repeat) overlay_do(overlay_select());
                  break;
@@ -26954,7 +26955,7 @@ index 87dfdc63..5973bf4c 100644
              case SDLK_BACKSPACE:
                  if (!e->key.repeat) overlay_do(overlay_back());
                  break;
-@@ -917,11 +982,18 @@ void video_poll(void) {
+@@ -917,11 +981,18 @@ void video_poll(void) {
          switch (e.type) {
              case SDL_EVENT_QUIT: g_quit = 1; break;
              case SDL_EVENT_WINDOW_MINIMIZED:
@@ -26975,7 +26976,7 @@ index 87dfdc63..5973bf4c 100644
              case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                  if (e.window.windowID == SDL_GetWindowID(g_win)) wsize_set(e.window.data1, e.window.data2);
                  wsafe_set();
-@@ -930,6 +1002,8 @@ void video_poll(void) {
+@@ -930,6 +1001,8 @@ void video_poll(void) {
              case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
                  overlay_set_display_scale(SDL_GetWindowDisplayScale(g_win));
                  break;
@@ -26984,7 +26985,7 @@ index 87dfdc63..5973bf4c 100644
              case SDL_EVENT_FINGER_DOWN:
              case SDL_EVENT_FINGER_MOTION:
              case SDL_EVENT_FINGER_UP:
-@@ -946,10 +1020,6 @@ void video_poll(void) {
+@@ -946,10 +1019,6 @@ void video_poll(void) {
                  wsafe_set();
                  break;
              case SDL_EVENT_KEY_DOWN:
@@ -26995,7 +26996,7 @@ index 87dfdc63..5973bf4c 100644
                  if (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT)) {
                      if (!e.key.repeat) set_fullscreen(!g_fullscreen);
                      break;
-@@ -962,6 +1032,7 @@ void video_poll(void) {
+@@ -962,6 +1031,7 @@ void video_poll(void) {
                  break;
              case SDL_EVENT_KEY_UP: keys_held &= ~keymap(e.key.scancode); break;
              case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -27003,7 +27004,7 @@ index 87dfdc63..5973bf4c 100644
                  keys_held = 0;
                  ui_lock();
                  vpad_release();
-@@ -1037,7 +1108,7 @@ void video_poll(void) {
+@@ -1037,7 +1107,7 @@ void video_poll(void) {
          ui_lock();
          vpad_state(&vb, vs);
          acts = vpad_actions();
@@ -27012,7 +27013,7 @@ index 87dfdc63..5973bf4c 100644
          /* with the menu open, the pads move it: the on-screen controls' and the connected ones', sticks too */
          overlay_do(overlay_controls(vb | pb, vs[0] || vs[1] ? vs : pad, SDL_GetTicks()));
          ui_unlock();
-@@ -1094,9 +1165,18 @@ void video_poll(void) {
+@@ -1094,9 +1164,18 @@ void video_poll(void) {
  
  void frontend_frame(void) {
      char p[1200];
@@ -27944,7 +27945,7 @@ diff --git a/src/nx/runtime/platform/plat.h b/src/nx/runtime/platform/plat.h
 index d3e4e350..2bbb65df 100644
 --- a/src/nx/runtime/platform/plat.h
 +++ b/src/nx/runtime/platform/plat.h
-@@ -40,8 +40,17 @@ typedef void (*PThreadFn)(void* arg);
+@@ -40,8 +40,21 @@ typedef void (*PThreadFn)(void* arg);
     could not be started */
  int plat_thread(PThreadFn fn, void* arg, size_t stack);
  void plat_thread_exit(void); /* ends the calling thread (one plat_thread started) */
@@ -27959,10 +27960,14 @@ index d3e4e350..2bbb65df 100644
 +/* PortForge: the host's CPU threads and physical cores, for sizing worker pools; 0 where the host doesn't tell */
 +int plat_cpu_threads(void);
 +int plat_cpu_cores(void);
++/* PortForge: wait until a monotonic time on plat_ns's clock. A timer wait to within PLAT_WAIT_SPIN_NS of it, then
++   the clock itself, so a frame's pace is the schedule's and not the timer's granularity (a 240 Hz frame is 4.17 ms) */
++void plat_wait_until(u64 due);
++#define PLAT_WAIT_SPIN_NS 800000ull
  /* the calling thread runs only on the n host CPUs in ids */
  void plat_thread_cpus(const int* ids, int n);
  /* the host for the log's header, so a report needn't describe it: "<OS and version>, <CPU>, <n> threads, <n> GB RAM",
-@@ -68,6 +77,7 @@ i64 plat_tz_offset(void); /* local time minus UTC, in seconds */
+@@ -68,6 +81,7 @@ i64 plat_tz_offset(void); /* local time minus UTC, in seconds */
  u64 plat_vm_page(void);
  u8* plat_vm_reserve(u64 size); /* aligned to plat_vm_page, inaccessible until committed; NULL on failure */
  int plat_vm_commit(u8* p, u64 size);       /* readable and writable; 0, or -1 */
@@ -27970,7 +27975,7 @@ index d3e4e350..2bbb65df 100644
  void plat_vm_decommit(u8* p, u64 size);    /* inaccessible again, and zero when committed next */
  /* Calls cb for each run of pages in [p, p + size) written since they were last scanned, and watches them again.
     -1 when the host can't tell (the caller then compares contents). Linux uses userfaultfd's asynchronous write
-@@ -173,6 +183,8 @@ void plat_install_crash_handler(void);
+@@ -173,6 +187,8 @@ void plat_install_crash_handler(void);
  void plat_prof_start(void); /* starts the sampling profiler (the profile option): Windows only */
  #if defined(_WIN32)
  void plat_prof_add_thread(HANDLE h); /* a thread to sample; the profiler keeps its own handle */
@@ -27996,7 +28001,7 @@ index cd639e42..3d28e595 100644
  #if defined(__ANDROID__)
  #include <SDL3/SDL_system.h>
  #include <sys/system_properties.h>
-@@ -188,6 +192,17 @@ void plat_thread_exit(void) {
+@@ -188,6 +192,26 @@ void plat_thread_exit(void) {
      alt_stack_off();
      pthread_exit(NULL);
  }
@@ -28011,10 +28016,19 @@ index cd639e42..3d28e595 100644
 +void plat_game_priority(char* why, size_t n) {
 +    if (n) why[0] = 0;
 +}
++/* The last stretch of a wait on the schedule's own clock (plat.h). nanosleep already lands close, and the clock
++   decides the last 0.8 ms so a frame at 240 Hz is 4.17 ms apart rather than the kernel's slice apart */
++void plat_wait_until(u64 due) {
++    u64 now = plat_ns();
++    if (now >= due) return;
++    if (due - now > PLAT_WAIT_SPIN_NS) plat_sleep_ns((i64)(due - now - PLAT_WAIT_SPIN_NS));
++    while ((now = plat_ns()) < due) {
++    }
++}
  /* Linux only: Android's CPUs differ in speed, so a fixed share of them would make a core slow */
  #if defined(__linux__) && !defined(__ANDROID__)
  int plat_cpus(int* ids, int max) {
-@@ -219,6 +234,9 @@ void plat_thread_cpus(const int* ids, int n) {
+@@ -219,6 +243,9 @@ void plat_thread_cpus(const int* ids, int n) {
      (void)n;
  }
  #endif
@@ -28024,7 +28038,7 @@ index cd639e42..3d28e595 100644
  #if defined(__linux__) && !defined(__ANDROID__)
  /* the text after "key" (and a '=' or ':' with the spaces around it) on the first line of path that starts with it,
     unquoted; out empty when there's none */
-@@ -477,6 +495,7 @@ u8* plat_vm_reserve(u64 size) {
+@@ -477,6 +504,7 @@ u8* plat_vm_reserve(u64 size) {
      return p;
  }
  int plat_vm_commit(u8* p, u64 size) { return mprotect(p, (size_t)size, PROT_READ | PROT_WRITE) ? -1 : 0; }
@@ -28044,7 +28058,7 @@ index 1f9eebca..de853841 100644
  #include <stdlib.h>
  #include <string.h>
  
-@@ -103,6 +104,33 @@ void plat_thread_exit(void) {
+@@ -103,6 +104,43 @@ void plat_thread_exit(void) {
      sleep_timer_close();
      ExitThread(0);
  }
@@ -28075,10 +28089,20 @@ index 1f9eebca..de853841 100644
 +    snprintf(why, n, "%s%s%s", priority ? "above-normal priority" : "",
 +             priority && throttling ? ", " : "", throttling ? "no power throttling" : "");
 +}
++/* The last stretch of a wait on the schedule's own clock (plat.h). A waitable timer comes back on a ~0.5 ms grid -
++   a fifth of a 240 Hz frame - which is judder without VSync, so the microsecond clock decides the last 0.8 ms (a
++   bounded spin, no yield: SwitchToThread can cost a millisecond) and the timer the rest. plat_ns is above's clock */
++void plat_wait_until(u64 due) {
++    u64 now = plat_ns();
++    if (now >= due) return;
++    if (due - now > PLAT_WAIT_SPIN_NS) plat_sleep_ns((i64)(due - now - PLAT_WAIT_SPIN_NS));
++    while ((now = plat_ns()) < due) {
++    }
++}
  int plat_cpus(int* ids, int max) {
      (void)ids;
      (void)max;
-@@ -112,6 +140,27 @@ void plat_thread_cpus(const int* ids, int n) {
+@@ -112,6 +150,27 @@ void plat_thread_cpus(const int* ids, int n) {
      (void)ids;
      (void)n;
  }
@@ -28106,7 +28130,7 @@ index 1f9eebca..de853841 100644
  typedef LONG(WINAPI* RtlGetVersionFn)(RTL_OSVERSIONINFOW*);
  void plat_system_info(char* out, size_t cap) {
      static const char key[] = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
-@@ -259,6 +308,29 @@ int plat_vm_commit(u8* p, u64 size) {
+@@ -259,6 +318,29 @@ int plat_vm_commit(u8* p, u64 size) {
  }
  void plat_vm_decommit(u8* p, u64 size) { VirtualFree(p, (SIZE_T)size, MEM_DECOMMIT); }
  
@@ -28646,7 +28670,7 @@ index 2bd6181e..3816da02 100644
  #include "nx/runtime/platform/plat.h"
  
  int g_frames;
-@@ -31,14 +32,223 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
+@@ -31,19 +32,223 @@ void vi_show_buffer(u32 nvmap_id, u32 offset, u32 w, u32 h, u32 pitch, u32 layou
     paces a swap interval of 0, the game's pace with interval 0 does not wait at all */
  static PMutex g_pace_lock = PMUTEX_INIT;
  static u64 g_pace_last; /* when the frame before was due, 0 before the first */
@@ -28671,42 +28695,42 @@ index 2bd6181e..3816da02 100644
 +/* The display's refresh in Hz, 0 while unknown: the backend sets it for the window's display */
 +int g_display_hz;
 +
-+/* Guest wait between vi dequeues. With the speed lock on and a game that asked for a swap interval, this is always
-+   that interval: fps_limit and frame generation change which pictures reach the display (present_show_due, the
-+   generated ones), never how often the game steps. A shorter wait runs a game that counts its frames faster (a 30
-+   FPS game at 120 ran four times too fast, characters fell through floors), a longer one in slow motion. A game that
-+   asks for interval 0 times itself and follows a numeric limit. With the speed lock off the limit is the game's own
-+   frame rate, and fps_limit=0 (Maximum, the FPS limit menu's top entry) waits for nothing at all, so the game runs
-+   as fast as this PC can render it; Game speed (SNX_FPS_GAME) is the console's own pace in either case. */
++/* Guest wait between vi dequeues: the game's own pace, whatever the FPS limit asks (Engine 1.49). A game that asked
++   for a swap interval always waits that interval: fps_limit and frame generation change which pictures reach the
++   display (present_show_due, the generated ones), never how often the game steps. A shorter wait runs a game that
++   counts its frames faster (a 30 FPS game at 120 ran four times too fast, characters fell through floors), a longer
++   one in slow motion. Engine 1.48 had the limit be the game's own frame rate with the speed lock off, so a 30 FPS
++   game at 240 ran eight times its console speed; that is gone, and every game is back at its own speed whatever the
++   limit asks, automatically. A game that asks for interval 0 times itself: a numeric limit is its only pace, and
++   Maximum (fps_limit=0, the FPS limit menu's top entry) leaves it to its own timers. Game speed (SNX_FPS_GAME) and
++   the lock are both the console's pace; `lock` stays for the settings row and Esc, and pacing ignores it. */
 +u64 present_period(int fps, u32 interval, int lock) {
 +    u64 game = interval ? 1000000000u / (u64)VI_REFRESH_HZ * interval : 0;
-+    if (fps == SNX_FPS_GAME) return game;
-+    if (lock && game) return game;
-+    /* Maximum with the lock off: no wait, the game goes as fast as the PC renders it */
-+    if (!fps) return 0;
++    (void)lock;
++    if (game) return game;
++    if (fps == SNX_FPS_GAME || !fps) return 0;
 +    return 1000000000u / (u64)fps;
 +}
 +
 +void present_limit_changed(void) { g_show_next = 0; }
 +
-+/* The guest's own frames a second, measured. With the speed lock off the game runs at the limit or, for Maximum
-+   (fps_limit=0), as fast as this PC can render it: its own rate is then what it really made, and its swap interval
-+   is only what it asked for. Every one of the game's frames counts, the ones a lower limit keeps off the display
-+   included. Windows are half a second, and the limit, the lock or the mode starting over clears it. */
++/* The guest's own frames a second, measured: a game that times itself (no swap interval) has no pace the engine
++   knows from it, so its own rate is what it really made, for the display side and Esc. Every one of the game's
++   frames counts, the ones a lower limit keeps off the display included. Windows are half a second, and the limit
++   or the mode starting over clears it. */
 +static u32 g_game_count;
 +static int g_game_fps = -1;
-+static int g_game_fps_limit, g_game_fps_lock; /* the limit and lock the measured rate belongs to */
-+static int g_game_fps_known;                  /* a window has been completed for that pair */
++static int g_game_fps_limit; /* the limit the measured rate belongs to */
++static int g_game_fps_known; /* a window has been completed for that limit */
 +static void note_game_frame(void) {
 +    static u64 since_ns;
 +    static u32 since;
 +    u64 now = plat_ns();
-+    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED), lock = __atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED);
++    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
 +    g_game_count++;
-+    if (!g_game_fps_known || fps != g_game_fps_limit || lock != g_game_fps_lock) {
++    if (!g_game_fps_known || fps != g_game_fps_limit) {
 +        g_game_fps_known = 0;
 +        g_game_fps_limit = fps;
-+        g_game_fps_lock = lock;
 +        since_ns = 0;
 +    }
 +    if (!since_ns || now - since_ns >= 500000000ull) {
@@ -28718,11 +28742,11 @@ index 2bd6181e..3816da02 100644
 +        since = g_game_count;
 +    }
 +}
-+/* The measured rate, -1 while the limit, the lock or the mode has changed since the last window: a stale number must
-+   not steer the display's pace (present_display_target) or Esc's "game" figure */
++/* The measured rate, -1 while the limit or the mode has changed since the last window: a stale number must not
++   steer the display's pace (present_display_target) or Esc's "game" figure */
 +int present_game_fps_now(void) {
-+    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED), lock = __atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED);
-+    if (!g_game_fps_known || fps != g_game_fps_limit || lock != g_game_fps_lock) return -1;
++    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
++    if (!g_game_fps_known || fps != g_game_fps_limit) return -1;
 +    return g_game_fps;
 +}
 +
@@ -28730,8 +28754,9 @@ index 2bd6181e..3816da02 100644
 +    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
 +    note_game_frame();
 +    u64 game = __atomic_load_n(&g_game_period, __ATOMIC_RELAXED), cap, now;
-+    if (!__atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED) || fps <= 0 || !game ||
-+        (cap = 1000000000u / (u64)fps) <= game) {
++    /* a lower limit keeps some of the game's frames off the display, whatever the settings file says: the game's own
++       pace is not a toggle any more (Engine 1.49), and a leftover speed_lock=0 must not disable the limiter */
++    if (fps <= 0 || !game || (cap = 1000000000u / (u64)fps) <= game) {
 +        g_show_next = 0;
 +        return 1;
 +    }
@@ -28748,15 +28773,13 @@ index 2bd6181e..3816da02 100644
 +    return 1;
 +}
 +
-+/* The game's frames a second that reach the display: a lower limit, else the game's own pace (the speed lock never
-+   runs it faster). Without the lock, or for a self-timed game, the limit. 0 = unlimited or not known yet */
++/* The game's frames a second that reach the display: a lower limit, else the game's own pace (no limit runs it
++   faster, Engine 1.49). A game that times itself has no interval-derived pace: what it really made stands in, and
++   before the first half-second window a typed limit does. 0 = unlimited or not known yet */
 +int present_game_side_fps(int fps_limit) {
 +    int g = game_fps(), made;
 +    if (fps_limit == SNX_FPS_GAME) return g;
-+    if (__atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED) && g)
-+        return fps_limit > 0 && fps_limit < g ? fps_limit : g;
-+    /* the speed lock is off: the limit (or Maximum) is the game's own frame rate, so what it made is what the
-+       display and Esc must count. Before the first half-second has been measured the limit stands in for it. */
++    if (g) return fps_limit > 0 && fps_limit < g ? fps_limit : g;
 +    made = present_game_fps_now();
 +    if (made > 0) return fps_limit > 0 && fps_limit < made ? fps_limit : made;
 +    return fps_limit > 0 ? fps_limit : g;
@@ -28782,27 +28805,22 @@ index 2bd6181e..3816da02 100644
 +   refresh: a limit between the game's pace and twice it (90 on a 60 FPS game) gets exactly that many, a generated
 +   picture after as many real frames as the limit pays for. A typed limit above twice the game's pace (144, 165, 200,
 +   240) is paid with up to PRESENT_FG_MAX_MIDS generated pictures a frame, so the 240 preset is 240 in a 60 FPS game
-+   where the panel allows it (vsync caps it at the refresh). All of that is the speed lock's world: the game keeps its
-+   console pace and the pipeline makes the extra pictures. With the lock off the limit is the game's own frame rate
-+   instead - the game runs at up to it, and Maximum (0) waits for nothing, so the game runs as fast as this PC can
-+   render it - and its own frames are what the display gets, doubled at most by frame generation, because there is
-+   nothing left for the pipeline to fill. Game speed is the game's own pace, doubled by FSR 3, in either case. 0
-+   while the game's pace isn't known (a self-timed game without a limit) */
++   where the panel allows it (vsync caps it at the refresh). All of that is the game's own pace: every limit, Game
++   speed and Maximum included, keeps the console's pace and the pipeline makes the extra pictures (Engine 1.49; the
++   limit never runs the game faster). Game speed is the game's own pace, doubled by FSR 3. 0 while the game's pace
++   isn't known (a self-timed game without a limit) */
 +int present_display_target(int fps_limit, int frame_generation) {
 +    int side = present_game_side_fps(fps_limit), hz = __atomic_load_n(&g_display_hz, __ATOMIC_RELAXED), want, cap;
-+    int locked = __atomic_load_n(&g_opt_speed_lock, __ATOMIC_RELAXED);
 +    if (side <= 0) return 0;
 +    /* paced_display=0: only the game's own frames reach the display, whatever the limit above them */
 +    if (!__atomic_load_n(&g_settings.paced_display, __ATOMIC_RELAXED)) return side;
 +    cap = fps_limit > 0 ? fps_limit : 0;
 +    if (hz > 0 && __atomic_load_n(&g_settings.vsync, __ATOMIC_RELAXED) && (!cap || hz < cap)) cap = hz;
 +    want = frame_generation ? side * 2 : side;
-+    /* a limit above twice the game's pace, or Unlimited (0), is paid with up to three generated pictures a frame -
-+       four times the game's own - while the speed lock keeps the game at its console pace and the pipeline is what
-+       makes the extra pictures. With the lock off the game itself makes them (that is what Maximum asks for), so
-+       frame generation only doubles them, as AMD's does in a PC game */
-+    if (frame_generation && locked && fps_limit >= 0 && (fps_limit == 0 || fps_limit > want))
-+        want = side * (PRESENT_FG_MAX_MIDS + 1);
++    /* a limit above twice the game's pace, or Maximum (0), is paid with up to three generated pictures a frame -
++       four times the game's own, 240 from a 60 FPS game and 120 from a 30 FPS game - while the game keeps its own
++       console pace and the pipeline is what makes the extra pictures */
++    if (frame_generation && (fps_limit == 0 || fps_limit > want)) want = side * (PRESENT_FG_MAX_MIDS + 1);
 +    if (cap && want > cap) want = cap > side ? cap : side;
 +    return want;
 +}
@@ -28873,11 +28891,18 @@ index 2bd6181e..3816da02 100644
      now = plat_ns();
      next = g_pace_last + period;
      /* a schedule more than a refresh behind (a load, a pause) starts again from now: no burst to catch up */
+     if (!g_pace_last || now > next + refresh) next = now;
+     g_pace_last = next;
+     pm_unlock(&g_pace_lock);
+-    if (next > now) plat_sleep_ns((i64)(next - now));
++    /* the wait is the schedule's own: a timer comes back on a ~0.5 ms grid, a fifth of a 240 Hz frame (plat_wait_until) */
++    if (next > now) plat_wait_until(next);
+ }
 diff --git a/src/nx/runtime/settings.txt b/src/nx/runtime/settings.txt
 index be57ac55..8d8212c6 100644
 --- a/src/nx/runtime/settings.txt
 +++ b/src/nx/runtime/settings.txt
-@@ -80,13 +80,149 @@ setting Game mods off
+@@ -80,13 +80,150 @@ setting Game mods off
      help order. The launcher's list of updates, DLCs and mods writes it. A mod's exefs/ is recompiled into the game
  
  table g_display_ini
@@ -28931,10 +28956,11 @@ index be57ac55..8d8212c6 100644
 +    help PortForge optical-flow frame generation (part of PortForge FSR 3): a picture between each two of the game's
 +    help frames. Built from scratch from FSR 3 / AFMF ideas (luma pyramid, block search, disocclusion, HUD lock) —
 +    help not the AMD FidelityFX SDK (Switch games have no host motion vectors). With Upscaler=FSR 1 this is the full
-+    help PortForge FSR 3 package. Esc/Home toggles PortForge FSR 3 for the session. With Speed lock on the game
-+    help keeps the pace it asked for and frame generation only adds display pictures (about twice that pace: 30 →
-+    help ~60, 60 → ~120), a lower fps_limit showing fewer of them. With it off the game runs at the fps_limit itself
-+    help (0 = Maximum: as fast as this PC renders it) and generation doubles those frames. Display FPS counts them.
++    help PortForge FSR 3 package. Esc/Home toggles PortForge FSR 3 for the session. The game keeps the pace it asked
++    help for (Engine 1.49) and frame generation only adds display pictures: exactly twice its frames with AMD's own
++    help interpolation (30 → 60, 60 → 120), up to four times them (240 in a 60 FPS game, 120 in a 30 FPS game) where
++    help the FPS limit or Maximum asks for more. A lower fps_limit shows fewer of them. Display FPS, the Esc line and
++    help the frame-time graph count every picture, generated ones included.
 +setting Frame generation dump
 +    key fg_dump
 +    text 1024
@@ -29028,14 +29054,15 @@ index be57ac55..8d8212c6 100644
  setting Fullscreen
      key fullscreen
      int 0 1
-@@ -166,7 +302,21 @@ setting FPS limit
+@@ -166,7 +303,21 @@ setting FPS limit
      default game
      set options_fps_set
 -    help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
 -    help 10 to 1000 = that many frames a second. F4 turns the limit off and on
 +    help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit
-+    help and, with Speed lock off, the game runs as fast as this PC can render it (the menu calls it Maximum);
-+    help 10 to 1000 = that many pictures a second with Speed lock on, or the game's own frame rate with it off.
++    help on the pictures (the menu calls it Maximum: the most pictures the pipeline can make); 10 to 1000 = that many
++    help pictures a second. The game always keeps its own speed (Engine 1.49): the limit and frame generation change
++    help what the display shows, never how fast the game itself runs.
 +    help F4 turns the limit off and on. Display FPS counts the pictures on screen, including generated ones.
 +setting Speed lock
 +    key speed_lock
@@ -29043,16 +29070,15 @@ index be57ac55..8d8212c6 100644
 +    default 1
 +    set options_speed_lock_set
 +    words Off|On
-+    help PortForge Engine. 1 = the game waits the swap interval it asked for, with or without frame generation, so an
-+    help FPS limit cannot speed it up and physics keeps the console timestep: the limit and frame generation change
-+    help the pictures on the display only (the PortForge app keeps Game speed on this). 0 = the FPS limit is the
-+    help game's own frame rate: it runs at up to the limit, and 0 (Maximum) waits for nothing at all, so the game
-+    help runs as fast as this PC can render it. Most games then run faster than on the console and their physics and
-+    help timing follow their frames, as they do in a PC game run above its designed frame rate.
++    help PortForge Engine. The game always waits the swap interval it asked for, with or without frame generation, so
++    help an FPS limit cannot speed it up and physics keeps the console timestep: the limit and frame generation
++    help change the pictures on the display only. Engine 1.48 made 0 mean the FPS limit was the game's own frame
++    help rate, which ran a 30 FPS game at 240 eight times its console speed; Engine 1.49 removed that and 0 behaves
++    help as 1. The key stays so the PortForge app's file and older game settings load unchanged.
  setting Memory (GB)
      key memory_gb
      int 0 8
-@@ -174,6 +324,16 @@ setting Memory (GB)
+@@ -174,6 +325,16 @@ setting Memory (GB)
      startup
      help The memory the game sees: below 6 the console's 3.2 GB, 6 = 4.8 GB, 8 = 6.8 GB. A game that runs out on
      help the console's amount needs 6
@@ -29069,7 +29095,7 @@ index be57ac55..8d8212c6 100644
  setting Heap limit (MB)
      key heap_max_mb
      text 32
-@@ -188,8 +348,46 @@ setting Pipeline threads
+@@ -188,8 +349,46 @@ setting Pipeline threads
      startup
      words Auto|#
      help The threads that make the GPU's new pipelines while the game goes on: 0 = a quarter of the computer's
@@ -29720,7 +29746,7 @@ diff --git a/tests/overlay.c b/tests/overlay.c
 index 03330d3d..d02928f5 100644
 --- a/tests/overlay.c
 +++ b/tests/overlay.c
-@@ -10,11 +10,54 @@
+@@ -10,11 +10,56 @@
  #include "nx/runtime/platform/vpad.h"
  #include "nx/runtime/platform/controls_atlas.h"
  #include "nx/runtime/platform/plat.h"
@@ -29761,13 +29787,15 @@ index 03330d3d..d02928f5 100644
 +           __atomic_load_n(&g_settings.frame_generation, __ATOMIC_RELAXED);
 +}
 +int present_fg_on(void) { return present_fg_chosen(); }
-+/* as present.c without a display: the limit, twice it with frame generation, four times the game's pace when the
-+   limit typed is above twice it (the 240 preset on a 60 FPS game), the game's 60 for game and unlimited */
++/* as present.c without a display: the game's own frames, twice them with frame generation, four times them when the
++   limit typed is above twice them or Maximum (0) - and never more than the limit typed (Engine 1.49: 144 stays 144
++   where 1.48's stub made it 240) */
 +int present_display_target(int fps_limit, int frame_generation) {
-+    int side = present_game_side_fps(fps_limit), want = fps_limit > 0 ? fps_limit : side;
++    int side = present_game_side_fps(fps_limit), want = frame_generation ? side * 2 : side, cap = fps_limit;
 +    if (!frame_generation) return want;
-+    if (fps_limit > 0 && fps_limit > 2 * side) return side * 4;
-+    return want * 2;
++    if (fps_limit == 0 || fps_limit > want) want = side * 4;
++    if (cap && want > cap) want = cap > side ? cap : side;
++    return want;
 +}
 +int present_expected_display_fps(int fps_limit, int frame_generation) {
 +    return present_display_target(fps_limit, frame_generation);
@@ -29775,7 +29803,7 @@ index 03330d3d..d02928f5 100644
  /* the menu's page colour, its letters on the head's band, as R G B A bytes */
  #define LIGHT_RGBA                                                                                                     \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_PAGE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_PAGE & 0xFF00u) |                   \
-@@ -23,6 +66,7 @@
+@@ -23,6 +68,7 @@
  #define FAILURE                                                                                                        \
      (0xFFu << 24 | (SNX_GUI_THEME_YORHA_FAILURE & 0xFFu) << 16 | (SNX_GUI_THEME_YORHA_FAILURE & 0xFF00u) |             \
       (SNX_GUI_THEME_YORHA_FAILURE >> 16 & 0xFFu))
@@ -29783,7 +29811,7 @@ index 03330d3d..d02928f5 100644
  #include <assert.h>
  #include <stdarg.h>
  #include <stdio.h>
-@@ -64,6 +108,17 @@ int gamepad_layout(int i, int labels[4], int* symmetric) {
+@@ -64,6 +110,17 @@ int gamepad_layout(int i, int labels[4], int* symmetric) {
  unsigned gamepad_held(int i) { return i < 0 ? pads_held[0] | pads_held[1] | pads_held[2] : i < 3 ? pads_held[i] : 0; }
  const char* gamepad_name(int i) { return i >= 0 && i < 3 ? pad_names[i] : NULL; }
  int gamepad_of_player(int slot) { return slot >= 0 && slot < 3 ? pad_of_player[slot] : -1; }
@@ -29801,7 +29829,7 @@ index 03330d3d..d02928f5 100644
  const IniOpt g_backend_ini[] = {
      {"touch", "2", NULL, INI_INT, 0, &touch, 0, 2, NULL, "Touch screen", "Off|Fingers|Mouse too", 0, 0, 0},
      {NULL, NULL, NULL, 0, 0, NULL, 0, 0, NULL, NULL, NULL, 0, 0, 0}};
-@@ -95,11 +150,12 @@ static void store(const char* key, const char* value) {
+@@ -95,11 +152,12 @@ static void store(const char* key, const char* value) {
  
  enum { SW = 2424, SH = 1080 };
  static int px, py, s, C; /* C: the panel's columns, overlay_cols' */
@@ -29815,7 +29843,7 @@ index 03330d3d..d02928f5 100644
  }
  /* ui.c's warning for a picture that does not draw */
  void logf_(int lvl, const char* fmt, ...) {
-@@ -170,7 +226,7 @@ static SnxOverlayError panel_of(const char* name, const char* msg, const char* h
+@@ -170,7 +228,7 @@ static SnxOverlayError panel_of(const char* name, const char* msg, const char* h
      return e;
  }
  int main(void) {
@@ -29824,7 +29852,7 @@ index 03330d3d..d02928f5 100644
      int x, y, sc;
      vpad_set_store(store);
      snx_pad_map_unset(&pads.own); /* as gamepad.c starts it: every control the button in its place */
-@@ -179,15 +235,17 @@ int main(void) {
+@@ -179,15 +237,17 @@ int main(void) {
      overlay_toggle();
      assert(overlay_shown());
      /* letters half the screen's height at most, in whole steps, in the middle: a phone held wide, a small window. The
@@ -29846,7 +29874,7 @@ index 03330d3d..d02928f5 100644
      /* a phone's display scale: the Poco F8 (408 dpi, 2510x1156) and the Pixel 9 (420 dpi) at 3x, where half the
         picture gave 2x; a 4K picture at 100% keeps the 4x half of it gives */
      overlay_set_display_scale(408.0f / 160);
-@@ -202,25 +260,85 @@ int main(void) {
+@@ -202,25 +262,85 @@ int main(void) {
  
      /* the first page: the title on a band of ink, the items under it, the focused one on a band; the page hides the
         game, whose text would show through it */
@@ -29941,7 +29969,7 @@ index 03330d3d..d02928f5 100644
      /* named as the .ini's rows name them, in the launcher's order, the game's own actions among them */
      assert(text_at(1, 4, "\xFE Edit layout") && text_at(1, 5, "\xFE Snap to grid") &&
             text_at(1, 8, "\xFE Relative stick center"));
-@@ -271,7 +389,7 @@ int main(void) {
+@@ -271,7 +391,7 @@ int main(void) {
      /* the buttons' page: one hidden and kept, All shows them again; it scrolls to its last item */
      assert(tap(9, 3) == OVERLAY_NONE);
      draw();
@@ -29950,7 +29978,7 @@ index 03330d3d..d02928f5 100644
      log_[0] = 0;
      tap(1, 3);
      assert(!g_settings.control_shown[SNX_VPAD_L] && !strcmp(log_, "controls_l_shown=0;")); /* its place stays */
-@@ -294,10 +412,10 @@ int main(void) {
+@@ -294,10 +414,10 @@ int main(void) {
      /* Back on it, and the key Back, go up a page each */
      assert(overlay_select() == OVERLAY_NONE);
      draw();
@@ -29963,7 +29991,7 @@ index 03330d3d..d02928f5 100644
      /* a pad's buttons, as the game reads them: the D-pad and the left stick move, A selects, B goes back, the rest do
         nothing */
      {
-@@ -306,26 +424,36 @@ int main(void) {
+@@ -306,26 +426,36 @@ int main(void) {
          assert(overlay_pad(1ull << 13) == OVERLAY_NONE && overlay_pad(1ull << 2) == OVERLAY_NONE); /* X */
          assert(overlay_pad(1ull << 0) == OVERLAY_NONE);                                            /* Controllers */
          draw();
@@ -30009,7 +30037,7 @@ index 03330d3d..d02928f5 100644
          assert(overlay_controls(1ull << 0, still, 3000) == OVERLAY_EXIT);
          assert(overlay_controls(1ull << 13, still, 3001) == OVERLAY_NONE &&
                 overlay_controls(0, left, 3002) == OVERLAY_NONE);
-@@ -352,7 +480,7 @@ int main(void) {
+@@ -352,7 +482,7 @@ int main(void) {
              vpad_state(&b, st);
              assert(!b && overlay_controls(1ull << 0, still, 4001) == OVERLAY_NONE);
              draw();
@@ -30018,7 +30046,7 @@ index 03330d3d..d02928f5 100644
              assert(overlay_controls(1ull << 1, still, 4002) == OVERLAY_NONE); /* B: the menu */
              overlay_pointer_down(8, 5, 5, area);
              assert(overlay_pointer_up(8, 5, 5, SW, SH) == OVERLAY_CLOSE);
-@@ -368,10 +496,12 @@ int main(void) {
+@@ -368,10 +498,12 @@ int main(void) {
  
      /* the controllers' page: the ones connected, the Player row (every player's, or one's own), Swap A/B, the dead
         zone by fives, the vibration by tens down to Off and the background input, each kept */
@@ -30033,7 +30061,7 @@ index 03330d3d..d02928f5 100644
      assert(text_at(1, 4, "\xFE Swap A/B") && text_at(C - 4, 4, "Off"));
      tap(1, 3);
      assert(g_settings.swap_a_b && pad_stored == &g_settings.swap_a_b);
-@@ -445,7 +575,7 @@ int main(void) {
+@@ -445,7 +577,7 @@ int main(void) {
      }
      assert(overlay_back() == OVERLAY_NONE); /* no presets to go back to: up to its item at once */
      draw();
@@ -30042,7 +30070,7 @@ index 03330d3d..d02928f5 100644
      pads_held[0] = 0;
      /* the Player row steps to player 1: its Swap A/B and Vibration its own, As All until picked; its Button map
         its own map, kept as its key; round the eight back to All */
-@@ -494,19 +624,56 @@ int main(void) {
+@@ -494,19 +626,56 @@ int main(void) {
      assert(shows("< All >"));
      /* Back, on its item or the key, comes up to the controllers' item */
      assert(tap(6, 3) == OVERLAY_NONE);
@@ -30103,7 +30131,7 @@ index 03330d3d..d02928f5 100644
  
      /* ui.c: the atlas with the font's glyphs, white where a glyph's bit is, and sprites' alpha premultiplied */
      {
-@@ -521,7 +688,7 @@ int main(void) {
+@@ -521,7 +690,7 @@ int main(void) {
          assert(!ui_atlas(&w, &h, &version));
          ui_atlas_set(sprites, SNX_CONTROLS_ATLAS_WIDTH, SNX_CONTROLS_ATLAS_HEIGHT);
          a = ui_atlas(&w, &h, &version);
@@ -30112,7 +30140,7 @@ index 03330d3d..d02928f5 100644
          /* no user read yet: the picture's rows are transparent */
          for (y = 0; y < SNX_UI_PICTURE; ++y)
              for (x = 0; x < SNX_UI_PICTURE; ++x) assert(!a[(SNX_CONTROLS_ATLAS_HEIGHT + y) * w + x]);
-@@ -714,7 +881,7 @@ int main(void) {
+@@ -714,7 +883,7 @@ int main(void) {
          assert(SNX_GUI_THEME_YORHA_PICTURE == 1); /* square: the frame is the fills' */
          ui_atlas_set(sprites, SNX_CONTROLS_ATLAS_WIDTH, SNX_CONTROLS_ATLAS_HEIGHT);
          a = ui_atlas(&w, &h, &version);
@@ -30121,7 +30149,7 @@ index 03330d3d..d02928f5 100644
          for (y = 0; y < SNX_UI_PICTURE; ++y)
              for (x = 0; x < SNX_UI_PICTURE; ++x) {
                  u32 p = snx_le32(a[(SNX_CONTROLS_ATLAS_HEIGHT + y) * w + x]); /* the GPU's bytes R G B A */
-@@ -755,7 +922,7 @@ int main(void) {
+@@ -755,7 +924,7 @@ int main(void) {
                      assert(q->y == band + 2 * edge && q->h == side && q->w == side && !q->sharp);
                      assert(q->x + q->w == right - 2 * edge);
                  }
@@ -30130,7 +30158,7 @@ index 03330d3d..d02928f5 100644
                            q->x < right && q->y >= band && q->y < band + 16.0f * (float)s;
                  if (q->u == SNX_CONTROLS_FONT_X + 'P' % 16 * 8 && q->v == SNX_CONTROLS_FONT_Y + 'P' / 16 * 16 &&
                      q->y == band && q->x > boxx)
-@@ -768,6 +935,24 @@ int main(void) {
+@@ -768,6 +937,24 @@ int main(void) {
          for (i = 0, pictures = 0; i < list.n; ++i) pictures += list.q[i].v == SNX_CONTROLS_ATLAS_HEIGHT;
          assert(!pictures && !shows("Player"));
      }
@@ -30237,12 +30265,12 @@ index 53c5e45d..bd87f7eb 100644
  #include <stdio.h>
  
  int g_opt_fps = SNX_FPS_GAME;
-+int g_opt_speed_lock = 0; /* pacing() checks the limits unlocked, speed_lock() with the lock */
++int g_opt_speed_lock = 0; /* the settings row and Esc only: pacing ignores it (Engine 1.49) */
 +int g_opt_frame_generation = 0;
  static u64 now_ns, slept_ns;
  static unsigned checks, failures;
  #define CHECK(c, ...)                                                                                                  \
-@@ -36,6 +38,14 @@ void logf_(int lvl, const char* fmt, ...) {
+@@ -36,6 +38,22 @@ void logf_(int lvl, const char* fmt, ...) {
  }
  u64 nvmap_addr_by_id(u32 id) { return id == 7 ? 0x1000 : 0; }
  void cheats_frame(void) {}
@@ -30254,10 +30282,18 @@ index 53c5e45d..bd87f7eb 100644
 +    else
 +        prepare_hidden++;
 +}
++/* Engine 1.49: the schedule's own clock decides the last stretch of a wait (the platform's own does it in real time).
++   This stub lands exactly on the due time, the fake clock's only way to pass time being a sleep */
++void plat_wait_until(u64 due) {
++    if (due > now_ns) {
++        slept_ns += due - now_ns;
++        now_ns = due;
++    }
++}
  static u64 presented;
  static void test_present(u64 a, u32 w, u32 h, u32 pitch, u32 layout, u32 bhl, u32 fmt, const i32 crop[4], u32 t) {
      (void)w, (void)h, (void)pitch, (void)layout, (void)bhl, (void)fmt, (void)crop, (void)t;
-@@ -56,6 +66,80 @@ static void ticks(void) {
+@@ -56,6 +74,80 @@ static void ticks(void) {
      }
  }
  
@@ -30338,13 +30374,33 @@ index 53c5e45d..bd87f7eb 100644
  static void pacing(void) {
      const u64 refresh = 1000000000u / 60;
      u64 before;
-@@ -84,12 +168,182 @@ static void pacing(void) {
+@@ -84,12 +176,198 @@ static void pacing(void) {
      before = slept_ns;
      present_pace(0);
      present_pace(4); /* a number ignores the interval */
 -    CHECK(slept_ns - before == 2 * (1000000000u / 30), "fps_limit=30 waited %llu ns over two frames",
-+    CHECK(slept_ns - before == 1000000000u / 30, "fps_limit=30 waited %llu ns over two frames",
-           (unsigned long long)(slept_ns - before));
+-          (unsigned long long)(slept_ns - before));
++    /* Engine 1.49: a limit no longer paces the game - its own swap interval does, at every limit and at Maximum */
++    {
++        static const struct {
++            int fps;
++            u32 interval;
++            u64 want;
++        } pace[] = {{30, 4, 4 * refresh}, {30, 1, refresh}, {120, 2, 2 * refresh},
++                    {240, 1, refresh},    {0, 1, refresh},  {0, 2, 2 * refresh},
++                    {SNX_FPS_GAME, 2, 2 * refresh}};
++        size_t c;
++        for (c = 0; c < sizeof pace / sizeof *pace; c++) {
++            g_opt_fps = pace[c].fps;
++            present_pace(pace[c].interval); /* settle into the pace, then measure the frame after it */
++            before = slept_ns;
++            now_ns += 1000000; /* the game took 1 ms for its frame */
++            present_pace(pace[c].interval);
++            CHECK(slept_ns - before == pace[c].want - 1000000,
++                  "fps_limit=%d on interval %u waited %llu ns, not the game's own %llu", pace[c].fps, pace[c].interval,
++                  (unsigned long long)(slept_ns - before), (unsigned long long)pace[c].want);
++        }
++    }
      g_opt_fps = 0;
      before = slept_ns;
      present_pace(1);
@@ -30353,7 +30409,7 @@ index 53c5e45d..bd87f7eb 100644
 +    present_pace(1);
 +    CHECK(slept_ns == before, "switching from unlimited inherited an old pacing deadline");
 +    present_pace(1);
-+    CHECK(slept_ns - before == 1000000000u / 120, "new limit did not establish its own cadence");
++    CHECK(slept_ns - before == refresh, "a 120 limit changed the game's own cadence");
 +    g_opt_fps = SNX_FPS_GAME;
 +    before = slept_ns;
 +    present_pace(2);
@@ -30376,16 +30432,12 @@ index 53c5e45d..bd87f7eb 100644
 +    CHECK(present_period(120, 0, 1) == 1000000000u / 120, "a self-timed game lost its limit");
 +    CHECK(present_period(0, 0, 1) == 0, "a self-timed game without a limit waited");
 +    CHECK(present_period(SNX_FPS_GAME, 2, 1) == 2 * refresh, "the game's pace changed");
-+    CHECK(present_period(120, 1, 0) == 1000000000u / 120, "speed_lock=0 didn't allow a higher limit");
-+    /* with the lock off the limit is the game's own frame rate, and Maximum (0) waits for nothing at all, so the
-+       game runs as fast as the PC renders it; the display gets the game's own frames, twice them at most with FSR 3 */
-+    CHECK(present_period(0, 2, 0) == 0, "Maximum with speed_lock=0 still held a 30 FPS game to its swap interval");
-+    CHECK(present_period(240, 1, 0) == 1000000000u / 240, "a 240 limit with speed_lock=0 was not the game's rate");
-+    g_opt_speed_lock = 0; /* the display's target follows the lock the engine reads, not the one passed above */
-+    CHECK(present_display_target(120, 0) == 120, "a 120 limit with speed_lock=0 did not show the game's own 120 frames");
-+    CHECK(present_display_target(240, 0) == 240, "a 240 limit with speed_lock=0 did not show the game's own 240 frames");
-+    CHECK(present_display_target(120, 1) == 120, "a 120 limit with speed_lock=0 gave %d pictures, not the game's 120",
-+          present_display_target(120, 1));
++    /* Engine 1.49: a leftover speed_lock=0 (the app wrote one for a number or Maximum through 0.67) changes nothing.
++       Every one of these was the game's own rate with the lock off in 1.48, where a 30 FPS game at 240 ran eight times
++       its console speed; the interval the game asks for is its pace now, whatever the settings file says. */
++    CHECK(present_period(120, 1, 0) == refresh, "speed_lock=0 let a 120 limit speed a 60 FPS game up");
++    CHECK(present_period(0, 2, 0) == 2 * refresh, "Maximum with speed_lock=0 sped a 30 FPS game up");
++    CHECK(present_period(240, 1, 0) == refresh, "a 240 limit with speed_lock=0 sped a 60 FPS game up");
 +    CHECK(present_display_target(0, 0) == 60, "Maximum before its first measurement lost the console pace it stands in");
 +    g_opt_speed_lock = 1;
 +    g_opt_frame_generation = 1;
@@ -30513,16 +30565,17 @@ index 53c5e45d..bd87f7eb 100644
 +            CHECK(shown >= want - 2 && shown <= want + 2, "fps_limit=%d on interval %d showed %d of 600 frames, not %d",
 +                  caps[c][0], caps[c][1], shown, want);
 +        }
++        /* a leftover speed_lock=0 must not disable the limiter (Engine 1.49: the lock is not a toggle) */
 +        g_opt_speed_lock = 0;
 +        g_opt_fps = 30;
 +        present_pace(1);
-+        CHECK(present_show_due() && present_show_due(), "speed_lock=0 kept frames off the display");
++        CHECK(present_show_due() && !present_show_due(), "speed_lock=0 kept every frame on the display");
 +        g_opt_speed_lock = 1;
 +    }
      g_opt_fps = SNX_FPS_GAME;
  }
  
-@@ -97,7 +351,9 @@ int main(void) {
+@@ -97,7 +375,9 @@ int main(void) {
      i32 crop[4] = {0, 0, 0, 0};
      clock_start();
      ticks();

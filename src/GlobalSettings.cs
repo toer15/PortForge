@@ -10,10 +10,10 @@ namespace PortForge
     public sealed class GlobalSettings
     {
         public bool Enabled = true, HideCursor = true, SaveIndicator = true, FrameTimeGraph = true, FrameTrace, FrameGeneration;
-        /// <summary>PortForge 0.67: the fastest rate every game gets without being asked. Engine 1.48 reads a number
-        /// as the game's own frame rate, so this is a game running at up to 240 FPS - its own frames, with AMD FSR 3
-        /// frame generation filling the pictures it cannot make, and the limiter's own maximum. The FPS limit menu in
-        /// game, or this panel, can change it at any time.</summary>
+        /// <summary>PortForge 0.67: the most pictures every game shows without being asked. Engine 1.49 keeps every
+        /// game at its own speed whatever the limit, so this is up to 240 pictures a second - the game's own frames,
+        /// with AMD FSR 3 frame generation filling the rest up to four times them - and the limiter's own maximum. The
+        /// game's Esc menu, or this panel, can change it at any time.</summary>
         public const string AutomaticFpsLimit = "240";
         /// <summary>What EnsureAutomatic applied, for the Settings tab to show. Null when it changed nothing.</summary>
         public static string LastAutomaticNotice;
@@ -78,8 +78,8 @@ namespace PortForge
 
         /// <summary>Every updated runtime reads this file at its launch, even a game started from Explorer, so it is
         /// the one place that reaches a game nobody has opened in PortForge. Called once at app start: a new install
-        /// gets the automatic 240 profile (240 FPS, AMD FSR 3, the in-game frame-time graph), and a file still holding
-        /// the old Game speed default is upgraded once. A file holding the player's own choice - another frame limit,
+        /// gets the automatic 240 profile (up to 240 pictures a second, AMD FSR 3, the in-game frame-time graph), and a
+        /// file still holding the old Game speed default is upgraded once. A file holding the player's own choice - another frame limit,
         /// FSR 1, or the whole layer switched off - is never changed. Returns what was applied, or null.</summary>
         public static string EnsureAutomatic()
         {
@@ -106,8 +106,8 @@ namespace PortForge
             catch (IOException) { return null; }
             catch (UnauthorizedAccessException) { return null; }
             catch (ArgumentException) { return null; } // a file holding an invalid value is left for its owner
-            return LastAutomaticNotice = (fresh ? "Every game now runs at the fastest rate this PC can render, up to 240 FPS, with AMD FSR 3 and the in-game frame-time graph on."
-                                                     : "The settings for every game were raised to the fastest rate this PC can render, up to 240 FPS, with AMD FSR 3 and the in-game frame-time graph on.") +
+            return LastAutomaticNotice = (fresh ? "Every game now shows up to 240 pictures a second, with AMD FSR 3 and the in-game frame-time graph on - each game at its own speed."
+                                                     : "The settings for every game were raised to up to 240 pictures a second, with AMD FSR 3 and the in-game frame-time graph on - each game at its own speed.") +
                 " A game's own Esc menu changes its limit for that session; this panel changes it for every game.";
         }
 
@@ -147,12 +147,12 @@ namespace PortForge
             return "The game keeps its typical " + own + "p " + (Graphics.Docked ? "TV" : "handheld") + " targets; the " + height + "p display scales the finished image.";
         }
 
-        /// <summary>Engine 1.48: 1 while the game waits its own swap interval (Game speed: the limit and FSR 3 change
-        /// the pictures only), 0 when the FPS limit is the game's own frame rate - a number caps it, Maximum (0) runs
-        /// it as fast as the PC can render it. Written for the engine, which reads it at launch.</summary>
+        /// <summary>Engine 1.49: no FPS limit changes a game's speed, so the lock is always on - it keeps an older
+        /// engine (1.48 and below) at the console's pace too, and the 1.49 pacing ignores the value entirely (a
+        /// speed_lock=0 left by 0.67 changes nothing). Written for the engine, which reads it at launch.</summary>
         public static string SpeedLockFor(string fpsLimit)
         {
-            return fpsLimit == "game" ? "1" : "0";
+            return "1";
         }
 
         /// <summary>The FPS limit's own effect on this game, for the Settings tab and the game tools.</summary>
@@ -162,12 +162,12 @@ namespace PortForge
                 return "Game speed keeps the console's own timing: 30 FPS in a 30 FPS game, 60 in a 60 FPS game. " +
                     (FrameGeneration ? "AMD FSR 3 frame generation plays those frames twice (60 and 120 pictures a second)." : "The limit and frame generation change nothing.");
             if (Graphics.FpsLimit == "0")
-                return "Maximum runs the game itself as fast as this PC can render it, usually far above the console's 30 or 60. Esc shows the rate it reaches.";
+                return "Maximum shows the most the pipeline can make: up to 240 pictures a second, four times the game's own frames with AMD FSR 3 (240 in a 60 FPS game, 120 in a 30 FPS game), never more than your refresh with VSync. The game itself keeps its own speed and timing. Esc shows the rate it reaches.";
             int fps;
             if (!Int32.TryParse(Graphics.FpsLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out fps) || fps < 10) return "";
-            return "Limit " + fps + " is the game's own frame rate: it runs at up to " + fps + " FPS, as a PC game does at its cap. " +
-                "A 30 FPS game at 120 runs four times its console speed, its physics and timers following its frames. " +
-                (FrameGeneration ? "AMD FSR 3 frame generation fills the frames the game cannot reach, up to the limit." : "Every frame the game makes is shown.");
+            return "Limit " + fps + " is how many pictures a second the screen shows: the game's own frames, and with AMD FSR 3 up to " + fps +
+                " distinct pictures (90 on a 60 FPS game is 90, 240 is four pictures a real frame). Every game keeps its own speed - physics, timers and music stay as the console's, whatever the limit. " +
+                (FrameGeneration ? "AMD FSR 3 fills the pictures the game cannot make, up to the limit." : "The screen shows the frames the game itself makes; turn AMD FSR 3 on for more pictures.");
         }
 
         public void Save(string path)

@@ -47,9 +47,9 @@ internal static class NativeInterfaceTests
             GlobalSettings.PathOverride = Path.Combine(globalRoot, "global-settings.ini");
             string automaticNotice = GlobalSettings.EnsureAutomatic();
             string automaticText = File.ReadAllText(GlobalSettings.FilePath);
-            Check(automaticNotice != null && automaticNotice.Contains("240") && automaticText.Contains("fps_limit=240") && automaticText.Contains("speed_lock=0") &&
+            Check(automaticNotice != null && automaticNotice.Contains("240") && automaticText.Contains("fps_limit=240") && automaticText.Contains("speed_lock=1") &&
                   automaticText.Contains("frametime_graph=1"),
-                "App start writes the automatic 240 profile for every game: 240 FPS, no speed lock, the frame-time graph on");
+                "App start writes the automatic 240 profile for every game: up to 240 pictures, the console pace locked, the frame-time graph on");
             PortForge.NativeWindow.StartDoctorOnShow = false;
             using (var form = new PortForge.NativeWindow())
             {
@@ -74,25 +74,25 @@ internal static class NativeInterfaceTests
                 int wasUpscaling = upscaling.SelectedIndex, wasLimit = frameLimit.SelectedIndex;
                 Check(frameLimit.SelectedIndex == 5 && upscaling.SelectedIndex == 2 &&
                       settingsPanelControls.OfType<CheckBox>().Single(c => c.Text.Contains("frame-time graph")).Checked,
-                    "The Settings tab opens on the automatic profile: 240 FPS, AMD FSR 3 and the in-game frame-time graph");
+                    "The Settings tab opens on the automatic profile: up to 240 pictures, AMD FSR 3 and the in-game frame-time graph");
                 Check(settingsPanelControls.OfType<Label>().Single(l => l.AccessibleName == "Global settings status").Text.Contains("240"),
                     "The Settings tab tells the player the 240 profile was applied to every game");
                 Func<string> limitNote = () => settingsPanelControls.OfType<Label>().Single(l => l.AccessibleName == "Frame limit note").Text;
-                Check(frameLimit.Items.Cast<object>().Select(o => o.ToString()).Last() == "Maximum (this PC's speed)",
-                    "The top of the list is Maximum: the game's own fastest rate, not a display trick");
+                Check(frameLimit.Items.Cast<object>().Select(o => o.ToString()).Last() == "Maximum (240 pictures)",
+                    "The top of the list is Maximum: the most the pipeline can make, 240 pictures a second");
                 upscaling.SelectedIndex = 2; /* AMD FSR 3 frame generation */
                 frameLimit.SelectedIndex = 6; /* Maximum */
-                Check(limitNote().StartsWith("Maximum runs the game itself as fast as this PC can render it") && limitNote().Contains("AMD FSR 3 frame generation doubles the pictures the game makes"),
-                    "Maximum tells the player the game itself runs flat out, and that FSR 3 doubles those frames");
+                Check(limitNote().StartsWith("Maximum shows the most the pipeline can make") && limitNote().Contains("The game itself keeps its own speed"),
+                    "Maximum tells the player the screen gets the most pictures while the game keeps its own speed");
                 frameLimit.SelectedIndex = 0; /* Game speed */
                 Check(limitNote().StartsWith("Game speed keeps the game's own console timing") && limitNote().Contains("plays those frames twice"),
                     "Game speed keeps the console's 30 or 60 and lets FSR 3 play those frames twice");
                 frameLimit.SelectedIndex = 5; /* 240 */
-                Check(limitNote().StartsWith("A limit of 240 is the game's own frame rate") && limitNote().Contains("its physics, timers and music follow its frames"),
-                    "A typed limit is the game's own frame rate, as a PC game's cap is, not a display-only cap");
+                Check(limitNote().StartsWith("A limit of 240 is how many pictures a second the screen shows") && limitNote().Contains("No game runs faster than its console"),
+                    "A typed limit is pictures a second, not the game's speed: Engine 1.49 keeps every game at its own pace");
                 frameLimit.SelectedIndex = 1; /* 30 */
-                Check(limitNote().StartsWith("A limit of 30 is the game's own frame rate"),
-                    "Even a limit below the console pace is the game's own rate in the new model");
+                Check(limitNote().StartsWith("A limit of 30 is how many pictures a second the screen shows") && limitNote().Contains("No game runs faster than its console"),
+                    "A limit below the console pace shows fewer pictures and leaves the game's speed alone");
                 frameLimit.SelectedIndex = wasLimit; upscaling.SelectedIndex = wasUpscaling;
                 Check(controls.OfType<Button>().Any(b => b.Text == "Downloads"), "Downloads are directly accessible from the main screen");
                 var boxes = controls.OfType<TextBox>().ToDictionary(box => box.AccessibleName);

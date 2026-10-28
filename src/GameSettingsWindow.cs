@@ -14,7 +14,7 @@ namespace PortForge
         protected override CreateParams CreateParams { get { return SmoothPaint.Composited(base.CreateParams); } }
         private static readonly Color Bg = Color.FromArgb(17, 21, 30), Surface = Color.FromArgb(28, 34, 46), Mint = Color.FromArgb(105, 226, 183), Muted = Color.FromArgb(173, 185, 203);
         private readonly TextBox game = new TextBox { AccessibleName = "Windows game executable", Dock = DockStyle.Fill };
-        private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (console pace)", "Custom limit", "Maximum"), filtering = Filtering();
+        private readonly ComboBox fpsMode = Choice("FPS mode", "Game speed (console pace)", "Custom limit", "Maximum (240 pictures)"), filtering = Filtering();
         private readonly ComboBox upscaler = Choice("Upscaler", "Linear", "AMD FSR 1 (automatic)");
         private readonly ComboBox pixelSmoothing = Choice("Pixel smoothing", "Off", "On - smooth jagged edges");
         private readonly Label upscaleActivity = Label("FSR: no game session checked yet.", 9, Muted);
@@ -129,8 +129,8 @@ namespace PortForge
             foreach(int value in new[]{30,60,120,144,165,240})
             {int cap=value;var button=Button(value+" FPS",false);button.AutoSize=true;button.Height=30;button.Click+=delegate{fpsMode.SelectedIndex=1;fps.Value=cap;vsync.Checked=false;Changed();};framePresets.Controls.Add(button);}
             options.Controls.Add(framePresets);options.Controls.Add(limiter);
-            AddHint("Click an FPS button to set a custom cap and turn VSync off. Play game saves and verifies these settings automatically. PortForge applies the 240 profile - 240 FPS, AMD FSR 3, the in-game frame-time graph - to every game without being asked (main Settings tab); this window changes one game. Game speed uses the game's own timing; the hidden custom number is not active in that mode.");
-            AddHint("Engine 1.48 or newer: the FPS limit is the game's own frame rate, as a PC game's cap is, so a 30 FPS game at 120 runs four times its console speed (its physics, timers and music follow its frames) and Maximum runs it as fast as this PC can render it. Game speed keeps the console's own 30 or 60 with the speed lock and lets AMD FSR 3 frame generation smooth it instead. VSync caps the pictures at your display's refresh rate.");
+            AddHint("Click an FPS button to set a custom limit and turn VSync off. Play game saves and verifies these settings automatically. PortForge applies the 240 profile - up to 240 pictures a second, AMD FSR 3, the in-game frame-time graph - to every game without being asked (main Settings tab); this window changes one game. Game speed uses the game's own timing; the hidden custom number is not active in that mode.");
+            AddHint("Engine 1.49 or newer: no FPS limit changes the game's speed, automatically. The limit is how many pictures a second the screen shows - the game's own frames, and with AMD FSR 3 up to the limit on screen, four times the game's own frames at most (240 in a 60 FPS game, 120 in a 30 FPS game). A lower number shows fewer of the game's frames; Maximum asks for the most the pipeline can make; Game speed is the console's own 30 or 60, doubled by AMD FSR 3. Every game keeps its own physics, timers and music at every limit, and VSync caps the pictures at your display's refresh rate.");
             AddOption("Render scale (%)", scale, delegate { scale.Value = 100; });
             AddOption("Upscaler", upscaler, delegate { upscaler.SelectedIndex = 1; });
             AddOption("Pixel smoothing", pixelSmoothing, delegate { pixelSmoothing.SelectedIndex = 0; });
@@ -266,7 +266,7 @@ namespace PortForge
         private void UpdateLimiter()
         {
             if(loadedGame==null){limiter.Text="Load a game to check and change its FPS limit.";return;}
-            string value=fpsMode.SelectedIndex==0?"GAME SPEED (game's own timing)":fpsMode.SelectedIndex==2?"MAXIMUM (this PC's speed)":fps.Value.ToString("0")+" FPS cap on the game itself";
+            string value=fpsMode.SelectedIndex==0?"GAME SPEED (game's own timing)":fpsMode.SelectedIndex==2?"MAXIMUM (up to 240 pictures a second)":fps.Value.ToString("0")+" FPS of pictures, the game at its own speed";
             limiter.Text=(dirty?"Selected limit: ":"Saved limit: ")+value+"; VSync "+(vsync.Checked?"on":"off")+". "+(dirty?"Play saves this automatically.":"Verified settings are used on next start.");
             limiter.MaximumSize=new Size(Math.Max(200,options.ClientSize.Width-24),0);
         }

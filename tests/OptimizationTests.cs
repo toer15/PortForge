@@ -48,25 +48,25 @@ internal static class OptimizationTests
             var offPath=Path.Combine(root,"global-defaults.ini"); new GlobalSettings().Save(offPath);
             string offText=File.ReadAllText(offPath);
             Check(GlobalSettings.Load(offPath).FrameGeneration && GlobalSettings.Load(offPath).FrameTimeGraph &&
-                  offText.Contains("fps_limit=240") && offText.Contains("speed_lock=0") && offText.Contains("frame_generation=1") &&
+                  offText.Contains("fps_limit=240") && offText.Contains("speed_lock=1") && offText.Contains("frame_generation=1") &&
                   offText.Contains("frametime_graph=1") && offText.Contains("portforge_fsr3=1"),
-                "New settings are the automatic 240 profile: 240 FPS, no speed lock, AMD FSR 3 and the frame-time graph on");
+                "New settings are the automatic 240 profile: up to 240 pictures, the console pace locked, AMD FSR 3 and the frame-time graph on");
             string globalOriginal=File.ReadAllText(globalPath);
             global.Enabled=false; global.Save(globalPath);
             Check(!GlobalSettings.Load(globalPath).Enabled && File.ReadAllText(globalPath+".bak")==globalOriginal,
                 "Disabling global settings is saved atomically with a backup");
             Check(File.ReadAllText(globalPath).Contains("render_scale_safety=1") && File.ReadAllText(globalPath).Contains("pipeline_threads=0"),
                 "Global settings preserve rendering safety and automatic core-based worker selection");
-            Check(File.ReadAllText(globalPath).Contains("fps_limit=144") && File.ReadAllText(globalPath).Contains("speed_lock=0"),
-                "Engine 1.48: a 144 limit is the game's own frame rate, saved with the speed lock off");
+            Check(File.ReadAllText(globalPath).Contains("fps_limit=144") && File.ReadAllText(globalPath).Contains("speed_lock=1"),
+                "Engine 1.49: a 144 limit is saved with the speed lock on - it never changes the game's speed");
             var gameSpeedGlobal = new GlobalSettings(); gameSpeedGlobal.Graphics.FpsLimit="game";
             string gameSpeedPath=Path.Combine(root,"global-game-speed.ini"); gameSpeedGlobal.Save(gameSpeedPath);
             Check(File.ReadAllText(gameSpeedPath).Contains("speed_lock=1"),
                 "Game speed keeps the console pace: the speed lock is saved on");
             var maximumGlobal = new GlobalSettings(); maximumGlobal.Graphics.FpsLimit="0";
             string maximumPath=Path.Combine(root,"global-maximum.ini"); maximumGlobal.Save(maximumPath);
-            Check(File.ReadAllText(maximumPath).Contains("fps_limit=0") && File.ReadAllText(maximumPath).Contains("speed_lock=0"),
-                "Maximum is saved as no limit on the game, without the speed lock, so the engine runs it flat out");
+            Check(File.ReadAllText(maximumPath).Contains("fps_limit=0") && File.ReadAllText(maximumPath).Contains("speed_lock=1"),
+                "Maximum is saved as 0 pictures' worth of limit with the speed lock on, so the game keeps its own speed");
             global.Graphics.FpsLimit="invalid";
             Fails(()=>global.Save(globalPath),"Invalid global settings cannot overwrite the saved file");
             /* 0.67: the app raises a game's settings once, through the file every runtime reads at its launch */
@@ -77,7 +77,7 @@ internal static class OptimizationTests
             File.WriteAllText(automaticPath, "; keep me\r\nglobal_enabled=1\r\nfps_limit=game\r\nspeed_lock=1\r\nupscale_mode=0\r\nframetime_graph=0\r\ndisplay_resolution=1080\r\n");
             Check(GlobalSettings.EnsureAutomatic()!=null, "The old Game speed default is raised to the 240 profile once");
             var raised=GameOptimization.ReadValues(File.ReadAllText(automaticPath));
-            Check(raised["fps_limit"]=="240"&&raised["speed_lock"]=="0"&&raised["upscale_mode"]=="2"&&raised["frame_generation"]=="1"&&
+            Check(raised["fps_limit"]=="240"&&raised["speed_lock"]=="1"&&raised["upscale_mode"]=="2"&&raised["frame_generation"]=="1"&&
                   raised["frametime_graph"]=="1"&&raised["display_resolution"]=="1080",
                 "Raising it turns the frame-time graph and FSR 3 on and keeps the player's own display resolution");
             Check(GlobalSettings.EnsureAutomatic()==null&&GameOptimization.ReadValues(File.ReadAllText(automaticPath))["fps_limit"]=="240",
@@ -199,9 +199,9 @@ internal static class OptimizationTests
             Check(!guardedPlan.ContainsKey("speed_lock"),"Engines without a speed lock are not given the setting");
             var lockedCap=new RuntimeCapabilities();lockedCap.Keys.UnionWith(guarded.Keys);lockedCap.Keys.Add("speed_lock");
             var lockedPlan=PcOptimization.SettingsFor(strong,picked,lockedCap);
-            Check(lockedPlan["speed_lock"]=="0"&&lockedPlan["fps_limit"]=="120","A 120 limit matches with the speed lock off: the limit is the game's own frame rate");
+            Check(lockedPlan["speed_lock"]=="1"&&lockedPlan["fps_limit"]=="120","A 120 limit matches with the speed lock on: Engine 1.49 never paces the game by a limit");
             Check(PcOptimization.SettingsFor(strong,new GraphicsProfile{FpsLimit="game"},lockedCap)["speed_lock"]=="1","Game speed matches with the console pace locked");
-            Check(PcOptimization.SettingsFor(strong,new GraphicsProfile{FpsLimit="0"},lockedCap)["speed_lock"]=="0","Maximum matches without the lock, so the game runs as fast as this PC renders it");
+            Check(PcOptimization.SettingsFor(strong,new GraphicsProfile{FpsLimit="0"},lockedCap)["speed_lock"]=="1","Maximum matches with the lock on too, so the game keeps its own speed");
             var steady=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=1,WorstFrameMs=70,Profile=new GraphicsProfile{Resolution=.75m}};
             var hitching=new BenchmarkSample {Success=true,Frames=1200,Fps=60,SlowFrames=12,WorstFrameMs=500,Profile=new GraphicsProfile{Resolution=1m}};
             Check(GameOptimization.SelectSmooth(new[]{steady,hitching},60,1)==steady,"Automatic matching chooses fewer freezes when average FPS is equal");

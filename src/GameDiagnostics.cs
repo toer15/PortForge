@@ -131,8 +131,9 @@ namespace PortForge
                 h.Issues.Add(new GameIssue("guest_oom","The game ran out of console memory","The session crashed with a null-pointer access after the guest heap filled (default memory_gb is the console's ~3.2 GB). The repair sets memory_gb=6 (~4.8 GB), which the engine itself recommends for this failure.", "raise_memory"));
             else if(Regex.IsMatch(h.Log,@"(?im)^.*\bFATAL:|No new frame for \d+ seconds"))
                 h.Issues.Add(new GameIssue("runtime_failure","The runtime reported a failure or stall","The latest recorded session contains a fatal error or stalled-frame warning. Review the game log and AI diagnosis; no general binary repair is known."));
-            /* Engine 1.48: the FPS limit itself is the game's frame rate with the speed lock off (the app writes that for a
-               number or Maximum) and the console pace with it on (Game speed), so speed_lock is the player's choice, not a fault */
+            /* Engine 1.49 keeps every game at its own speed whatever the limit, so speed_lock is not a fault; an engine
+               older than 1.48 has no speed_lock key at all, and there a number was the game's own frame rate - the one
+               case this hint is for */
             if((cap==null||!cap.Keys.Contains("speed_lock"))&&get("fps_limit","game")!="game") h.Issues.Add(new GameIssue("timing","Custom frame timing is selected","Higher FPS can change game speed, physics or world behavior in some games. If that happens, select Game speed. A limiter cannot create correct timing patches for every game."));
             return h;
         }
